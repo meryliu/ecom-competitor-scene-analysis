@@ -1,0 +1,9 @@
+{
+  "schema_version": "ecom_competitor_source_lock/1.0",
+  "source_skill": "ecom-competitor-macro-fetch",
+  "source_version": "0.2.1",
+  "embedded_module": "scripts/_vendor/ecom_competitor_source.py",
+  "source_url": "https://bytedance.larkoffice.com/wiki/TrBAw0rDXiBrcUkJlbgcjsyYnkg?sheet=ESXBdZ&table=tbl5Ny6EgnsBwEBK&view=vew6r3PPJm",
+  "runtime_contract": "data_gateway/1.0 + competitor_fact_provider/2.0",
+  "notes": "Embedded read-only source resolver; runtime does not invoke the source Skill or query.py."
+}

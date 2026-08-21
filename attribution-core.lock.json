@@ -1,0 +1,14 @@
+{
+  "schema_version": "attribution_core_lock/1.0",
+  "source": "ecom-attribution-calculation-engine/attribution_core",
+  "identity": {
+    "name": "ecom-attribution-calculation-engine",
+    "engine_api_version": "1.0.0",
+    "contract_schema_version": "1.3.0",
+    "registry_version": "1.5.0",
+    "core_version": "1.5.0",
+    "core_sha256": "c58c28f87cfc375adab9a0d0607ca879a55569ba5f8ab50241ce04e7fea087ba"
+  },
+  "generated": true,
+  "edit_policy": "Do not edit the embedded snapshot; rerun sync_embedded_core.py."
+}

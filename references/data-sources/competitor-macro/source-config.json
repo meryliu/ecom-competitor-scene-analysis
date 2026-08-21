@@ -1,0 +1,15 @@
+{
+  "schema_version": "data_source_config/1.0",
+  "provider_id": "feishu_competitor",
+  "source_id": "competitor_macro_sheet",
+  "source_url": "https://bytedance.larkoffice.com/wiki/TrBAw0rDXiBrcUkJlbgcjsyYnkg?sheet=ESXBdZ&table=tbl5Ny6EgnsBwEBK&view=vew6r3PPJm",
+  "allow_stale_by_default": false,
+  "sheet_roles": {
+    "metric_metadata": {"allowed_names": ["指标元信息"]},
+    "dimension_metadata": {"allowed_names": ["维度元信息"]},
+    "week": {"allowed_names": ["周度表"]},
+    "month": {"allowed_names": ["月度表"]},
+    "quarter": {"allowed_names": ["季度表"]},
+    "year": {"allowed_names": ["年度表"]}
+  }
+}

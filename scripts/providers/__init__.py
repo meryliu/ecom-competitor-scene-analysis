@@ -1,0 +1,1 @@
+"""Concrete data gateway implementations."""

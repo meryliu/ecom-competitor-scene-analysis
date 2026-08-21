@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+"""Stable data-access boundary used by the analysis workflow."""
+from __future__ import annotations
+
+import hashlib
+import json
+from abc import ABC, abstractmethod
+from copy import deepcopy
+from pathlib import Path
+from typing import Any
+
+from _vendor.ecom_competitor_source import normalize_match_text
+
+
+RESOLVED_CAPABILITIES_V1 = "resolved_capabilities/1.0"
+SOURCE_BINDING_V1 = "source_binding/1.0"
+
+
+def canonical_hash(value: Any) -> str:
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def load_source_config(path: Path, *, source_url: str | None = None) -> dict[str, Any]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict) or value.get("schema_version") != "data_source_config/1.0":
+        raise ValueError(f"unsupported data source config: {path}")
+    required = ("provider_id", "source_id", "source_url", "sheet_roles")
+    missing = [key for key in required if not value.get(key)]
+    if missing:
+        raise ValueError(f"data source config is missing: {missing}")
+    effective = deepcopy(value)
+    if source_url is not None:
+        effective["source_url"] = source_url
+    effective["config_hash"] = canonical_hash({
+        key: effective.get(key)
+        for key in (
+            "schema_version", "provider_id", "source_id", "source_url",
+            "sheet_roles", "allow_stale_by_default",
+        )
+    })
+    return effective
+
+
+def build_resolve_request(
+    tasks: list[tuple[str, dict[str, Any]]],
+    composition_registry: dict[str, Any],
+) -> dict[str, Any]:
+    """Collect only semantic names and periods needed during preparation."""
+    metric_names: set[str] = set()
+    dimension_names: set[str] = set()
+    periods: set[str] = set()
+    contexts: list[dict[str, Any]] = []
+    composition_definitions = composition_registry.get("definitions") or {}
+
+    def composition_for_metric(
+        metric: dict[str, Any], explicit_by_ref: dict[str, str]
+    ) -> tuple[str, dict[str, Any]] | None:
+        metric_ref = str(metric.get("metric_id") or "")
+        explicit = metric.get("composition_id") or explicit_by_ref.get(metric_ref)
+        if explicit in composition_definitions:
+            return str(explicit), composition_definitions[str(explicit)]
+        requested = normalize_match_text(metric.get("name"))
+        for composition_id, definition in composition_definitions.items():
+            if not isinstance(definition, dict):
+                continue
+            if any(
+                normalize_match_text(value) == requested
+                for value in definition.get("trigger_phrases") or []
+            ):
+                return str(composition_id), definition
+        return None
+
+    def visit(value: Any, key: str | None = None) -> None:
+        if isinstance(value, dict):
+            if key == "dimensions":
+                dimension_names.update(str(item) for item in value)
+            for child_key, child in value.items():
+                if child_key in {"dimension_refs", "group_dimensions"} and isinstance(child, list):
+                    dimension_names.update(str(item) for item in child)
+                elif child_key == "dimension_ref" and child:
+                    dimension_names.add(str(child))
+                visit(child, child_key)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child, key)
+
+    for task_id, ir in tasks:
+        task = ir.get("analysis_task") or {}
+        task_dimensions: set[str] = set()
+
+        def collect_task_dimensions(value: Any, key: str | None = None) -> None:
+            if isinstance(value, dict):
+                if key == "dimensions":
+                    task_dimensions.update(str(item) for item in value)
+                for child_key, child in value.items():
+                    if child_key in {"dimension_refs", "group_dimensions"} and isinstance(child, list):
+                        task_dimensions.update(str(item) for item in child)
+                    elif child_key == "dimension_ref" and child:
+                        task_dimensions.add(str(child))
+                    collect_task_dimensions(child, child_key)
+            elif isinstance(value, list):
+                for child in value:
+                    collect_task_dimensions(child, key)
+
+        collect_task_dimensions(ir)
+        query = str(task.get("query") or "")
+        query_token = normalize_match_text(query)
+        context_metrics: list[dict[str, Any]] = []
+        explicit_compositions = {
+            str(item.get("metric_ref")): str(item.get("composition_id"))
+            for item in ir.get("metric_compositions") or []
+            if isinstance(item, dict) and item.get("metric_ref") and item.get("composition_id")
+        }
+        consumers_by_metric: dict[str, list[dict[str, Any]]] = {}
+        for collection, id_field in (
+            ("fact_observations", "requirement_id"),
+            ("metric_compositions", "requirement_id"),
+            ("derived_requirements", "requirement_id"),
+            ("attribution_targets", "target_id"),
+        ):
+            for requirement in ir.get(collection) or []:
+                if not isinstance(requirement, dict) or not requirement.get("metric_ref"):
+                    continue
+                consumers_by_metric.setdefault(str(requirement["metric_ref"]), []).append({
+                    "requirement_id": str(requirement.get(id_field) or ""),
+                    "criticality": str(requirement.get("criticality") or "required"),
+                    "period_roles": list(
+                        requirement.get("period_roles")
+                        or requirement.get("required_period_roles")
+                        or []
+                    ),
+                })
+        composition_intents: list[dict[str, Any]] = []
+        for metric in task.get("metrics") or []:
+            if isinstance(metric, dict) and metric.get("name"):
+                name = str(metric["name"])
+                metric_names.add(name)
+                name_token = normalize_match_text(name)
+                metric_ref = str(metric.get("metric_id") or name)
+                context_metrics.append({
+                    "metric_ref": metric_ref,
+                    "name": name,
+                    "metric_object": metric.get("metric_object"),
+                    "unit": metric.get("unit"),
+                    "provenance": metric.get("name_source") or (
+                        "user_explicit" if name_token and name_token in query_token else "model_inferred"
+                    ),
+                })
+                composition = composition_for_metric(metric, explicit_compositions)
+                if composition is not None:
+                    composition_id, definition = composition
+                    inputs = [
+                        deepcopy(item)
+                        for item in definition.get("inputs") or []
+                        if isinstance(item, dict) and item.get("metric")
+                    ]
+                    for item in inputs:
+                        metric_names.add(str(item["metric"]))
+                    composition_intents.append({
+                        "metric_ref": metric_ref,
+                        "requested_metric": name,
+                        "composition_id": composition_id,
+                        "direct_preferred": True,
+                        "inputs": inputs,
+                        "consumers": deepcopy(consumers_by_metric.get(metric_ref) or []),
+                    })
+        periods.update(str(item) for item in (task.get("periods") or {}).values())
+        for target in ir.get("attribution_targets") or []:
+            if isinstance(target, dict):
+                periods.update(str(item) for item in (target.get("periods") or {}).values())
+        visit(ir)
+        contexts.append({
+            "task_id": task_id,
+            "query": query,
+            "scope": task.get("scope"),
+            "metrics": context_metrics,
+            "composition_intents": composition_intents,
+            "dimensions": sorted(task_dimensions),
+            "periods": sorted(str(item) for item in (task.get("periods") or {}).values()),
+            "resolution_patches": deepcopy(ir.get("resolution_patches") or []),
+        })
+
+    return {
+        "schema_version": "capability_resolve_request/1.0",
+        "composition_registry_hash": canonical_hash(composition_registry),
+        "metrics": sorted(metric_names),
+        "dimensions": sorted(dimension_names),
+        "periods": sorted(periods),
+        "contexts": contexts,
+    }
+
+
+def validate_source_binding(binding: Any) -> dict[str, Any]:
+    if not isinstance(binding, dict):
+        raise ValueError("source_binding must be an object")
+    required = ("schema_version", "provider_id", "source_id", "config_hash", "revision", "schema_hash")
+    missing = [key for key in required if binding.get(key) in (None, "")]
+    if binding.get("schema_version") != SOURCE_BINDING_V1 or missing:
+        raise ValueError(f"invalid source_binding; missing or invalid fields: {missing}")
+    return binding
+
+
+class DataGateway(ABC):
+    """Minimal replaceable boundary for metadata resolution and fact retrieval."""
+
+    @abstractmethod
+    def resolve(self, request: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def fetch(self, request: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError

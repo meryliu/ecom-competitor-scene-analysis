@@ -1,0 +1,44 @@
+{
+  "schema_version": "resolution_policy/1.0",
+  "policy_version": "1.0.0",
+  "limits": {
+    "max_candidates_per_case": 3
+  },
+  "rules": {
+    "fact_block_joint_resolution": {
+      "hard_gates": [
+        "metric_dimension_compatible",
+        "source_domain_subset",
+        "protected_semantics_compatible"
+      ],
+      "strong_evidence": [
+        "dimension_domain_exact",
+        "dimension_name_exact",
+        "confirmed_patch"
+      ],
+      "auto": {
+        "require_unique_viable": true,
+        "minimum_strong_evidence": 1
+      },
+      "confirm": {
+        "when_viable_candidates_exist": true
+      }
+    },
+    "query_name_resolution": {
+      "hard_gates": [
+        "metric_object_compatible",
+        "unit_compatible",
+        "protected_semantics_compatible"
+      ],
+      "auto": {
+        "require_unique_viable": true,
+        "minimum_confidence": 0.78,
+        "minimum_candidate_margin": 0.1,
+        "require_strong_provenance_or_semantics": true
+      },
+      "confirm": {
+        "when_viable_candidates_exist": true
+      }
+    }
+  }
+}

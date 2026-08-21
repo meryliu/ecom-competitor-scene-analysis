@@ -1,0 +1,27 @@
+{
+  "registry_name": "ecom-competitor-metric-compositions",
+  "registry_version": "1.0.0",
+  "definitions": {
+    "competitor_settlement_rate": {
+      "definition_version": "1.0.0",
+      "metric_object": "ratio",
+      "operator": "divide",
+      "trigger_phrases": ["结算率", "结算比例"],
+      "inputs": [
+        {"role": "numerator", "metric": "结算GMV"},
+        {"role": "denominator", "metric": "支付GMV"}
+      ],
+      "formula": "settlement_gmv / payment_gmv",
+      "unit": "rate",
+      "output_fields": ["value", "numerator", "denominator"],
+      "minimal_validation": [
+        "same_period",
+        "same_scope",
+        "same_dimensions",
+        "facts_present",
+        "denominator_nonzero"
+      ],
+      "execution_mode": "lightweight_executor/composition"
+    }
+  }
+}
