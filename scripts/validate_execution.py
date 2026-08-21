@@ -706,13 +706,34 @@ class Validator:
                             if not isinstance(materialize_as.get(field), str) or not materialize_as[field]:
                                 self.add("EXEC-039", "ERROR", f"{path}.materialize_as.{field}", f"materialize_as 缺少 {field}", "补齐中间事实目标和规则来源", node_id=node_id)
                         validation = materialize_as.get("validation")
-                        allowed_validation = {"facts_present", "unit_consistent", "metric_additive"}
+                        allowed_validation = {
+                            "facts_present", "unit_consistent", "metric_additive", "unit_scale_verified"
+                        }
                         if (
                             not isinstance(validation, list)
                             or not validation
                             or any(item not in allowed_validation for item in validation)
                         ):
-                            self.add("EXEC-040", "ERROR", f"{path}.materialize_as.validation", "输入适配校验项非法", "只使用 facts_present、unit_consistent、metric_additive", node_id=node_id)
+                            self.add("EXEC-040", "ERROR", f"{path}.materialize_as.validation", "输入适配校验项非法", "只使用受支持的输入适配校验项", node_id=node_id)
+                        if isinstance(validation, list) and "unit_scale_verified" in validation:
+                            conversion = materialize_as.get("unit_conversion")
+                            valid_expected = isinstance(conversion, dict) and isinstance(
+                                conversion.get("expected_input_units"), dict
+                            ) and bool(conversion.get("expected_input_units"))
+                            scale_factor = conversion.get("scale_factor") if isinstance(conversion, dict) else None
+                            if (
+                                not valid_expected
+                                or isinstance(scale_factor, bool)
+                                or not isinstance(scale_factor, (int, float))
+                                or not math.isfinite(float(scale_factor))
+                                or float(scale_factor) == 0
+                                or conversion.get("target_unit") != materialize_as.get("unit")
+                            ):
+                                self.add(
+                                    "EXEC-041", "ERROR", f"{path}.materialize_as.unit_conversion",
+                                    "单位量级换算契约非法", "提供输入单位、目标单位和有限非零换算因子",
+                                    node_id=node_id,
+                                )
             if handler == "attribution":
                 if not isinstance(execution.get("operator"), str) or not execution.get("operator"):
                     self.add("EXEC-008", "ERROR", f"{path}.operator", "attribution handler 缺少显式算子", "引用计划阶段已解析的算子", node_id=node_id)
@@ -1041,6 +1062,15 @@ class Validator:
         if not isinstance(requests, list):
             self.add("FETCH-001", "ERROR", "$.fetch_requests", "fetch_requests 必须是数组", "改为数组")
             return
+        task_selectors = (self.document.get("analysis_task") or {}).get(
+            "selector_dimensions", {}
+        )
+        if not isinstance(task_selectors, dict):
+            self.add(
+                "FETCH-024", "ERROR", "$.analysis_task.selector_dimensions",
+                "任务事实选择器必须是对象", "使用规范化的维度到取值映射",
+            )
+            task_selectors = {}
         ids: set[str] = set()
         signatures: dict[str, str] = {}
         by_id: dict[str, dict[str, Any]] = {}
@@ -1089,6 +1119,19 @@ class Validator:
                             f"{path}.fact_slots[{slot_index}].dimension_refs",
                             f"事实选择器维度未进入物理粒度：{missing_dimensions}",
                             "将 selector_dimensions 中的维度加入 dimension_refs",
+                            request_id=request_id,
+                        )
+                    missing_task_selectors = {
+                        dimension: value
+                        for dimension, value in task_selectors.items()
+                        if dimension not in selectors or selectors.get(dimension) != value
+                    }
+                    if missing_task_selectors:
+                        self.add(
+                            "FETCH-025", "ERROR",
+                            f"{path}.fact_slots[{slot_index}].selector_dimensions",
+                            f"事实槽位未继承任务选择器：{missing_task_selectors}",
+                            "通过统一 selector context 生成事实槽位",
                             request_id=request_id,
                         )
             if isinstance(request.get("fact_demands"), list):
@@ -1688,7 +1731,7 @@ class Validator:
         if self._has_unresolved_blocking_clarification():
             return "waiting_confirmation"
         core_failed = any(
-            node.get("criticality") == "core" and node.get("status") in {"failed", "skipped", "partial_success", "blocked"}
+            node.get("criticality") == "core" and node.get("status") in {"failed", "skipped", "blocked"}
             for node in self.nodes
         )
         if core_failed:

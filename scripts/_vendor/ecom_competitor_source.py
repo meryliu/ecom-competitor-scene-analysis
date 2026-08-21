@@ -22,7 +22,7 @@ DEFAULT_SOURCE_URL = (
     "https://bytedance.larkoffice.com/wiki/"
     "TrBAw0rDXiBrcUkJlbgcjsyYnkg?sheet=ESXBdZ&table=tbl5Ny6EgnsBwEBK&view=vew6r3PPJm"
 )
-INDEX_SCHEMA_VERSION = "competitor_source_index/2.1"
+INDEX_SCHEMA_VERSION = "competitor_source_index/2.2"
 AUTO_MATCH_THRESHOLD = 0.90
 CLARIFY_MATCH_THRESHOLD = 0.70
 MIN_CANDIDATE_MARGIN = 0.12
@@ -89,6 +89,27 @@ def split_terms(value: Any) -> list[str]:
     if not text:
         return []
     return [item.strip() for item in re.split(r"[、,，;；/\n]+", text) if item.strip()]
+
+
+def normalize_grain(value: Any) -> str | None:
+    """Map source metadata grain labels to the canonical sheet grain names."""
+    token = normalize_text(value)
+    aliases = {
+        "月": "month", "月度": "month", "month": "month",
+        "周": "week", "周度": "week", "week": "week",
+        "季": "quarter", "季度": "quarter", "quarter": "quarter",
+        "年": "year", "年度": "year", "year": "year",
+    }
+    return aliases.get(token)
+
+
+def split_grains(value: Any) -> list[str]:
+    grains: list[str] = []
+    for term in split_terms(value):
+        grain = normalize_grain(term)
+        if grain and grain not in grains:
+            grains.append(grain)
+    return grains
 
 
 def split_enum_values(value: Any) -> list[str]:
@@ -511,6 +532,7 @@ def parse_metric_metadata(rows: list[list[str]]) -> dict[str, dict[str, Any]]:
                 "name": metric_pos,
                 "aliases": _header_index(row, ["指标别名", "别名"]),
                 "unit": _header_index(row, ["数值单位", "单位"]),
+                "supported_grains": _header_index(row, ["可支持时间粒度", "支持时间粒度", "时间粒度"]),
                 "dimensions": _header_index(row, ["可支持拆解维度", "支持维度", "拆解维度"]),
                 "aggregation": aggregation_pos,
                 "notes": _header_index(row, ["口径备注", "备注", "口径说明"]),
@@ -533,11 +555,14 @@ def parse_metric_metadata(rows: list[list[str]]) -> dict[str, dict[str, Any]]:
 
         aggregation = cell("aggregation")
         additive = "不可聚合" not in aggregation and "可聚合" in aggregation
+        supported_grains = split_grains(cell("supported_grains"))
         metrics[name] = {
             "aliases": split_terms(cell("aliases")),
             "unit": cell("unit"),
+            "supported_grains": supported_grains,
             "dimensions": split_terms(cell("dimensions")),
             "aggregation": aggregation,
+            "aggregation_mode": "additive" if additive else "non_additive" if aggregation else "unknown",
             "additive": additive,
             "arithmetic": "加减乘除" in aggregation,
             "notes": cell("notes"),

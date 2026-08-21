@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from _vendor.ecom_competitor_source import normalize_match_text
+from selector_context import task_filter_selectors
 
 
 RESOLVED_CAPABILITIES_V1 = "resolved_capabilities/1.0"
@@ -45,6 +46,7 @@ def load_source_config(path: Path, *, source_url: str | None = None) -> dict[str
 def build_resolve_request(
     tasks: list[tuple[str, dict[str, Any]]],
     composition_registry: dict[str, Any],
+    derived_registry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Collect only semantic names and periods needed during preparation."""
     metric_names: set[str] = set()
@@ -52,6 +54,7 @@ def build_resolve_request(
     periods: set[str] = set()
     contexts: list[dict[str, Any]] = []
     composition_definitions = composition_registry.get("definitions") or {}
+    derived_definitions = (derived_registry or {}).get("definitions") or {}
 
     def composition_for_metric(
         metric: dict[str, Any], explicit_by_ref: dict[str, str]
@@ -87,6 +90,8 @@ def build_resolve_request(
 
     for task_id, ir in tasks:
         task = ir.get("analysis_task") or {}
+        task_periods = task.get("periods") or {}
+        inherited_dimensions = set(task_filter_selectors(task.get("filters")))
         task_dimensions: set[str] = set()
 
         def collect_task_dimensions(value: Any, key: str | None = None) -> None:
@@ -122,12 +127,39 @@ def build_resolve_request(
             for requirement in ir.get(collection) or []:
                 if not isinstance(requirement, dict) or not requirement.get("metric_ref"):
                     continue
+                period_roles = list(
+                    requirement.get("period_roles")
+                    or requirement.get("required_period_roles")
+                    or []
+                )
+                if collection == "derived_requirements" and not period_roles:
+                    period_roles = list(
+                        (
+                            derived_definitions.get(str(requirement.get("derived_metric_id")))
+                            or {}
+                        ).get("required_period_roles")
+                        or []
+                    )
+                requirement_dimensions = inherited_dimensions | {
+                    str(value) for value in (requirement.get("dimensions") or {})
+                } | {
+                    str(value) for value in (requirement.get("dimension_refs") or [])
+                }
                 consumers_by_metric.setdefault(str(requirement["metric_ref"]), []).append({
                     "requirement_id": str(requirement.get(id_field) or ""),
+                    "requirement_type": collection,
                     "criticality": str(requirement.get("criticality") or "required"),
-                    "period_roles": list(
-                        requirement.get("period_roles")
-                        or requirement.get("required_period_roles")
+                    "period_roles": period_roles,
+                    "periods": [
+                        str(task_periods[role]) for role in period_roles if role in task_periods
+                    ],
+                    "dimensions": sorted(requirement_dimensions),
+                    "derived_metric_id": requirement.get("derived_metric_id"),
+                    "allowed_metric_objects": list(
+                        (
+                            derived_definitions.get(str(requirement.get("derived_metric_id")))
+                            or {}
+                        ).get("metric_objects")
                         or []
                     ),
                 })
@@ -142,7 +174,19 @@ def build_resolve_request(
                     "metric_ref": metric_ref,
                     "name": name,
                     "metric_object": metric.get("metric_object"),
+                    "metric_object_provenance": metric.get("metric_object_source") or "model_inferred",
                     "unit": metric.get("unit"),
+                    "consumers": deepcopy(consumers_by_metric.get(metric_ref) or []),
+                    "required_periods": sorted({
+                        str(period)
+                        for consumer in consumers_by_metric.get(metric_ref) or []
+                        for period in consumer.get("periods") or []
+                    }),
+                    "required_dimensions": sorted({
+                        str(dimension)
+                        for consumer in consumers_by_metric.get(metric_ref) or []
+                        for dimension in consumer.get("dimensions") or []
+                    }),
                     "provenance": metric.get("name_source") or (
                         "user_explicit" if name_token and name_token in query_token else "model_inferred"
                     ),

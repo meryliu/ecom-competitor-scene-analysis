@@ -500,7 +500,8 @@ def finalize_model_nodes(manifest: dict[str, Any]) -> None:
         ),
     }
     if any(
-        node.get("criticality", "required") == "core" and node.get("status") != "success"
+        node.get("criticality", "required") == "core"
+        and node.get("status") in {"failed", "blocked"}
         for node in nodes
     ):
         final_status = "blocked"

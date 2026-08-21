@@ -226,11 +226,36 @@ class RunAnalysisTests(unittest.TestCase):
         }
         finalize_model_nodes(manifest)
         self.assertEqual(manifest["status"], "partial_success")
+        report = Validator(manifest, "final").validate()
+        self.assertEqual(report["computed_status"], "partial_success")
         self.assertEqual(manifest["conclusions"][0]["status"], "partial_success")
         manifest["status"] = "success"
         report = Validator(manifest, "final").validate()
         self.assertEqual(report["computed_status"], "partial_success")
         self.assertIn("STATUS-001", {issue["rule_id"] for issue in report["issues"]})
+
+    def test_core_partial_result_remains_partial_after_model_finalization(self) -> None:
+        manifest = {
+            "analysis_task": {"query": "attribute core formula"},
+            "nodes": [
+                {
+                    "node_id": "core_attribution",
+                    "criticality": "core",
+                    "status": "partial_success",
+                    "execution": {"handler": "attribution"},
+                },
+                {
+                    "node_id": "conclusion_organization",
+                    "criticality": "core",
+                    "status": "planned",
+                    "depends_on": ["core_attribution"],
+                    "execution": {"handler": "model_owned"},
+                },
+            ],
+            "execution_summary": {},
+        }
+        finalize_model_nodes(manifest)
+        self.assertEqual(manifest["status"], "partial_success")
 
     def test_model_organization_survives_failed_calculation_node(self) -> None:
         manifest = {

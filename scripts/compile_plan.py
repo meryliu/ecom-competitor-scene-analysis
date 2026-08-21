@@ -25,11 +25,12 @@ from dimension_domain_registry import (
 from fact_contract import build_fact_demands
 from fast_query_admission import assess_query
 from prepare_analysis import normalize_analysis_ir
+from selector_context import SelectorContextError, apply_task_selector_context
 from validate_execution import Validator, reject_duplicate_keys
 
 
 COMPILER_NAME = "scene-analysis-plan-compiler"
-COMPILER_VERSION = "1.5.0"
+COMPILER_VERSION = "1.6.0"
 IR_VERSION = "analysis_ir/1.0"
 DEFAULT_RESIDUAL_TOLERANCE = 1e-8
 ALLOWED_CRITICALITIES = {"core", "required", "optional"}
@@ -204,7 +205,10 @@ class Compiler:
         composition_registry: dict[str, Any] | None = None,
         dimension_set_registry: dict[str, Any] | None = None,
     ) -> None:
-        self.ir = normalize_analysis_ir(ir)
+        try:
+            self.ir = apply_task_selector_context(normalize_analysis_ir(ir))
+        except SelectorContextError as exc:
+            raise CompileError(str(exc)) from exc
         self.registry = registry
         self.composition_registry = composition_registry or {"definitions": {}}
         self.dimension_set_registry = dimension_set_registry or {"schema_version": "dimension_set_registry/1.0", "sets": {}}
@@ -236,6 +240,21 @@ class Compiler:
         self.input_adaptation_targets: dict[str, str] = {}
         self.requirement_adaptation_dependencies: dict[str, set[str]] = {}
         self.compiling_input_adaptation = False
+        self.canonical_fact_selectors: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for selector in self.ir.get("canonical_fact_selectors") or []:
+            if not isinstance(selector, dict):
+                raise CompileError("$.canonical_fact_selectors must contain objects")
+            key = (
+                str(selector.get("metric_ref") or ""),
+                str(selector.get("period_role") or ""),
+                canonical_json(selector.get("selector_dimensions") or {}),
+            )
+            if not all(key[:2]):
+                raise CompileError("canonical fact selector requires metric_ref and period_role")
+            previous = self.canonical_fact_selectors.get(key)
+            if previous is not None and previous != selector:
+                raise CompileError("conflicting canonical fact selectors for one fact identity")
+            self.canonical_fact_selectors[key] = deepcopy(selector)
 
     def validate_ir(self) -> None:
         if self.ir.get("ir_version") != IR_VERSION:
@@ -420,6 +439,17 @@ class Compiler:
         metric = self.metric(metric_ref)
         logical_dimension_refs = sorted(set(dimension_refs or []))
         logical_selectors = deepcopy(selector_dimensions or {})
+        canonical_selector = self.canonical_fact_selectors.get((
+            metric_ref,
+            period_role,
+            canonical_json(logical_selectors),
+        ))
+        if canonical_selector is not None:
+            canonical_period = canonical_selector.get("period")
+            if canonical_period != self.period(period_role):
+                raise CompileError(
+                    f"canonical selector period conflicts with analysis_task.periods.{period_role}"
+                )
         source_dimension_bindings = metric.get("source_dimension_bindings") or {}
         source_dimension_refs = sorted({
             str(source_dimension_bindings.get(name) or name)
@@ -476,11 +506,21 @@ class Compiler:
                 "fact_slot_id": slot_id,
                 **slot_identity,
                 "metric": metric["name"],
-                "source_metric_name": metric.get("source_metric_name") or metric["name"],
+                "source_metric_name": (
+                    canonical_selector.get("source_metric_name")
+                    if canonical_selector is not None
+                    else metric.get("source_metric_name") or metric["name"]
+                ),
                 "metric_object": metric["metric_object"],
                 "unit": metric["unit"],
                 "requirement_refs": [],
             }
+            if canonical_selector is not None:
+                self.fact_slots[slot_id].update({
+                    "grain": canonical_selector.get("grain"),
+                    "capability_path": canonical_selector.get("capability_path"),
+                    "source_binding": deepcopy(canonical_selector.get("source_binding") or {}),
+                })
             if materialized_by is not None:
                 self.fact_slots[slot_id]["materialized_by"] = materialized_by
         elif materialized_by is not None:
@@ -999,12 +1039,62 @@ class Compiler:
             ):
                 raise CompileError(f"{requirement_id}.validation must be a non-empty string array")
             unsupported_validation = sorted(
-                set(validation) - {"facts_present", "unit_consistent", "metric_additive"}
+                set(validation) - {
+                    "facts_present", "unit_consistent", "metric_additive", "unit_scale_verified"
+                }
             )
             if unsupported_validation:
                 raise CompileError(
                     f"{requirement_id}.validation contains unsupported checks: {unsupported_validation}"
                 )
+            unit_conversion = None
+            if "unit_scale_verified" in validation:
+                raw_conversion = requirement.get("unit_conversion")
+                if not isinstance(raw_conversion, dict):
+                    raise CompileError(
+                        f"{requirement_id}.unit_conversion is required for unit_scale_verified"
+                    )
+                if raw_conversion.get("target_unit") != metric["unit"]:
+                    raise CompileError(
+                        f"{requirement_id}.unit_conversion.target_unit must match target metric unit"
+                    )
+                scale_factor = raw_conversion.get("scale_factor")
+                if (
+                    isinstance(scale_factor, bool)
+                    or not isinstance(scale_factor, (int, float))
+                    or not math.isfinite(float(scale_factor))
+                    or float(scale_factor) == 0
+                ):
+                    raise CompileError(
+                        f"{requirement_id}.unit_conversion.scale_factor must be finite and non-zero"
+                    )
+                expected_by_metric: dict[str, str] = {}
+                expected = raw_conversion.get("expected_input_units")
+                if not isinstance(expected, list) or not expected:
+                    raise CompileError(
+                        f"{requirement_id}.unit_conversion.expected_input_units must be non-empty"
+                    )
+                for index, item in enumerate(expected):
+                    if not isinstance(item, dict):
+                        raise CompileError(
+                            f"{requirement_id}.unit_conversion.expected_input_units[{index}] must be an object"
+                        )
+                    input_metric = self.metric(item.get("metric_ref"))
+                    unit = require_nonempty_string(
+                        item.get("unit"),
+                        f"{requirement_id}.unit_conversion.expected_input_units[{index}].unit",
+                    )
+                    metric_name = str(input_metric["name"])
+                    if metric_name in expected_by_metric and expected_by_metric[metric_name] != unit:
+                        raise CompileError(
+                            f"{requirement_id}.unit_conversion has conflicting units for {metric_name!r}"
+                        )
+                    expected_by_metric[metric_name] = unit
+                unit_conversion = {
+                    "expected_input_units": expected_by_metric,
+                    "target_unit": metric["unit"],
+                    "scale_factor": float(scale_factor),
+                }
 
             fact_slot_ids: list[str] = []
             result_dependencies: set[str] = set()
@@ -1072,6 +1162,10 @@ class Compiler:
                         "unit": metric["unit"],
                         "validation": list(validation),
                         "rule_source": rule_source,
+                        **(
+                            {"unit_conversion": deepcopy(unit_conversion)}
+                            if unit_conversion is not None else {}
+                        ),
                     },
                 },
                 inputs={
@@ -2382,6 +2476,7 @@ class Compiler:
                 "periods": deepcopy(self.periods),
                 "dimensions": dimensions,
                 "filters": deepcopy(self.task.get("filters", [])),
+                "selector_dimensions": deepcopy(self.task.get("selector_dimensions", {})),
                 "scope": self.task.get("scope"),
                 "fact_requirements": [self.fact_slots[key] for key in sorted(self.fact_slots)],
                 "input_adaptations": deepcopy(self.ir.get("input_adaptations", [])),

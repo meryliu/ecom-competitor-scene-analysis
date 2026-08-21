@@ -10,10 +10,12 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from prepare_analysis import (  # noqa: E402
     PreparationError,
+    _apply_business_intent_selection,
     _requirement_roles,
     normalize_analysis_ir,
     prepare_analysis_ir,
 )
+from compile_plan import compile_and_validate  # noqa: E402
 
 
 def load(name: str) -> dict:
@@ -209,6 +211,109 @@ class PrepareAnalysisTests(unittest.TestCase):
         self.assertEqual(metric["unit_source"], "source_metric_metadata")
         self.assertTrue(metric["additive"])
 
+    def test_direct_capability_uses_metadata_grain_and_dimension(self) -> None:
+        index = source_index()
+        index["metrics"]["支付GMV"]["supported_grains"] = ["month"]
+        ir = base_ir("支付GMV")
+        ir["analysis_task"]["periods"] = {"analysis": "2026-06"}
+        ir["fact_observations"] = [{
+            "requirement_id": "observe",
+            "metric_ref": "target",
+            "period_roles": ["analysis"],
+            "dimensions": {"平台": "京东"},
+            "dimension_refs": [],
+            "view_id": "v",
+        }]
+        prepared, _ = prepare_analysis_ir(ir, index, self.compositions, self.derived)
+        self.assertEqual(prepared["fact_capability_plan"][0]["path"], "direct_fact")
+        self.assertEqual(prepared["fact_capability_plan"][0]["direct"]["status"], "available")
+        self.assertEqual(prepared["canonical_fact_selectors"][0]["grain"], "month")
+        plan, report = compile_and_validate(
+            prepared,
+            ROOT / "references" / "derived-metric-registry.json",
+            ROOT / "references" / "metric-composition-registry.json",
+        )
+        self.assertTrue(report["valid"], report)
+        slot = next(iter(plan["analysis_task"]["fact_requirements"]))
+        self.assertEqual(slot["capability_path"], "direct_fact")
+        self.assertEqual(slot["grain"], "month")
+
+    def test_unsupported_metadata_grain_does_not_use_fact_block(self) -> None:
+        index = source_index()
+        index["metrics"]["支付GMV"]["supported_grains"] = ["year"]
+        ir = base_ir("支付GMV")
+        ir["analysis_task"]["periods"] = {"analysis": "2026-06"}
+        ir["fact_observations"] = [{
+            "requirement_id": "observe",
+            "metric_ref": "target",
+            "period_roles": ["analysis"],
+            "dimensions": {"平台": "京东"},
+            "dimension_refs": [],
+            "view_id": "v",
+        }]
+        with self.assertRaises(PreparationError) as raised:
+            prepare_analysis_ir(ir, index, self.compositions, self.derived)
+        self.assertEqual(raised.exception.code, "SOURCE_PATH_UNAVAILABLE")
+
+    def test_missing_formula_target_is_materialized_from_user_formula(self) -> None:
+        index = source_index()
+        index["availability"]["month"]["metrics"].pop("支付GMV")
+        ir = base_ir("支付GMV")
+        ir["analysis_task"]["metrics"].append({
+            "metric_id": "factor",
+            "name": "结算GMV",
+            "metric_object": "volume",
+            "unit": "待元信息解析",
+        })
+        ir["analysis_task"]["periods"] = {
+            "analysis": "2026-06",
+            "comparison": "2026-05",
+        }
+        ir["attribution_targets"] = [{
+            "target_id": "formula_target",
+            "metric_ref": "target",
+            "metric_object": "volume",
+            "scenario": "metric_change",
+            "target_semantics": "absolute_delta",
+            "decomposition": "formula",
+            "periods": {"analysis": "2026-06", "comparison": "2026-05"},
+            "view_id": "v",
+            "dimensions": {"平台": "京东"},
+            "group_dimensions": [],
+            "factors": [{
+                "factor_id": "source_factor",
+                "kind": "metric",
+                "metric_ref": "factor",
+                "role": "multiplier",
+            }],
+            "formula": {"factor_ref": "source_factor"},
+        }]
+        prepared, _ = prepare_analysis_ir(ir, index, self.compositions, self.derived)
+        self.assertEqual(prepared["attribution_targets"][0]["target_fact_source"], "formula_computed")
+        formula_adaptations = [
+            item for item in prepared["input_adaptations"]
+            if item.get("rule_source") == "user_query_formula"
+        ]
+        self.assertEqual(len(formula_adaptations), 2)
+        self.assertEqual(
+            {item["target_period_role"] for item in formula_adaptations},
+            {"analysis", "comparison"},
+        )
+        plan, report = compile_and_validate(
+            prepared,
+            ROOT / "references" / "derived-metric-registry.json",
+            ROOT / "references" / "metric-composition-registry.json",
+        )
+        self.assertNotEqual(report.get("status"), "failed")
+        adaptation_nodes = {
+            item["node_id"] for item in plan["nodes"]
+            if item.get("type") == "input_adaptation"
+        }
+        attribution_node = next(
+            item for item in plan["nodes"] if item.get("type") == "formula_attribution"
+        )
+        self.assertTrue(adaptation_nodes.issubset(set(attribution_node["depends_on"])))
+
     def test_metric_scoped_dimension_binding_is_preserved_for_compilation(self) -> None:
         capabilities = source_index()
         capabilities["dimensions"] = {
@@ -401,6 +506,227 @@ class PrepareAnalysisTests(unittest.TestCase):
         )
         self.assertNotIn("resolution_blocks", prepared)
         self.assertFalse(any(item.get("mode") == "resolution_case" for item in decisions))
+
+    def test_task_filter_is_inherited_by_capability_and_physical_selector(self) -> None:
+        ir = base_ir("支付GMV")
+        ir["analysis_task"]["periods"] = {"analysis": "2026-06"}
+        ir["analysis_task"]["filters"] = [{
+            "dimension_ref": "平台", "operator": "eq", "value": "京东"
+        }]
+        ir["fact_observations"] = [{
+            "requirement_id": "observe",
+            "metric_ref": "target",
+            "period_roles": ["analysis"],
+            "view_id": "v",
+            "dimensions": {},
+            "dimension_refs": [],
+        }]
+        prepared, _ = prepare_analysis_ir(
+            ir, source_index(), self.compositions, self.derived
+        )
+        self.assertEqual(
+            prepared["fact_observations"][0]["dimensions"], {"平台": "京东"}
+        )
+        plan, report = compile_and_validate(
+            prepared,
+            ROOT / "references" / "derived-metric-registry.json",
+            ROOT / "references" / "metric-composition-registry.json",
+        )
+        self.assertTrue(report["valid"], report)
+        slot = plan["fetch_requests"][0]["fact_slots"][0]
+        self.assertEqual(slot["selector_dimensions"], {"平台": "京东"})
+        self.assertEqual(plan["analysis_task"]["selector_dimensions"], {"平台": "京东"})
+
+    def test_task_filter_conflict_is_rejected_before_capability_planning(self) -> None:
+        ir = base_ir("支付GMV")
+        ir["analysis_task"]["periods"] = {"analysis": "2026-06"}
+        ir["analysis_task"]["filters"] = {"平台": "京东"}
+        ir["fact_observations"] = [{
+            "requirement_id": "observe",
+            "metric_ref": "target",
+            "period_roles": ["analysis"],
+            "view_id": "v",
+            "dimensions": {"平台": "其他平台"},
+            "dimension_refs": [],
+        }]
+        with self.assertRaises(PreparationError) as raised:
+            prepare_analysis_ir(ir, source_index(), self.compositions, self.derived)
+        self.assertEqual(raised.exception.code, "SELECTOR_CONTEXT_INVALID")
+
+    def test_auto_aggregation_reuses_physical_period_roles_across_metrics(self) -> None:
+        ir = base_ir("支付GMV")
+        ir["analysis_task"]["metrics"].append({
+            "metric_id": "secondary",
+            "name": "结算GMV",
+            "metric_object": "volume",
+            "unit": "待元信息解析",
+        })
+        ir["fact_observations"] = [
+            {
+                "requirement_id": f"observe_{metric_ref}",
+                "metric_ref": metric_ref,
+                "period_roles": ["analysis"],
+                "view_id": "v",
+                "dimensions": {"平台": "京东"},
+                "dimension_refs": [],
+            }
+            for metric_ref in ("target", "secondary")
+        ]
+        prepared, _ = prepare_analysis_ir(
+            ir, source_index(), self.compositions, self.derived
+        )
+        physical_roles = {
+            role: period for role, period in prepared["analysis_task"]["periods"].items()
+            if role.startswith("__fact_")
+        }
+        self.assertEqual(set(physical_roles.values()), {"2026-04", "2026-05", "2026-06"})
+        self.assertEqual(len(physical_roles), 3)
+        plan, report = compile_and_validate(
+            prepared,
+            ROOT / "references" / "derived-metric-registry.json",
+            ROOT / "references" / "metric-composition-registry.json",
+        )
+        self.assertTrue(report["valid"], report)
+
+    def test_user_ir_cannot_claim_internal_physical_period_role(self) -> None:
+        ir = base_ir("支付GMV")
+        ir["analysis_task"]["periods"]["__fact_custom"] = "2026-04"
+        with self.assertRaises(PreparationError) as raised:
+            prepare_analysis_ir(ir, source_index(), self.compositions, self.derived)
+        self.assertEqual(raised.exception.code, "RESERVED_PERIOD_ROLE")
+
+    def test_formula_fallback_emits_explicit_generic_unit_conversion(self) -> None:
+        index = source_index()
+        units = {
+            "目标指标": "亿元",
+            "规模因子": "万人",
+            "频次因子": "次",
+            "价格因子": "元",
+        }
+        for name, unit in units.items():
+            index["metrics"][name] = {
+                "unit": unit, "additive": name != "频次因子", "dimensions": ["平台"]
+            }
+            index["metric_bindings"][name] = name
+        for name in ("规模因子", "频次因子", "价格因子"):
+            index["availability"]["month"]["metrics"][name] = {"dimension": "平台"}
+        ir = base_ir("目标指标")
+        ir["analysis_task"]["periods"] = {
+            "analysis": "2026-06", "comparison": "2026-05"
+        }
+        ir["analysis_task"]["metrics"].extend([
+            {"metric_id": "scale", "name": "规模因子", "metric_object": "volume", "unit": "待元信息解析"},
+            {"metric_id": "frequency", "name": "频次因子", "metric_object": "volume", "unit": "待元信息解析"},
+            {"metric_id": "price", "name": "价格因子", "metric_object": "volume", "unit": "待元信息解析"},
+        ])
+        factors = [
+            {"factor_id": metric_ref, "kind": "metric", "metric_ref": metric_ref}
+            for metric_ref in ("scale", "frequency", "price")
+        ]
+        ir["attribution_targets"] = [{
+            "target_id": "formula_target",
+            "metric_ref": "target",
+            "metric_object": "volume",
+            "scenario": "metric_change",
+            "target_semantics": "absolute_delta",
+            "decomposition": "formula",
+            "periods": {"analysis": "2026-06", "comparison": "2026-05"},
+            "view_id": "v",
+            "dimensions": {"平台": "京东"},
+            "group_dimensions": [],
+            "factors": factors,
+            "formula": {"op": "multiply", "args": [
+                {"factor_ref": item["factor_id"]} for item in factors
+            ]},
+        }]
+        prepared, _ = prepare_analysis_ir(ir, index, self.compositions, self.derived)
+        adaptations = [
+            item for item in prepared["input_adaptations"]
+            if item.get("rule_source") == "user_query_formula"
+        ]
+        self.assertEqual(len(adaptations), 2)
+        self.assertAlmostEqual(adaptations[0]["unit_conversion"]["scale_factor"], 1e-4)
+        self.assertEqual(
+            adaptations[0]["validation"], ["facts_present", "unit_scale_verified"]
+        )
+        plan, report = compile_and_validate(
+            prepared,
+            ROOT / "references" / "derived-metric-registry.json",
+            ROOT / "references" / "metric-composition-registry.json",
+        )
+        self.assertTrue(report["valid"], report)
+        formula_nodes = [
+            node for node in plan["nodes"] if node.get("type") == "input_adaptation"
+            and node.get("execution", {}).get("definition_source") == "user_query_formula"
+        ]
+        self.assertEqual(len(formula_nodes), 2)
+        self.assertEqual(
+            formula_nodes[0]["execution"]["materialize_as"]["unit_conversion"]["target_unit"],
+            "亿元",
+        )
+
+    def test_formula_fallback_with_unprovable_unit_fails_closed(self) -> None:
+        index = source_index()
+        index["metrics"]["目标指标"] = {
+            "unit": "目标专用单位", "additive": True, "dimensions": ["平台"]
+        }
+        index["metrics"]["输入指标"] = {
+            "unit": "输入专用单位", "additive": True, "dimensions": ["平台"]
+        }
+        index["metric_bindings"].update({"目标指标": "目标指标", "输入指标": "输入指标"})
+        index["availability"]["month"]["metrics"]["输入指标"] = {"dimension": "平台"}
+        ir = base_ir("目标指标")
+        ir["analysis_task"]["periods"] = {
+            "analysis": "2026-06", "comparison": "2026-05"
+        }
+        ir["analysis_task"]["metrics"].append({
+            "metric_id": "input",
+            "name": "输入指标",
+            "metric_object": "volume",
+            "unit": "待元信息解析",
+        })
+        ir["attribution_targets"] = [{
+            "target_id": "formula_target",
+            "metric_ref": "target",
+            "metric_object": "volume",
+            "scenario": "metric_change",
+            "target_semantics": "absolute_delta",
+            "decomposition": "formula",
+            "periods": {"analysis": "2026-06", "comparison": "2026-05"},
+            "view_id": "v",
+            "dimensions": {"平台": "京东"},
+            "group_dimensions": [],
+            "factors": [{
+                "factor_id": "input", "kind": "metric", "metric_ref": "input"
+            }],
+            "formula": {"factor_ref": "input"},
+        }]
+        with self.assertRaises(PreparationError) as raised:
+            prepare_analysis_ir(ir, index, self.compositions, self.derived)
+        self.assertEqual(raised.exception.code, "SOURCE_PATH_UNAVAILABLE")
+
+    def test_selected_business_intent_updates_model_inferred_metric_object(self) -> None:
+        ir = base_ir("线上社零", metric_object="volume")
+        ir["derived_requirements"] = [{
+            "requirement_id": "growth", "metric_ref": "target",
+            "metric_object": "volume",
+        }]
+        capabilities = {
+            "intent_resolutions": {"target": {
+                "selected_candidate": {
+                    "candidate_id": "intent_1",
+                    "intent_id": "growth_ratio_metric",
+                    "metric": "实物商品网上零售额同比增速",
+                    "metric_object": "ratio",
+                    "object_override_allowed": True,
+                },
+            }},
+        }
+        _apply_business_intent_selection(ir, capabilities)
+        metric = ir["analysis_task"]["metrics"][0]
+        self.assertEqual(metric["metric_object"], "ratio")
+        self.assertEqual(metric["metric_object_source"], "business_intent_policy")
+        self.assertEqual(ir["derived_requirements"][0]["metric_object"], "ratio")
 
 
 if __name__ == "__main__":

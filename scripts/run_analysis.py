@@ -27,6 +27,7 @@ from prepare_analysis import (
 )
 from providers.feishu_competitor import FeishuCompetitorGateway
 from resolution_policy import DEFAULT_POLICY_PATH as DEFAULT_RESOLUTION_POLICY
+from business_intent_policy import DEFAULT_POLICY_PATH as DEFAULT_BUSINESS_INTENT_POLICY
 from source_capability import project_task_capabilities
 from run_fast_query import answer_payload, finalize_model_nodes
 from run_state import (
@@ -305,6 +306,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--composition-registry", type=Path, default=root / "references" / "metric-composition-registry.json")
     parser.add_argument("--dimension-set-registry", type=Path, default=DEFAULT_DIMENSION_SET_REGISTRY)
     parser.add_argument("--resolution-policy", type=Path, default=DEFAULT_RESOLUTION_POLICY)
+    parser.add_argument(
+        "--business-intent-policy",
+        type=Path,
+        default=DEFAULT_BUSINESS_INTENT_POLICY,
+    )
     return parser.parse_args()
 
 
@@ -346,8 +352,11 @@ def main() -> int:
                 allow_stale=args.allow_stale,
                 dimension_set_registry_path=args.dimension_set_registry,
                 resolution_policy_path=args.resolution_policy,
+                business_intent_policy_path=args.business_intent_policy,
             )
-            capabilities = gateway.resolve(build_resolve_request(tasks, composition_registry))
+            capabilities = gateway.resolve(
+                build_resolve_request(tasks, composition_registry, derived_registry)
+            )
             source_binding = deepcopy(capabilities["source"])
             capabilities_path = args.work_dir / "resolved-capabilities.json"
             atomic_write_json(capabilities_path, capabilities)

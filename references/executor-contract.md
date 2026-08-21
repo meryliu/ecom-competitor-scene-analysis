@@ -122,7 +122,7 @@ python3 scripts/execution_runner.py \
 }
 ```
 
-时期角色由 Query 和派生/归因需求决定，不固定要求四期。归因 `binding.periods` 或静态 `payload.periods` 必须逐角色等于该映射。`max_workers` 用于 dry-bind、同一 DAG 波次和父任务本地并发，不得制造重复取数请求。`residual_tolerance` 由 runner 固定注入，分析 IR 不得覆盖。
+时期角色由 Query 和派生/归因需求决定，不固定要求四期。归因 `binding.periods` 或静态 `payload.periods` 必须逐角色等于该映射。`max_workers` 用于 dry-bind、同一 DAG 波次和父任务本地并发，不得制造重复取数请求。`residual_tolerance` 由 runner 固定注入，分析 IR 不得覆盖；执行时使用 `max(base_tolerance, magnitude * base_tolerance)` 的量级感知阈值，其中 magnitude 取目标分析值、对比值和变化值的最大绝对值。
 
 ## 可执行节点
 
@@ -149,7 +149,7 @@ python3 scripts/execution_runner.py \
 - `fact_artifact`：确认并索引已落盘的标准事实。
 - `model_owned`：保留给业务判断或结论组织，不由执行器改写。
 
-输入适配复用 `handler=derived`，并通过 `materialize_as` 声明目标事实。节点成功后，执行器在下一 DAG 波次前把结果注入运行时 FactStore；它只在运行时供下游复用，不写回 Provider 原始 facts。`materialize_as.validation` 只支持 `facts_present`、`unit_consistent` 和 `metric_additive`；其中可聚合性必须来自输入事实的飞书元信息。
+输入适配复用 `handler=derived`，并通过 `materialize_as` 声明目标事实。节点成功后，执行器在下一 DAG 波次前把结果注入运行时 FactStore；它只在运行时供下游复用，不写回 Provider 原始 facts。`materialize_as.validation` 支持 `facts_present`、`unit_consistent`、`metric_additive` 和 `unit_scale_verified`；其中可聚合性必须来自输入事实的飞书元信息。`unit_scale_verified` 仅用于 Prepare 已证明的用户公式目标回退，必须携带输入指标实际单位、目标单位和有限非零 `scale_factor`；执行器先核验运行时事实单位，再对表达式结果应用换算，不自行推断单位。
 
 归因节点进入执行器前，校验器必须确认 `target_ref.target_semantics` 属于权威算子契约的 `supported_target_semantics`。能力不匹配的节点使用 `status=blocked` 和 `execution.mode=blocked`，不进入执行器；执行器保留其终态，并继续调度无依赖关系的支持节点。禁止在 binding 中改变目标或在执行器内补算不受支持的目标。
 

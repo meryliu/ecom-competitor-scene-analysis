@@ -324,6 +324,122 @@ class ResolutionPolicyTests(unittest.TestCase):
         self.assertEqual(stale["resolution_cases"][0]["case_id"], case["case_id"])
         self.assertEqual(stale["resolution_cases"][0]["patch_status"], "stale_patch")
 
+    def test_intent_planning_selects_only_executable_metric_candidate(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "实物商品网上零售额": {
+                    "aliases": ["线上社零"], "unit": "亿元", "metric_object": "volume",
+                    "supported_grains": ["year"], "dimensions": ["无"],
+                    "aggregation_mode": "non_additive",
+                },
+                "实物商品网上零售额同比增速": {
+                    "aliases": ["线上社零同比增速", "线上社零增速"], "unit": "%",
+                    "metric_object": "ratio", "supported_grains": ["month"],
+                    "dimensions": ["无"], "aggregation_mode": "non_additive",
+                },
+            },
+            "dimensions": {},
+            "sheets": {
+                "month": {
+                    "available": True,
+                    "periods": {"2026-06": "B", "2026-07": "C"},
+                    "blocks": {"实物商品网上零售额同比增速": {"dimension": "无"}},
+                },
+                "year": {
+                    "available": True,
+                    "periods": {"2026": "B"},
+                    "blocks": {"实物商品网上零售额": {"dimension": "无"}},
+                },
+            },
+        }
+        request = {
+            "metrics": ["线上社零"],
+            "dimensions": [],
+            "contexts": [{
+                "task_id": "q", "query": "7月线上社零表现怎么样，较上月涨幅变化如何",
+                "periods": ["2026-06", "2026-07"], "dimensions": [],
+                "metrics": [{
+                    "metric_ref": "retail", "name": "线上社零", "metric_object": "volume",
+                    "metric_object_provenance": "model_inferred", "unit": "待元信息解析",
+                    "provenance": "user_explicit",
+                    "consumers": [{"requirement_type": "fact_observations"}],
+                }],
+            }],
+        }
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertEqual(task["metric_bindings"]["线上社零"], "实物商品网上零售额同比增速")
+        self.assertEqual(task["resolution_cases"], [])
+        selected = task["intent_resolutions"]["retail"]["selected_candidate"]
+        self.assertEqual(selected["status"], "viable")
+        self.assertEqual(selected["path"], "direct_fact")
+        self.assertEqual(selected["metric_object"], "ratio")
+
+    def test_intent_planning_confirms_when_distinct_candidates_are_executable(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "业务规模": {"aliases": ["业务"], "unit": "亿元", "metric_object": "volume", "supported_grains": ["month"], "dimensions": ["无"]},
+                "业务同比增速": {"aliases": ["业务同比增速", "业务增速"], "unit": "%", "metric_object": "ratio", "supported_grains": ["month"], "dimensions": ["无"]},
+            },
+            "dimensions": {},
+            "sheets": {"month": {
+                "available": True, "periods": {"2026-07": "B"},
+                "blocks": {"业务规模": {"dimension": "无"}, "业务同比增速": {"dimension": "无"}},
+            }},
+        }
+        request = {"metrics": ["业务"], "contexts": [{
+            "task_id": "q", "query": "业务表现和涨幅", "periods": ["2026-07"],
+            "dimensions": [], "metrics": [{
+                "metric_ref": "m", "name": "业务", "metric_object": "volume",
+                "metric_object_provenance": "model_inferred", "unit": "待元信息解析",
+                "consumers": [{"requirement_type": "fact_observations"}],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        case = result["task_resolutions"]["q"]["resolution_cases"][0]
+        self.assertEqual(case["kind"], "interpretation")
+        self.assertEqual(case["action"], "confirm")
+        self.assertEqual(
+            {item["metric"] for item in case["candidates"] if item["status"] == "viable"},
+            {"业务规模", "业务同比增速"},
+        )
+
+    def test_intent_candidate_respects_registered_operation_object_capability(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "业务规模": {"aliases": ["业务"], "unit": "亿元", "metric_object": "volume", "supported_grains": ["month"], "dimensions": ["无"]},
+                "业务同比增速": {"aliases": ["业务同比增速", "业务增速"], "unit": "%", "metric_object": "ratio", "supported_grains": ["month"], "dimensions": ["无"]},
+            },
+            "dimensions": {},
+            "sheets": {"month": {"available": True, "periods": {"2026-07": "B"}, "blocks": {
+                "业务规模": {"dimension": "无"}, "业务同比增速": {"dimension": "无"},
+            }}},
+        }
+        request = {"metrics": ["业务"], "contexts": [{
+            "task_id": "q", "query": "业务表现和涨幅", "periods": ["2026-07"],
+            "dimensions": [], "metrics": [{
+                "metric_ref": "m", "name": "业务", "metric_object": "volume",
+                "metric_object_provenance": "model_inferred", "unit": "待元信息解析",
+                "consumers": [{
+                    "requirement_type": "derived_requirements",
+                    "allowed_metric_objects": ["volume"],
+                }],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertEqual(task["metric_bindings"]["业务"], "业务规模")
+        candidates = next(
+            item for item in result["resolution_decisions"]
+            if item.get("kind") == "interpretation"
+        )["candidates"]
+        ratio = next(item for item in candidates if item.get("metric") == "业务同比增速")
+        self.assertEqual(ratio["status"], "infeasible")
+        self.assertIn("operation_metric_object_unsupported", ratio["conflicts"])
+
 
 if __name__ == "__main__":
     unittest.main()

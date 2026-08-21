@@ -16,11 +16,24 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import source_runtime  # noqa: E402
 from _vendor.ecom_competitor_source import (  # noqa: E402
     SkillError,
+    parse_metric_metadata,
     select_standard_sheets,
 )
+import csv  # noqa: E402
+import io  # noqa: E402
 
 
 class SourceRuntimeTests(unittest.TestCase):
+    def test_metric_metadata_parses_supported_grain_and_aggregation_mode(self) -> None:
+        rows = list(csv.reader(io.StringIO(
+            "指标名称,指标别名,数值单位,可支持时间粒度,可支持拆解维度,聚合方式,口径备注\n"
+            "支付GMV,,,月度,TOP6平台,可聚合，可做加减乘除,\n"
+            "MAC,,,月度,TOP6平台,不可聚合,\n"
+        )))
+        metrics = parse_metric_metadata(rows)
+        self.assertEqual(metrics["支付GMV"]["supported_grains"], ["month"])
+        self.assertEqual(metrics["支付GMV"]["aggregation_mode"], "additive")
+        self.assertEqual(metrics["MAC"]["aggregation_mode"], "non_additive")
     def test_only_standard_sheets_are_selected(self) -> None:
         sheets = [
             {"sheet_id": "m", "sheet_name": "指标元信息"},

@@ -16,6 +16,7 @@ from execution_runner import (  # noqa: E402
     compute_run_status,
     execute_attribution,
     execute_plan,
+    materialize_intermediate_facts,
     normalize_facts,
 )
 
@@ -41,6 +42,85 @@ def fact(slot_id: str, value: float = 1.0) -> dict:
 
 
 class NormalizeFactsTests(unittest.TestCase):
+    def test_formula_materialization_applies_verified_unit_scale(self) -> None:
+        rows = []
+        for metric, value, unit in (
+            ("规模", 48292.0, "万人"),
+            ("频次", 15.5, "次"),
+            ("价格", 52.0, "元"),
+        ):
+            rows.append({
+                "fact_id": metric,
+                "metric": metric,
+                "period_role": "analysis",
+                "period": "2026-06",
+                "view_id": "v",
+                "dimensions": {},
+                "value": value,
+                "unit": unit,
+                "missing": False,
+                "source_ref": {"revision": 1},
+            })
+        execution = {
+            "expression": {"op": "multiply", "args": [
+                {"fact": {"metric": metric, "period_role": "analysis"}}
+                for metric in ("规模", "频次", "价格")
+            ]},
+            "materialize_as": {
+                "metric_ref": "target",
+                "metric": "目标",
+                "period_role": "analysis",
+                "period": "2026-06",
+                "view_id": "v",
+                "unit": "亿元",
+                "rule_source": "user_query_formula",
+                "validation": ["facts_present", "unit_scale_verified"],
+                "unit_conversion": {
+                    "expected_input_units": {"规模": "万人", "频次": "次", "价格": "元"},
+                    "target_unit": "亿元",
+                    "scale_factor": 1e-4,
+                },
+            },
+        }
+        materialized = materialize_intermediate_facts(
+            "formula", execution, 48292.0 * 15.5 * 52.0, FactStore(rows)
+        )
+        self.assertAlmostEqual(materialized[0]["value"], 3892.3352)
+
+    def test_formula_materialization_rejects_runtime_unit_drift(self) -> None:
+        row = {
+            "fact_id": "input",
+            "metric": "输入",
+            "period_role": "analysis",
+            "period": "2026-06",
+            "view_id": "v",
+            "dimensions": {},
+            "value": 2.0,
+            "unit": "万元",
+            "missing": False,
+            "source_ref": {"revision": 1},
+        }
+        execution = {
+            "expression": {"fact": {"metric": "输入", "period_role": "analysis"}},
+            "materialize_as": {
+                "metric_ref": "target",
+                "metric": "目标",
+                "period_role": "analysis",
+                "period": "2026-06",
+                "view_id": "v",
+                "unit": "亿元",
+                "rule_source": "user_query_formula",
+                "validation": ["facts_present", "unit_scale_verified"],
+                "unit_conversion": {
+                    "expected_input_units": {"输入": "元"},
+                    "target_unit": "亿元",
+                    "scale_factor": 1e-8,
+                },
+            },
+        }
+        with self.assertRaisesRegex(ExecutionError, "unit mismatch"):
+            materialize_intermediate_facts("formula", execution, 2.0, FactStore([row]))
+
     def test_optional_partial_result_downgrades_run_status(self) -> None:
         nodes = {
             "optional_attribution": {
@@ -54,6 +134,11 @@ class NormalizeFactsTests(unittest.TestCase):
                 "result": {"summary": {"residual": 0.25}},
             }
         }
+        self.assertEqual(compute_run_status(nodes, results), "partial_success")
+
+    def test_core_partial_result_is_not_promoted_to_blocked(self) -> None:
+        nodes = {"core_attribution": {"criticality": "core", "status": "planned"}}
+        results = {"core_attribution": {"status": "partial_success"}}
         self.assertEqual(compute_run_status(nodes, results), "partial_success")
 
     def test_residual_failure_preserves_attribution_result_as_partial(self) -> None:

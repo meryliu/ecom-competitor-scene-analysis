@@ -309,7 +309,7 @@
 
 编译器生成的事实引用必须包含 `view_id`，并用 `dimensions` 与 `dimensions_exact=true` 固定粒度。分组归因仅在部分覆盖或显式要求整体值时绑定独立大盘事实。
 
-编译器在生成 fetch request 前形成统一过滤上下文：目标的标量 `dimensions` 传播到目标指标、每个 metric 因子、derived 因子的事实叶子、所有时期角色和 attribution binding；因子只可补充不冲突的约束。`selector_dimensions` 的每个键必须进入物理 `dimension_refs`。标量过滤不得自动转成逐成员 fanout，只有显式 `group_dimensions`/父级展开才生成分组输出。
+Prepare 在事实能力判断前形成统一过滤上下文：`analysis_task.filters` 中可确定性下推的 `eq/in` 条件先规范化为任务级 `selector_dimensions`，再传播到需求、归因目标、每个 metric 因子、derived 因子的事实叶子和所有时期角色；局部维度只可补充不冲突的约束。Compile 使用同一幂等规范化逻辑并验证所有物理事实槽位均继承任务选择器。`selector_dimensions` 的每个键必须进入物理 `dimension_refs`。标量过滤不得自动转成逐成员 fanout，只有显式 `group_dimensions`/父级展开才生成分组输出；无法下推的过滤操作必须在 Prepare 阻断，不能作为无效审计字段继续执行。
 
 编译器不得调用取数服务、执行计算、组织业务结论或为单次 Query 生成脚本。新增计算类型通过独立 resolver 接入，不在编译器核心添加业务条件分支。
 

@@ -59,6 +59,7 @@ def project_task_capabilities(
     metric_bindings = dict(task.get("metric_bindings") or {})
     projected["metric_bindings"] = metric_bindings
     projected["metric_statuses"] = deepcopy(task.get("metric_statuses") or {})
+    projected["intent_resolutions"] = deepcopy(task.get("intent_resolutions") or {})
     projected["composition_resolutions"] = deepcopy(
         task.get("composition_resolutions") or []
     )
@@ -114,10 +115,66 @@ def direct_available(
     period: str,
     source_dimension: str,
 ) -> bool:
+    return evaluate_direct_capability(
+        capabilities, source_metric, period, source_dimension
+    )["status"] == "available"
+
+
+def evaluate_direct_capability(
+    capabilities: dict[str, Any],
+    source_metric: str,
+    period: str,
+    source_dimension: str,
+) -> dict[str, Any]:
+    """Evaluate a direct fact using source metadata and the live fact index.
+
+    Metadata is authoritative for declared grain/dimension support; the fact
+    sheet is still required to prove that the requested period and block exist.
+    """
     parsed = normalize_period(period)
     if parsed is None:
-        return False
+        return {"status": "blocked", "reason": "invalid_period"}
     grain, canonical = parsed
+    metadata = (capabilities.get("metrics") or {}).get(source_metric) or {}
+    supported_grains = metadata.get("supported_grains")
+    if "supported_grains" in metadata and not supported_grains:
+        return {"status": "unavailable", "reason": "metadata_grain_unknown", "grain": grain}
+    if supported_grains is not None and grain not in supported_grains:
+        return {
+            "status": "unavailable",
+            "reason": "metadata_grain_unsupported",
+            "grain": grain,
+            "supported_grains": list(supported_grains),
+        }
+    supported_dimensions = metadata.get("dimensions")
+    if "dimensions" in metadata and not supported_dimensions:
+        return {
+            "status": "unavailable",
+            "reason": "metadata_dimension_unknown",
+            "dimension": source_dimension,
+        }
+    if source_dimension == "无":
+        dimension_supported = not supported_dimensions or "无" in supported_dimensions
+    else:
+        dimension_supported = not supported_dimensions or source_dimension in supported_dimensions
+    if not dimension_supported:
+        return {
+            "status": "unavailable",
+            "reason": "metadata_dimension_unsupported",
+            "dimension": source_dimension,
+            "supported_dimensions": list(supported_dimensions or []),
+        }
     available = (capabilities.get("availability") or {}).get(grain) or {}
     metric = (available.get("metrics") or {}).get(source_metric) or {}
-    return canonical in (available.get("periods") or []) and metric.get("dimension") == source_dimension
+    if canonical not in (available.get("periods") or []):
+        return {"status": "unavailable", "reason": "period_unavailable", "grain": grain, "period": canonical}
+    if not metric:
+        return {"status": "unavailable", "reason": "metric_block_unavailable", "grain": grain}
+    if metric.get("dimension") != source_dimension:
+        return {
+            "status": "blocked",
+            "reason": "metadata_fact_dimension_conflict",
+            "metadata_dimension": source_dimension,
+            "fact_dimension": metric.get("dimension"),
+        }
+    return {"status": "available", "grain": grain, "period": canonical, "dimension": source_dimension}

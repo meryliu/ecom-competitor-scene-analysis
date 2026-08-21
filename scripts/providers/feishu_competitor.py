@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from competitor_fact_provider import fetch_facts_from_index
+from business_intent_policy import (
+    DEFAULT_POLICY_PATH as DEFAULT_BUSINESS_INTENT_POLICY,
+    business_intent_policy_hash,
+    load_business_intent_policy,
+)
 from data_gateway import DataGateway, RESOLVED_CAPABILITIES_V1, SOURCE_BINDING_V1
 from resolution_policy import (
     DEFAULT_POLICY_PATH,
@@ -28,6 +33,7 @@ class FeishuCompetitorGateway(DataGateway):
         allow_stale: bool | None = None,
         dimension_set_registry_path: Path | None = None,
         resolution_policy_path: Path | None = None,
+        business_intent_policy_path: Path | None = None,
     ) -> None:
         self.config = deepcopy(config)
         self.identity = identity
@@ -38,6 +44,12 @@ class FeishuCompetitorGateway(DataGateway):
         self.dimension_set_registry_path = dimension_set_registry_path
         self.resolution_policy_path = resolution_policy_path or DEFAULT_POLICY_PATH
         self.resolution_policy = load_resolution_policy(self.resolution_policy_path)
+        self.business_intent_policy_path = (
+            business_intent_policy_path or DEFAULT_BUSINESS_INTENT_POLICY
+        )
+        self.business_intent_policy = load_business_intent_policy(
+            self.business_intent_policy_path
+        )
         self.client = ManagedLarkClient(identity=identity)
         self._index: dict[str, Any] | None = None
         self._cache_status: str | None = None
@@ -65,7 +77,9 @@ class FeishuCompetitorGateway(DataGateway):
             sheet_roles=sheet_roles,
             config_hash=str(self.config["config_hash"]),
         )
-        resolution = resolve_request_overlay(index, request, self.resolution_policy)
+        resolution = resolve_request_overlay(
+            index, request, self.resolution_policy, self.business_intent_policy
+        )
         candidate_index = resolution["index"]
         # Preserve the pinned raw-index object on the exact path.  A request-scoped
         # overlay is retained only when resolution actually changed source blocks.
@@ -81,6 +95,9 @@ class FeishuCompetitorGateway(DataGateway):
             "schema_hash": source.get("schema_hash"),
             "freshness": "stale" if status == "stale" else "live",
             "resolution_policy_hash": resolution_policy_hash(self.resolution_policy),
+            "business_intent_policy_hash": business_intent_policy_hash(
+                self.business_intent_policy
+            ),
             "resolution_engine_version": ENGINE_VERSION,
         }
         metric_catalogue = resolved_index.get("metrics") or {}
@@ -146,6 +163,7 @@ class FeishuCompetitorGateway(DataGateway):
             "resolution_cases": deepcopy(resolution["resolution_cases"]),
             "resolution_decisions": deepcopy(resolution["resolution_decisions"]),
             "resolution_policy": deepcopy(resolution["resolution_policy"]),
+            "business_intent_policy": deepcopy(resolution["business_intent_policy"]),
         }
 
     def fetch(self, request: dict[str, Any]) -> dict[str, Any]:

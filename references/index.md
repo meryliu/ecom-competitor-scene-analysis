@@ -7,6 +7,7 @@
 - [analysis-ir-contract.md](analysis-ir-contract.md)
 - [analysis-request-contract.md](analysis-request-contract.md)
 - [attribution-engine-integration.md](attribution-engine-integration.md)
+- [business-intent-policy-registry.json](business-intent-policy-registry.json)
 - [competitor-source-contract.md](competitor-source-contract.md)
 - [data-gateway-contract.md](data-gateway-contract.md)
 - `data-sources/`：数据源配置与来源说明

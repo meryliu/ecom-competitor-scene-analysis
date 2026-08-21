@@ -4,11 +4,12 @@
 
 ## 映射发生位置
 
-1. Gateway resolve 将 Query 中的逻辑指标名与当前指标元信息匹配。
-2. 源索引构建保留未决物理指标块；请求级 resolver 联合评估“物理块、指标、维度、行域”，不得先独立确定指标再猜维度。
-3. prepare/compile 保留逻辑指标和维度，同时生成按指标隔离的 `source_metric_name`、`source_dimension_refs`、`source_selector_dimensions`、`source_dimension_domains` 与 `dimension_projection`。
-4. Provider 用物理字段定位事实，并用实时枚举确认维度值、物理维度全域或命名集合。`TOP6平台` 直接走物理维度全域，不经过逻辑集合注册表。
-5. `project_scene_facts()` 按 consumer binding 把物理维度投影回逻辑维度，执行器不感知源表名称变化。
+1. Gateway resolve 对复合 Query 按 `business-intent-policy-registry.json` 生成有限原始假设；策略只提供语义模板，不提供标准名称映射。
+2. 同一次 resolve 使用当前全部指标与维度元信息、实际事实块和时期覆盖，把假设筛成 `viable|infeasible` 候选；唯一可执行候选自动选择，多个口径不同的可执行候选一次澄清。
+3. 源索引构建保留未决物理指标块；请求级 resolver 联合评估“物理块、指标、维度、行域”，不得先独立确定指标再猜维度。业务意图选定后不再重新猜业务语义。
+4. prepare/compile 保留逻辑指标和维度，同时生成按指标隔离的 `source_metric_name`、`source_dimension_refs`、`source_selector_dimensions`、`source_dimension_domains` 与 `dimension_projection`。
+5. Provider 用物理字段定位事实，并用实时枚举确认维度值、物理维度全域或命名集合。`TOP6平台` 直接走物理维度全域，不经过逻辑集合注册表。
+6. `project_scene_facts()` 按 consumer binding 把物理维度投影回逻辑维度，执行器不感知源表名称变化。
 
 ## 解析边界
 
@@ -32,6 +33,8 @@ Query 仅提供维度值时，模型可以给出维度名候选，但最终绑�
 只有会改变结果的歧义才提问，问题必须列出候选名称、元信息证据、置信度和受影响的指标/周期/维度。澄清后通过 IR 的 `resolution_patches` 更新并重编译。patch 必须匹配 case ID、候选 ID、source revision、schema hash 和 policy hash；任一变化均视为 stale，重新生成候选。用户确认不得沉淀为全局别名或规则。
 
 决策注册表不是名称映射枚举。它只能使用实现白名单中的 hard gates、strong evidence、阈值和候选上限；模型推断本身不能单独触发自动绑定。
+
+业务意图注册表同样不得登记标准指标或维度映射，只能维护语义触发词、指标对象、名称模板、优先级和候选上限。规则与 source revision、schema hash、resolution policy hash 一同进入审计指纹；策略变更后旧确认补丁失效。普通事实和派生可参与意图展开，归因目标、用户公式和注册组合叶子不允许被自动改写指标对象。
 
 ## 实时性
 

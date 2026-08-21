@@ -11,7 +11,7 @@ facts = gateway.fetch(fetch_request)
 
 `resolve()` 接收语义指标名、维度名、时期及任务级语义上下文，返回 `resolved_capabilities/1.0`。能力对象包含 provider/source 身份与版本、名称 bindings、按指标隔离的维度 bindings、指标/维度业务元信息、联合可用性及必要的逻辑候选摘要。它禁止包含 token、sheet ID、行列、单元格范围或指标块坐标；完整候选坐标只留在 Provider 内部。
 
-能力对象可包含 `task_resolutions` 和 `task_metric_dimension_bindings`。它们是按 `task_id` 投影的权威解析结果，包含任务级绑定、指标状态、组合回退结果和确认 cases。根级 `metric_bindings` 仅表示所有任务结论一致的兼容绑定；任务之间结论不一致时不得使用根级字段覆盖任务投影。请求上下文可包含当前任务实际关联的 `composition_intents`，Gateway 只解析这些组合的叶子，不展开整个注册表。
+能力对象可包含 `task_resolutions` 和 `task_metric_dimension_bindings`。它们是按 `task_id` 投影的权威解析结果，包含任务级绑定、指标状态、业务意图选择、组合回退结果和确认 cases。业务意图候选在同一固定索引上完成名称、指标对象、粒度、维度、聚合、事实块和时期联合判断，不产生候选级远端调用。根级 `metric_bindings` 仅表示所有任务结论一致的兼容绑定；任务之间结论不一致时不得使用根级字段覆盖任务投影。请求上下文可包含当前任务实际关联的 `composition_intents`，Gateway 只解析这些组合的叶子，不展开整个注册表。
 
 `fetch()` 接收 provider-neutral 事实需求和 runner 注入的 `source_binding/1.0`：
 
@@ -25,11 +25,12 @@ facts = gateway.fetch(fetch_request)
   "schema_hash": "...",
   "freshness": "live",
   "resolution_policy_hash": "...",
-  "resolution_engine_version": "2.0.0"
+  "business_intent_policy_hash": "...",
+  "resolution_engine_version": "2.1.0"
 }
 ```
 
-Gateway 必须拒绝与本次 resolve 不一致的 binding。config、revision、schema、resolution policy 或 resolution engine 变化都会改变请求 hash，旧 checkpoint 不得误复用。
+Gateway 必须拒绝与本次 resolve 不一致的 binding。config、revision、schema、resolution policy、business intent policy 或 resolution engine 变化都会改变请求 hash，旧 checkpoint 不得误复用。
 
 ## 固定快照与失败策略
 
@@ -41,4 +42,4 @@ Feishu Gateway 在 `resolve()` 中刷新并固定一次物理索引、client、c
 
 `resolved-capabilities.json` 每个 run 只保存一份，属于诊断产物。其他产物只保存 binding 或 hash，不复制完整能力对象。正常分析仍只读取顶层 `answer-payload.json`，不要把能力、配置、计划或 facts 加入模型上下文。
 
-更换取数实现时保持 `resolved_capabilities/1.0`、`source_binding/1.0` 和 `scene_facts/2.0`，新增 Gateway 实现并替换 runner 组装点。Provider 内部负责认证、物理元信息、坐标解析、批量读取和 revision 一致性；准备、编译、计算、归因和最终输出不感知物理源。精确匹配不生成候选包；仅非标准路径输出最多三个候选，因此不增加飞书调用，正常路径上下文保持不变。
+更换取数实现时保持 `resolved_capabilities/1.0`、`source_binding/1.0` 和 `scene_facts/2.0`，新增 Gateway 实现并替换 runner 组装点。Provider 内部负责认证、物理元信息、坐标解析、批量读取和 revision 一致性；准备、编译、计算、归因和最终输出不感知物理源。精确单义请求不生成业务意图候选包；复合语义和非标准路径分别最多输出三个逻辑候选。完整失败证据只保存在 `resolved-capabilities.json`，顶层澄清只携带有界候选，因此不增加飞书调用并控制正常路径上下文。

@@ -1,0 +1,46 @@
+{
+  "schema_version": "business_intent_policy/1.0",
+  "policy_version": "1.0.0",
+  "limits": {
+    "max_hypotheses_per_metric": 3,
+    "max_candidates_per_case": 3
+  },
+  "rules": [
+    {
+      "intent_id": "declared_metric",
+      "priority": 100,
+      "triggers": {"mode": "always"},
+      "metric_term_templates": ["{metric}"],
+      "metric_object": "inherit",
+      "allowed_object_provenance": [
+        "model_inferred",
+        "user_explicit",
+        "user_formula",
+        "registered_definition",
+        "source_metadata"
+      ]
+    },
+    {
+      "intent_id": "growth_ratio_metric",
+      "priority": 90,
+      "triggers": {
+        "any": ["增速", "增长率", "涨幅"]
+      },
+      "metric_term_templates": ["{metric}同比增速", "{metric}增速"],
+      "metric_object": "ratio",
+      "skip_if_metric_contains_any": ["同比", "增速", "增长率", "涨幅"],
+      "allowed_object_provenance": ["model_inferred"]
+    },
+    {
+      "intent_id": "base_volume_metric",
+      "priority": 80,
+      "triggers": {
+        "any": ["表现", "规模", "金额", "零售额", "销售额", "成交额"]
+      },
+      "metric_term_templates": ["{metric}"],
+      "metric_object": "volume",
+      "skip_if_metric_contains_any": ["同比", "增速", "增长率", "涨幅", "占比", "率"],
+      "allowed_object_provenance": ["model_inferred"]
+    }
+  ]
+}

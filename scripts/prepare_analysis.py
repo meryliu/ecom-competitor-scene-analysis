@@ -9,13 +9,15 @@ from copy import deepcopy
 from typing import Any
 
 from source_capability import (
-    direct_available,
+    evaluate_direct_capability,
     normalize_match_text,
     normalize_period,
     resolve_dimension,
     resolve_metric,
     validate_capabilities,
 )
+from selector_context import SelectorContextError, apply_task_selector_context
+from unit_scale import UnitScaleError, conversion_factor, formula_scale
 
 
 class PreparationError(ValueError):
@@ -138,6 +140,35 @@ def _source_dimension(
     return resolve_dimension(name, index)
 
 
+def _apply_business_intent_selection(ir: dict[str, Any], index: dict[str, Any]) -> None:
+    """Apply one audited intent selection before source metadata conflict checks."""
+    resolutions = index.get("intent_resolutions") or {}
+    metrics = _metric_map(ir)
+    for metric_ref, resolution in resolutions.items():
+        if not isinstance(resolution, dict):
+            continue
+        selected = resolution.get("selected_candidate") or {}
+        if not isinstance(selected, dict) or not selected.get("metric"):
+            continue
+        metric = metrics.get(str(metric_ref))
+        if metric is None:
+            continue
+        selected_object = selected.get("metric_object")
+        if selected.get("object_override_allowed") and selected_object in {"volume", "ratio"}:
+            metric["metric_object"] = selected_object
+            metric["metric_object_source"] = "business_intent_policy"
+            for requirement in ir.get("derived_requirements") or []:
+                if (
+                    isinstance(requirement, dict)
+                    and str(requirement.get("metric_ref")) == str(metric_ref)
+                    and requirement.get("metric_object") in {"volume", "ratio"}
+                ):
+                    requirement["metric_object"] = selected_object
+                    requirement["metric_object_source"] = "business_intent_policy"
+        metric["business_intent_id"] = selected.get("intent_id")
+        metric["business_intent_candidate_id"] = selected.get("candidate_id")
+
+
 def _bind_declared_metric_metadata(ir: dict[str, Any], index: dict[str, Any]) -> None:
     """Resolve source-backed metadata once before compilation and adaptation."""
     metrics = (ir.get("analysis_task") or {}).get("metrics") or []
@@ -232,9 +263,34 @@ def _direct_available(
     expected_dimension = _expected_dimension(
         dimensions, dimension_refs, index, source_metric
     )
-    return expected_dimension is not None and direct_available(
+    return expected_dimension is not None and evaluate_direct_capability(
+        index, source_metric, period, expected_dimension
+    )["status"] == "available"
+
+
+def _direct_capability(
+    index: dict[str, Any],
+    metric_name: str,
+    period: str,
+    dimensions: dict[str, Any],
+    dimension_refs: list[str],
+) -> dict[str, Any]:
+    source_metric = _source_metric(metric_name, index)
+    if source_metric is None:
+        return {"status": "blocked", "reason": "metric_unresolved"}
+    expected_dimension = _expected_dimension(
+        dimensions, dimension_refs, index, source_metric
+    )
+    if expected_dimension is None:
+        return {"status": "blocked", "reason": "dimension_ambiguous"}
+    result = evaluate_direct_capability(
         index, source_metric, period, expected_dimension
     )
+    result.update({
+        "source_metric_name": source_metric,
+        "source_dimension": expected_dimension,
+    })
+    return result
 
 
 def _composition_for_metric(
@@ -355,6 +411,20 @@ def _child_period_candidates(period: str) -> list[list[str]]:
     return []
 
 
+def _intern_physical_period_role(periods: dict[str, str], period: str) -> str:
+    """Return one stable runtime role for each canonical physical period."""
+    canonical = _canonical_period(period, "aggregate source period")
+    for role, value in periods.items():
+        if value == canonical:
+            return str(role)
+    base = "__fact_" + re.sub(r"[^0-9A-Za-z]+", "_", canonical).strip("_")
+    role = base
+    if role in periods and periods[role] != canonical:
+        role = f"{base}_{_stable_suffix(canonical)}"
+    periods[role] = canonical
+    return role
+
+
 def _aggregation_children(
     index: dict[str, Any],
     metric_name: str,
@@ -366,7 +436,9 @@ def _aggregation_children(
     if source_metric is None:
         return None
     metadata = (index.get("metrics") or {}).get(source_metric) or {}
-    if metadata.get("additive") is not True:
+    if metadata.get("aggregation_mode") not in (None, "additive") and metadata.get("additive") is not True:
+        return None
+    if metadata.get("aggregation_mode") is None and metadata.get("additive") is not True:
         return None
     for children in _child_period_candidates(target_period):
         if all(
@@ -490,6 +562,176 @@ def _requirement_roles(
     return [item for item in consumers if item.get("metric_ref") in metrics]
 
 
+def _formula_fallback_expression(
+    expression: Any,
+    factors: dict[str, dict[str, Any]],
+    role: str,
+) -> dict[str, Any]:
+    """Expand attribution factor references into a materializable fact expression."""
+    if not isinstance(expression, dict):
+        raise PreparationError("FORMULA_SHAPE_INVALID", "attribution formula must be an object")
+    if "literal" in expression:
+        return {"literal": expression["literal"]}
+    if "factor_ref" in expression:
+        factor = factors.get(str(expression["factor_ref"]))
+        if factor is None:
+            raise PreparationError("FORMULA_SHAPE_INVALID", "formula references an unknown factor")
+        kind = factor.get("kind")
+        if kind == "metric":
+            fact = {"metric_ref": factor.get("metric_ref"), "period_role": role}
+            if factor.get("dimensions"):
+                fact["dimensions"] = deepcopy(factor["dimensions"])
+            return {"fact": fact}
+        if kind == "literal":
+            values = factor.get("values_by_period_role") or {}
+            if role not in values:
+                raise PreparationError("FORMULA_SHAPE_INVALID", f"literal factor has no value for {role}")
+            return {"literal": values[role]}
+        expressions = factor.get("expressions_by_period_role") or {}
+        if role not in expressions:
+            raise PreparationError("FORMULA_SHAPE_INVALID", f"derived factor has no expression for {role}")
+        return _formula_fallback_expression(expressions[role], factors, role)
+    op = expression.get("op")
+    args = expression.get("args")
+    if op not in {"add", "subtract", "multiply", "divide", "negate"} or not isinstance(args, list):
+        raise PreparationError("FORMULA_SHAPE_INVALID", "unsupported formula expression")
+    return {"op": op, "args": [_formula_fallback_expression(arg, factors, role) for arg in args]}
+
+
+def _formula_unit_conversion(
+    expression: dict[str, Any],
+    factors: dict[str, dict[str, Any]],
+    metrics: dict[str, dict[str, Any]],
+    target_unit: Any,
+) -> dict[str, Any]:
+    expected: dict[str, str] = {}
+
+    def factor_unit(factor_ref: str) -> str | None:
+        factor = factors.get(factor_ref)
+        if factor is None:
+            raise UnitScaleError(f"unknown formula factor: {factor_ref!r}")
+        kind = factor.get("kind") or (
+            "metric" if factor.get("metric_ref") is not None else None
+        )
+        if kind == "literal":
+            return "1"
+        if kind != "metric":
+            raise UnitScaleError(
+                f"formula fallback does not support {kind or 'unknown'} factor {factor_ref!r}"
+            )
+        metric_ref = str(factor.get("metric_ref") or "")
+        metric = metrics.get(metric_ref) or {}
+        unit = metric.get("unit")
+        if not metric_ref or _is_unresolved_metadata(unit):
+            raise UnitScaleError(f"formula factor {factor_ref!r} has no resolved unit")
+        expected[metric_ref] = str(unit)
+        return str(unit)
+
+    expression_scale = formula_scale(expression, factor_unit)
+    return {
+        "expected_input_units": [
+            {"metric_ref": metric_ref, "unit": unit}
+            for metric_ref, unit in sorted(expected.items())
+        ],
+        "target_unit": str(target_unit),
+        "scale_factor": conversion_factor(expression_scale, target_unit),
+    }
+
+
+def _prepare_formula_target_fallbacks(
+    prepared: dict[str, Any],
+    index: dict[str, Any],
+    metrics: dict[str, dict[str, Any]],
+) -> set[tuple[str, str]]:
+    """Materialize a target from the user formula only when its target fact is absent."""
+    periods = (prepared.get("analysis_task") or {}).get("periods") or {}
+    fallback_targets: set[tuple[str, str]] = set()
+    adaptations = prepared.setdefault("input_adaptations", [])
+    existing = {str(item.get("requirement_id")) for item in adaptations if isinstance(item, dict)}
+    for target in prepared.get("attribution_targets") or []:
+        if not isinstance(target, dict) or not target.get("factors") or not target.get("formula"):
+            continue
+        target_id = str(target.get("target_id") or "")
+        metric = metrics.get(str(target.get("metric_ref"))) or {}
+        scenario_roles = {
+            "metric_change": ["analysis", "comparison"],
+            "yoy_trend_change": ["analysis", "analysis_last_year", "comparison", "comparison_last_year"],
+        }
+        roles = list((target.get("periods") or {}).keys()) or list(scenario_roles.get(str(target.get("scenario")), []))
+        if not target_id or not metric or not roles:
+            continue
+        dimensions = target.get("dimensions") or {}
+        dimension_refs = target.get("group_dimensions") or []
+        target_available = all(
+            role in periods and _direct_available(index, str(metric.get("name") or ""), periods[role], dimensions, dimension_refs)
+            for role in roles
+        )
+        if target_available:
+            continue
+        target_aggregatable = all(
+            role in periods and _aggregation_children(
+                index, str(metric.get("name") or ""), periods[role], dimensions, dimension_refs
+            ) is not None
+            for role in roles
+        )
+        if target_aggregatable:
+            continue
+        factors = {str(item.get("factor_id")): item for item in target.get("factors") if isinstance(item, dict)}
+        try:
+            unit_conversion = _formula_unit_conversion(
+                target["formula"], factors, metrics, metric.get("unit")
+            )
+        except UnitScaleError:
+            # An unprovable unit conversion is not an executable fallback path.
+            continue
+        eligible_roles: list[str] = []
+        role_expressions: dict[str, dict[str, Any]] = {}
+        for role in roles:
+            if role not in periods:
+                continue
+            factor_ok = True
+            for factor in factors.values():
+                if factor.get("kind") != "metric":
+                    continue
+                factor_metric = metrics.get(str(factor.get("metric_ref"))) or {}
+                factor_dimensions = _merge_dimensions(dimensions, factor.get("dimensions"), f"attribution target {target_id}")
+                factor_direct = factor_metric and _direct_available(
+                    index, str(factor_metric.get("name") or ""), periods[role],
+                    factor_dimensions, list(factor_dimensions)
+                )
+                if not factor_direct:
+                    factor_ok = False
+                    break
+            if not factor_ok:
+                break
+            eligible_roles.append(role)
+            role_expressions[role] = _formula_fallback_expression(target["formula"], factors, role)
+        if len(eligible_roles) != len(roles):
+            continue
+        for role in eligible_roles:
+            adaptation_id = f"formula_target_{_stable_suffix([target_id, role])}"
+            if adaptation_id not in existing:
+                adaptations.append({
+                    "requirement_id": adaptation_id,
+                    "metric_ref": target.get("metric_ref"),
+                    "target_period_role": role,
+                    "view_id": target.get("view_id"),
+                    "dimensions": deepcopy(dimensions),
+                    "dimension_refs": list(dimension_refs),
+                    "expression": role_expressions[role],
+                    "rule_source": "user_query_formula",
+                    "validation": ["facts_present", "unit_scale_verified"],
+                    "unit_conversion": deepcopy(unit_conversion),
+                    "criticality": target.get("criticality", "required"),
+                    "generated": True,
+                })
+                existing.add(adaptation_id)
+            fallback_targets.add((target_id, role))
+        if all((target_id, role) in fallback_targets for role in roles):
+            target["target_fact_source"] = "formula_computed"
+    return fallback_targets
+
+
 def prepare_analysis_ir(
     ir: dict[str, Any],
     index: dict[str, Any],
@@ -497,7 +739,20 @@ def prepare_analysis_ir(
     derived_registry: dict[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     validate_capabilities(index)
-    prepared = normalize_analysis_ir(ir)
+    raw_periods = (ir.get("analysis_task") or {}).get("periods") or {}
+    reserved_roles = sorted(
+        str(role) for role in raw_periods if str(role).startswith("__fact_")
+    ) if isinstance(raw_periods, dict) else []
+    if reserved_roles:
+        raise PreparationError(
+            "RESERVED_PERIOD_ROLE",
+            f"analysis_task.periods uses reserved internal roles: {reserved_roles}",
+        )
+    try:
+        prepared = apply_task_selector_context(normalize_analysis_ir(ir))
+    except SelectorContextError as exc:
+        raise PreparationError("SELECTOR_CONTEXT_INVALID", str(exc)) from exc
+    _apply_business_intent_selection(prepared, index)
     _bind_declared_metric_metadata(prepared, index)
     task = prepared.get("analysis_task") or {}
     metrics = _metric_map(prepared)
@@ -586,6 +841,13 @@ def prepare_analysis_ir(
             remaining_facts.append(requirement)
     prepared["fact_observations"] = remaining_facts
     prepared["metric_compositions"].extend(generated_compositions)
+
+    capability_plan: list[dict[str, Any]] = []
+    canonical_selectors: list[dict[str, Any]] = []
+    planned_identities: set[tuple[Any, ...]] = set()
+    formula_fallback_targets = _prepare_formula_target_fallbacks(
+        prepared, index, metrics
+    )
 
     # Derived metrics over a composed business metric reuse the same automatic inputs.
     for requirement in prepared.get("derived_requirements") or []:
@@ -694,6 +956,21 @@ def prepare_analysis_ir(
         role = str(consumer.get("role"))
         if metric is None or role not in periods:
             continue
+        if (str(consumer.get("requirement_id")), role) in formula_fallback_targets:
+            capability_plan_item = {
+                "requirement_id": consumer.get("requirement_id"),
+                "metric_ref": metric_ref,
+                "source_metric_name": metric.get("source_metric_name") or metric.get("name"),
+                "period_role": role,
+                "period": periods[role],
+                "grain": normalize_period(periods[role])[0] if normalize_period(periods[role]) else None,
+                "selector_dimensions": deepcopy(consumer.get("dimensions") or {}),
+                "group_dimensions": list(consumer.get("group_dimensions") or []),
+                "path": "formula_computed",
+                "direct": {"status": "unavailable", "reason": "target_fact_unavailable"},
+            }
+            capability_plan.append(capability_plan_item)
+            continue
         # Composed metrics are resolved through their leaf inputs, not aggregated as ratios.
         if metric.get("composition_id"):
             composition = (composition_registry.get("definitions") or {}).get(
@@ -717,6 +994,36 @@ def prepare_analysis_ir(
             str(consumer.get("view_id")),
             tuple(sorted(dimension_refs)),
         )
+        direct_capability = _direct_capability(
+            index, metric["name"], periods[role], dimensions, dimension_refs
+        )
+        if identity not in planned_identities:
+            planned_identities.add(identity)
+            plan_item = {
+                "requirement_id": consumer.get("requirement_id"),
+                "metric_ref": metric_ref,
+                "source_metric_name": metric.get("source_metric_name") or metric.get("name"),
+                "period_role": role,
+                "period": periods[role],
+                "grain": normalize_period(periods[role])[0] if normalize_period(periods[role]) else None,
+                "selector_dimensions": deepcopy(dimensions),
+                "group_dimensions": list(consumer.get("group_dimensions") or []),
+                "direct": direct_capability,
+                "path": "direct_fact" if direct_capability.get("status") == "available" else None,
+            }
+            capability_plan.append(plan_item)
+            if direct_capability.get("status") == "available":
+                canonical_selectors.append({
+                    "metric_ref": metric_ref,
+                    "source_metric_name": plan_item["source_metric_name"],
+                    "period_role": role,
+                    "period": periods[role],
+                    "grain": plan_item["grain"],
+                    "selector_dimensions": deepcopy(dimensions),
+                    "group_dimensions": list(consumer.get("group_dimensions") or []),
+                    "capability_path": "direct_fact",
+                    "source_binding": deepcopy(index.get("source") or {}),
+                })
         if (
             identity in existing_targets
             or (not dimensions and relaxed_identity in existing_relaxed_targets)
@@ -734,12 +1041,19 @@ def prepare_analysis_ir(
                 f"指标 {metric['name']} 在 {periods[role]} 没有直接事实或安全聚合方案",
                 {"metric": metric["name"], "period": periods[role]},
             )
+        for item in capability_plan:
+            if (
+                item.get("metric_ref") == metric_ref
+                and item.get("period_role") == role
+                and item.get("selector_dimensions") == dimensions
+            ):
+                item["path"] = "aggregate_fact"
+                item["aggregate_source_periods"] = list(children)
+                break
         suffix = _stable_suffix(identity)
         source_roles: list[str] = []
-        for number, period in enumerate(children, start=1):
-            source_role = f"__auto_{role}_{suffix}_{number}"
-            periods[source_role] = period
-            source_roles.append(source_role)
+        for period in children:
+            source_roles.append(_intern_physical_period_role(periods, period))
         adaptation_id = f"auto_adapt_{suffix}"
         adaptations.append({
             "requirement_id": adaptation_id,
@@ -771,5 +1085,7 @@ def prepare_analysis_ir(
         })
 
     prepared["input_adaptations"] = adaptations
+    prepared["fact_capability_plan"] = capability_plan
+    prepared["canonical_fact_selectors"] = canonical_selectors
     task["periods"] = periods
     return prepared, decisions

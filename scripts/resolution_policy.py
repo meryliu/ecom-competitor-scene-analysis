@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -13,14 +14,24 @@ from _vendor.ecom_competitor_source import (
     normalize_match_text,
     resolve_catalogue_name,
 )
+from business_intent_policy import (
+    business_intent_policy_hash,
+    generate_metric_hypotheses,
+    load_business_intent_policy,
+)
 
 
 POLICY_SCHEMA = "resolution_policy/1.0"
-ENGINE_VERSION = "2.0.0"
+ENGINE_VERSION = "2.1.0"
 DEFAULT_POLICY_PATH = (
     Path(__file__).resolve().parents[1]
     / "references"
     / "resolution-policy-registry.json"
+)
+DEFAULT_BUSINESS_INTENT_POLICY_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "references"
+    / "business-intent-policy-registry.json"
 )
 ALLOWED_GATES = {
     "metric_dimension_compatible",
@@ -305,6 +316,385 @@ def _query_metric_resolution(
     }
 
 
+def _normalize_period(value: Any) -> tuple[str, str] | None:
+    text = re.sub(r"\s+", "", str(value or "")).lower()
+    patterns = (
+        ("month", r"(20\d{2})(?:年|[-/.])?(1[0-2]|0?[1-9])月?"),
+        ("week", r"(20\d{2})(?:年)?(?:第|[-/]?w)([0-5]?\d)周?"),
+        ("quarter", r"(20\d{2})(?:年)?(?:第?([1-4])季度|[-/]?q([1-4]))"),
+        ("year", r"(20\d{2})年?"),
+    )
+    for grain, pattern in patterns:
+        match = re.fullmatch(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        year = int(match.group(1))
+        if grain == "month":
+            return grain, f"{year:04d}-{int(match.group(2)):02d}"
+        if grain == "week":
+            week = int(match.group(2))
+            return (grain, f"{year:04d}-W{week:02d}") if 1 <= week <= 53 else None
+        if grain == "quarter":
+            return grain, f"{year:04d}-Q{int(match.group(2) or match.group(3))}"
+        return grain, f"{year:04d}"
+    return None
+
+
+def _candidate_dimension(
+    context: dict[str, Any], metric: str, index: dict[str, Any]
+) -> tuple[str | None, dict[str, Any] | None]:
+    requested = [str(value) for value in context.get("dimensions") or []]
+    metadata = (index.get("metrics") or {}).get(metric) or {}
+    supported = {str(value) for value in metadata.get("dimensions") or []}
+    if not requested:
+        if supported and "无" not in supported:
+            return None, {
+                "status": "unavailable",
+                "reason": "metadata_dimension_unsupported",
+                "requested_dimension": "无",
+                "supported_dimensions": sorted(supported),
+            }
+        return "无", None
+    resolved: set[str] = set()
+    for logical in requested:
+        exact = resolve_catalogue_name(
+            logical, index.get("dimensions") or {}, "dimension", strict=False
+        )
+        if exact in supported:
+            resolved.add(str(exact))
+            continue
+        match = match_catalogue_name(logical, index.get("dimensions") or {}, "dimension")
+        viable = {
+            str(item.get("name"))
+            for item in match.get("candidates") or []
+            if not item.get("conflicts") and str(item.get("name")) in supported
+        }
+        if len(viable) == 1:
+            resolved.update(viable)
+    if len(resolved) != 1:
+        return None, {
+            "status": "blocked",
+            "reason": "dimension_ambiguous",
+            "requested_dimensions": requested,
+            "supported_dimensions": sorted(supported),
+        }
+    return next(iter(resolved)), None
+
+
+def _child_period_candidates(period: str) -> list[list[str]]:
+    parsed = _normalize_period(period)
+    if parsed is None:
+        return []
+    grain, canonical = parsed
+    year = int(canonical[:4])
+    if grain == "quarter":
+        quarter = int(canonical[-1])
+        start = (quarter - 1) * 3 + 1
+        return [[f"{year:04d}-{month:02d}" for month in range(start, start + 3)]]
+    if grain == "year":
+        return [
+            [f"{year:04d}-Q{quarter}" for quarter in range(1, 5)],
+            [f"{year:04d}-{month:02d}" for month in range(1, 13)],
+        ]
+    return []
+
+
+def _direct_intent_capability(
+    index: dict[str, Any], metric: str, period: str, dimension: str
+) -> dict[str, Any]:
+    parsed = _normalize_period(period)
+    if parsed is None:
+        return {"status": "blocked", "reason": "invalid_period", "period": period}
+    grain, canonical = parsed
+    metadata = (index.get("metrics") or {}).get(metric) or {}
+    supported_grains = metadata.get("supported_grains")
+    if "supported_grains" in metadata and not supported_grains:
+        return {"status": "unavailable", "reason": "metadata_grain_unknown", "grain": grain}
+    if supported_grains is not None and grain not in supported_grains:
+        return {
+            "status": "unavailable",
+            "reason": "metadata_grain_unsupported",
+            "grain": grain,
+            "supported_grains": list(supported_grains),
+        }
+    sheet = (index.get("sheets") or {}).get(grain) or {}
+    if canonical not in (sheet.get("periods") or {}):
+        return {
+            "status": "unavailable",
+            "reason": "period_unavailable",
+            "grain": grain,
+            "period": canonical,
+        }
+    block = (sheet.get("blocks") or {}).get(metric) or {}
+    if not block:
+        return {"status": "unavailable", "reason": "metric_block_unavailable", "grain": grain}
+    if block.get("dimension") != dimension:
+        return {
+            "status": "blocked",
+            "reason": "metadata_fact_dimension_conflict",
+            "expected_dimension": dimension,
+            "fact_dimension": block.get("dimension"),
+        }
+    return {
+        "status": "available",
+        "path": "direct_fact",
+        "grain": grain,
+        "period": canonical,
+        "dimension": dimension,
+    }
+
+
+def _intent_period_capability(
+    index: dict[str, Any], metric: str, period: str, dimension: str
+) -> dict[str, Any]:
+    direct = _direct_intent_capability(index, metric, period, dimension)
+    if direct.get("status") == "available":
+        return direct
+    metadata = (index.get("metrics") or {}).get(metric) or {}
+    if (
+        metadata.get("aggregation_mode") not in (None, "additive")
+        and metadata.get("additive") is not True
+    ) or (
+        metadata.get("aggregation_mode") is None and metadata.get("additive") is not True
+    ):
+        return direct
+    for children in _child_period_candidates(period):
+        checks = [
+            _direct_intent_capability(index, metric, child, dimension) for child in children
+        ]
+        if all(item.get("status") == "available" for item in checks):
+            parsed = _normalize_period(period)
+            return {
+                "status": "available",
+                "path": "aggregate_fact",
+                "grain": parsed[0] if parsed else None,
+                "period": parsed[1] if parsed else period,
+                "dimension": dimension,
+                "source_periods": children,
+            }
+    return direct
+
+
+def _intent_candidate_packet(candidate: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: deepcopy(candidate[key])
+        for key in (
+            "candidate_id",
+            "intent_id",
+            "status",
+            "metric",
+            "metric_object",
+            "requested_terms",
+            "confidence",
+            "path",
+            "grain",
+            "dimension",
+            "periods",
+            "capability",
+            "evidence",
+            "conflicts",
+            "object_override_allowed",
+        )
+        if key in candidate
+    }
+
+
+def _resolve_business_intent(
+    index: dict[str, Any],
+    context: dict[str, Any],
+    metric: dict[str, Any],
+    resolution_policy: dict[str, Any],
+    business_policy: dict[str, Any],
+) -> dict[str, Any] | None:
+    planning_context = deepcopy(context)
+    planning_context["periods"] = list(
+        metric.get("required_periods") or context.get("periods") or []
+    )
+    planning_context["dimensions"] = list(
+        metric.get("required_dimensions")
+        if "required_dimensions" in metric
+        else context.get("dimensions") or []
+    )
+    if not planning_context.get("periods"):
+        return None
+    hypotheses = generate_metric_hypotheses(planning_context, metric, business_policy)
+    if len(hypotheses) <= 1:
+        return None
+    candidates: list[dict[str, Any]] = []
+    for hypothesis in hypotheses:
+        best: dict[str, Any] | None = None
+        mapping_failures: list[dict[str, Any]] = []
+        for requested_term in hypothesis.get("requested_terms") or []:
+            requested = {
+                **metric,
+                "name": requested_term,
+                "metric_object": hypothesis.get("metric_object"),
+                "unit": "待元信息解析" if hypothesis.get("object_override_allowed") else metric.get("unit"),
+            }
+            resolution = _query_metric_resolution(
+                requested,
+                index.get("metrics") or {},
+                str(planning_context.get("query") or ""),
+                resolution_policy,
+            )
+            binding = resolution.get("binding")
+            if not binding:
+                mapping_failures.append({
+                    "requested_term": requested_term,
+                    "status": resolution.get("status"),
+                    "candidates": [
+                        {
+                            "metric": item.get("name"),
+                            "confidence": item.get("confidence"),
+                            "conflicts": list(item.get("conflicts") or []),
+                        }
+                        for item in (resolution.get("candidates") or [])[:3]
+                    ],
+                })
+                continue
+            dimension, dimension_failure = _candidate_dimension(
+                planning_context, str(binding), index
+            )
+            period_checks: list[dict[str, Any]] = []
+            if dimension_failure is None and dimension is not None:
+                period_checks = [
+                    _intent_period_capability(index, str(binding), str(period), dimension)
+                    for period in planning_context.get("periods") or []
+                ]
+            viable = bool(period_checks) and all(
+                item.get("status") == "available" for item in period_checks
+            )
+            paths = {str(item.get("path")) for item in period_checks if item.get("path")}
+            path = (
+                "direct_fact"
+                if paths == {"direct_fact"}
+                else "aggregate_fact"
+                if paths and paths.issubset({"direct_fact", "aggregate_fact"})
+                else None
+            )
+            parsed_grains = {
+                parsed[0]
+                for period in planning_context.get("periods") or []
+                if (parsed := _normalize_period(period)) is not None
+            }
+            candidate = {
+                "intent_id": hypothesis.get("intent_id"),
+                "status": "viable" if viable else "infeasible",
+                "metric": str(binding),
+                "metric_object": hypothesis.get("metric_object"),
+                "requested_terms": list(hypothesis.get("requested_terms") or []),
+                "confidence": max(
+                    [float(item.get("confidence") or 0.0) for item in resolution.get("candidates") or []]
+                    or [0.0]
+                ),
+                "path": path,
+                "grain": next(iter(parsed_grains)) if len(parsed_grains) == 1 else None,
+                "dimension": dimension,
+                "periods": list(planning_context.get("periods") or []),
+                "capability": {
+                    "dimension": dimension_failure or {"status": "available", "dimension": dimension},
+                    "periods": period_checks,
+                },
+                "evidence": list(hypothesis.get("evidence") or []) + ["source_metadata_evaluated"],
+                "conflicts": [] if viable else sorted({
+                    str(item.get("reason"))
+                    for item in ([dimension_failure] if dimension_failure else []) + period_checks
+                    if isinstance(item, dict) and item.get("status") != "available" and item.get("reason")
+                }),
+                "object_override_allowed": bool(hypothesis.get("object_override_allowed")),
+                "priority": int(hypothesis.get("priority") or 0),
+            }
+            allowed_object_sets = [
+                set(str(value) for value in consumer.get("allowed_metric_objects") or [])
+                for consumer in metric.get("consumers") or []
+                if isinstance(consumer, dict) and consumer.get("allowed_metric_objects")
+            ]
+            if allowed_object_sets and any(
+                candidate.get("metric_object") not in allowed
+                for allowed in allowed_object_sets
+            ):
+                candidate["status"] = "infeasible"
+                candidate["path"] = None
+                candidate["conflicts"] = sorted(
+                    set(candidate.get("conflicts") or []) | {"operation_metric_object_unsupported"}
+                )
+                candidate["capability"]["operation"] = {
+                    "status": "unavailable",
+                    "reason": "operation_metric_object_unsupported",
+                    "allowed_metric_objects": sorted(set.intersection(*allowed_object_sets)),
+                }
+            if best is None or (
+                candidate["status"] == "viable",
+                candidate["confidence"],
+            ) > (
+                best["status"] == "viable",
+                best["confidence"],
+            ):
+                best = candidate
+        if best is None:
+            best = {
+                "intent_id": hypothesis.get("intent_id"),
+                "status": "infeasible",
+                "metric_object": hypothesis.get("metric_object"),
+                "requested_terms": list(hypothesis.get("requested_terms") or []),
+                "periods": list(planning_context.get("periods") or []),
+                "capability": {"metric": {"status": "unavailable", "attempts": mapping_failures}},
+                "evidence": list(hypothesis.get("evidence") or []),
+                "conflicts": ["metric_unresolved"],
+                "object_override_allowed": bool(hypothesis.get("object_override_allowed")),
+                "priority": int(hypothesis.get("priority") or 0),
+                "confidence": 0.0,
+            }
+        candidates.append(best)
+
+    identity_base = {
+        "task_id": context.get("task_id"),
+        "metric_ref": metric.get("metric_ref") or metric.get("name"),
+        "requested_name": metric.get("name"),
+        "query": context.get("query"),
+        "periods": planning_context.get("periods") or [],
+        "dimensions": planning_context.get("dimensions") or [],
+    }
+    for candidate in candidates:
+        candidate["candidate_id"] = stable_id("intent_candidate", {
+            **identity_base,
+            "intent_id": candidate.get("intent_id"),
+            "metric": candidate.get("metric"),
+            "metric_object": candidate.get("metric_object"),
+            "path": candidate.get("path"),
+        })
+    deduplicated: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for candidate in candidates:
+        key = (
+            candidate.get("metric"),
+            candidate.get("metric_object"),
+            candidate.get("path"),
+            candidate.get("status"),
+        )
+        previous = deduplicated.get(key)
+        if previous is None or (
+            int(candidate.get("priority") or 0), float(candidate.get("confidence") or 0.0)
+        ) > (
+            int(previous.get("priority") or 0), float(previous.get("confidence") or 0.0)
+        ):
+            deduplicated[key] = candidate
+    bounded = sorted(
+        deduplicated.values(),
+        key=lambda item: (
+            item.get("status") != "viable",
+            -int(item.get("priority") or 0),
+            -float(item.get("confidence") or 0.0),
+            str(item.get("candidate_id")),
+        ),
+    )[: int(business_policy.get("limits", {}).get("max_candidates_per_case", 3))]
+    return {
+        "expanded": True,
+        "identity": identity_base,
+        "candidates": bounded,
+        "viable_candidates": [item for item in bounded if item.get("status") == "viable"],
+    }
+
+
 def _joint_block_candidates(
     unresolved: dict[str, Any],
     metrics: dict[str, dict[str, Any]],
@@ -368,9 +758,14 @@ def resolve_request_overlay(
     index: dict[str, Any],
     request: dict[str, Any],
     policy: dict[str, Any],
+    business_intent_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Resolve requested names and ambiguous blocks without mutating the shared raw index."""
     validate_resolution_policy(policy)
+    intent_policy = business_intent_policy or load_business_intent_policy(
+        DEFAULT_BUSINESS_INTENT_POLICY_PATH
+    )
+    intent_policy_hash = business_intent_policy_hash(intent_policy)
     overlay = deepcopy(index)
     contexts = [item for item in request.get("contexts") or [] if isinstance(item, dict)]
     if not contexts:
@@ -514,6 +909,7 @@ def resolve_request_overlay(
         task_resolution = {
             "metric_bindings": {},
             "metric_statuses": {},
+            "intent_resolutions": {},
             "composition_resolutions": [],
             "resolution_cases": [],
         }
@@ -523,6 +919,104 @@ def resolve_request_overlay(
             requested_name = str(metric["name"])
             binding_attempts[requested_name] = binding_attempts.get(requested_name, 0) + 1
             metric_ref = str(metric.get("metric_ref") or requested_name)
+            intent_resolution = _resolve_business_intent(
+                overlay, context, metric, policy, intent_policy
+            )
+            if intent_resolution is not None:
+                intent_identity = intent_resolution["identity"]
+                intent_case_id = stable_id(
+                    "resolution_case", {**intent_identity, "kind": "interpretation"}
+                )
+                intent_fingerprint = stable_id("intent", intent_identity)
+                selected_id, intent_patch_status = _patch_selection(
+                    intent_case_id,
+                    context_patches,
+                    source,
+                    policy_hash,
+                    {
+                        "business_intent_policy_hash": intent_policy_hash,
+                        "intent_fingerprint": intent_fingerprint,
+                    },
+                    require_engine_version=True,
+                )
+                viable_candidates = intent_resolution["viable_candidates"]
+                selected_intent = next(
+                    (
+                        item
+                        for item in viable_candidates
+                        if item.get("candidate_id") == selected_id
+                    ),
+                    None,
+                )
+                if selected_intent is None and len(viable_candidates) == 1:
+                    selected_intent = viable_candidates[0]
+                intent_action = (
+                    "auto"
+                    if selected_intent is not None
+                    else "confirm"
+                    if viable_candidates
+                    else "block"
+                )
+                intent_case = {
+                    "case_id": intent_case_id,
+                    "action": intent_action,
+                    "kind": "interpretation",
+                    "requested_term": requested_name,
+                    "task_ids": [task_id],
+                    "metric_ref": metric_ref,
+                    "selected_candidate_id": (
+                        selected_intent.get("candidate_id") if selected_intent else None
+                    ),
+                    "policy_version": policy.get("policy_version"),
+                    "resolution_policy_hash": policy_hash,
+                    "business_intent_policy_version": intent_policy.get("policy_version"),
+                    "business_intent_policy_hash": intent_policy_hash,
+                    "source_revision": source.get("revision"),
+                    "schema_hash": source.get("schema_hash"),
+                    "resolution_engine_version": ENGINE_VERSION,
+                    "intent_fingerprint": intent_fingerprint,
+                    "patch_status": intent_patch_status,
+                    "candidates": [
+                        _intent_candidate_packet(item)
+                        for item in intent_resolution["candidates"]
+                    ],
+                }
+                decisions.append(intent_case)
+                task_resolution["intent_resolutions"][metric_ref] = {
+                    "status": (
+                        "selected"
+                        if selected_intent
+                        else "ambiguous"
+                        if viable_candidates
+                        else "infeasible"
+                    ),
+                    "selected_candidate": (
+                        _intent_candidate_packet(selected_intent)
+                        if selected_intent
+                        else None
+                    ),
+                    "case_id": intent_case_id,
+                    "business_intent_policy_hash": intent_policy_hash,
+                }
+                if selected_intent is None:
+                    cases.append(intent_case)
+                    task_resolution["resolution_cases"].append(intent_case)
+                    task_resolution["metric_statuses"][metric_ref] = {
+                        "requested_metric": requested_name,
+                        "status": "ambiguous" if viable_candidates else "not_executable",
+                        "binding": None,
+                    }
+                    continue
+                binding = str(selected_intent["metric"])
+                task_resolution["metric_bindings"][requested_name] = binding
+                binding_votes.setdefault(requested_name, set()).add(binding)
+                binding_successes[requested_name] = binding_successes.get(requested_name, 0) + 1
+                task_resolution["metric_statuses"][metric_ref] = {
+                    "requested_metric": requested_name,
+                    "status": "bound",
+                    "binding": binding,
+                }
+                continue
             resolution = _query_metric_resolution(metric, overlay.get("metrics") or {}, query, policy)
             semantics_fingerprint = stable_id("metric_semantics", {
                 "metric_object": metric.get("metric_object"),
@@ -867,5 +1361,10 @@ def resolve_request_overlay(
             "policy_version": policy.get("policy_version"),
             "engine_version": ENGINE_VERSION,
             "sha256": policy_hash,
+        },
+        "business_intent_policy": {
+            "schema_version": intent_policy.get("schema_version"),
+            "policy_version": intent_policy.get("policy_version"),
+            "sha256": intent_policy_hash,
         },
     }

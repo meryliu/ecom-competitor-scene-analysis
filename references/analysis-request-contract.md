@@ -55,6 +55,8 @@
 
 `unit=待元信息解析` 和 `definition=待元信息解析` 只是模型侧占位状态，不是可执行元信息。统一 runner 在编译前使用当前 source revision 的结构索引补全所有已匹配指标；IR 中已有具体单位但与源元信息冲突时阻断。后续 binding 只校验预期单位，不得覆盖 Provider 事实中的具体单位。
 
+`metric_object` 是 Query 语义声明。默认视为 `model_inferred`；只有用户明确指定指标对象或公式约束时才写 `metric_object_source=user_explicit|user_formula`。复合“表现、增速、涨幅、相比上期”等语义由 runner 生成有界业务意图假设，并结合实时指标/维度元信息、事实块和时期一次筛成可执行候选；模型不要串行改写指标名称试取数据。
+
 用户可使用非标准业务表述；不要为了迎合当前源表名称改写 Query 或预先枚举别名。Gateway 会基于当前 revision 生成候选。收到 `waiting_confirmation` 时只向用户展示 case 的逻辑候选和证据，确认后把所选候选写入该任务的 `resolution_patches`，保持原 requirement ID 后重跑。
 
 单任务根对象只使用 `ir_version=analysis_ir/1.0`；bundle 根对象只使用 `schema_version=analysis_bundle/1.0`，且每个 `analysis_ir` 自身仍声明 `ir_version`。两种版本字段不得互换或同时出现；runner 在能力解析和取数前以 `INPUT_PROTOCOL_INVALID` 阻断错误协议。
@@ -95,11 +97,14 @@
 - 两个时期的同比差或同比趋势才创建两组同期角色。
 - “环比”按 Query 粒度选择直接上期。
 - 季度、年度等目标粒度保留目标时期；不要预先展开月份。runner 根据实时结构索引优先读取目标粒度，缺失时自动生成并复用细粒度适配结果。
+- 自动展开得到的相同物理时期在整个任务中只注册一个内部时期角色，供不同指标和适配共同引用；`__fact_` 是 runner 保留前缀，模型不得创建或依赖内部角色名称。
 - 不为 Query 未要求的趋势或比较期额外取数。
 
 季度求和适配包含 `requirement_id, metric_ref, target_period_role, view_id, dimensions, dimension_refs, expression, rule_source, validation, criticality`。其中 `expression` 使用 `sum` 引用对应三个月的事实角色，`rule_source=source_metric_metadata`，`validation` 至少包含 `facts_present, unit_consistent, metric_additive`。
 
 去年同期需要独立的同期适配，但相同目标中间事实只生成一次，供多个下游结果复用。
+
+用户归因公式只在目标事实和安全聚合均不可用时作为目标事实回退。P0 自动回退仅支持由直接事实 metric factor、无量纲 literal 和 `multiply/divide` 组成的公式；Prepare 根据源指标实际单位生成显式 `unit_conversion`，执行器核验输入实际单位后应用量级换算。未知单位、derived factor、加减公式或需要先聚合的 factor 不生成公式回退，不得通过删除单位校验继续执行。
 
 ## 4. 维度和值域
 

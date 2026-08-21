@@ -105,3 +105,59 @@ class FeishuGatewayTests(unittest.TestCase):
         serialized = str(capability)
         for physical in ("spreadsheet_token", "sheet_id", "header_row", "rows", "physical-sheet"):
             self.assertNotIn(physical, serialized)
+
+    def test_business_intent_candidates_share_one_resolve_and_bind_executable_path(self) -> None:
+        config = {
+            "provider_id": "feishu_competitor",
+            "source_id": "competitor_macro_sheet",
+            "source_url": "https://source",
+            "config_hash": "config-hash",
+            "allow_stale_by_default": False,
+            "sheet_roles": {},
+        }
+        index = {
+            "source": {"revision": 7, "schema_hash": "schema", "spreadsheet_token": "secret"},
+            "metrics": {
+                "实物商品网上零售额": {
+                    "aliases": ["线上社零"], "unit": "亿元", "metric_object": "volume",
+                    "supported_grains": ["year"], "dimensions": ["无"],
+                    "aggregation_mode": "non_additive",
+                },
+                "实物商品网上零售额同比增速": {
+                    "aliases": ["线上社零同比增速", "线上社零增速"], "unit": "%",
+                    "metric_object": "ratio", "supported_grains": ["month"],
+                    "dimensions": ["无"], "aggregation_mode": "non_additive",
+                },
+            },
+            "dimensions": {},
+            "sheets": {
+                "month": {"available": True, "periods": {"2026-06": "B", "2026-07": "C"}, "blocks": {
+                    "实物商品网上零售额同比增速": {"dimension": "无", "rows": {"整体": 2}},
+                }},
+                "year": {"available": True, "periods": {"2026": "B"}, "blocks": {
+                    "实物商品网上零售额": {"dimension": "无", "rows": {"整体": 2}},
+                }},
+            },
+        }
+        request = {
+            "metrics": ["线上社零"], "dimensions": [], "periods": ["2026-06", "2026-07"],
+            "contexts": [{
+                "task_id": "q", "query": "线上社零表现怎么样，较上月涨幅变化如何",
+                "periods": ["2026-06", "2026-07"], "dimensions": [],
+                "metrics": [{
+                    "metric_ref": "retail", "name": "线上社零", "metric_object": "volume",
+                    "metric_object_provenance": "model_inferred", "unit": "待元信息解析",
+                    "provenance": "user_explicit",
+                    "consumers": [{"requirement_type": "fact_observations"}],
+                }],
+            }],
+        }
+        with patch(
+            "providers.feishu_competitor.ensure_shared_index",
+            return_value=(index, "hit", Path("/tmp/index.json")),
+        ) as resolve_mock:
+            capability = FeishuCompetitorGateway(config).resolve(request)
+        self.assertEqual(resolve_mock.call_count, 1)
+        task = capability["task_resolutions"]["q"]
+        self.assertEqual(task["metric_bindings"]["线上社零"], "实物商品网上零售额同比增速")
+        self.assertIn("business_intent_policy_hash", capability["source"])

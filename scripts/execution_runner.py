@@ -1237,6 +1237,30 @@ def materialize_intermediate_facts(
                 raise ExecutionError(
                     f"input adaptation units do not match target unit {target['unit']!r}: {sorted(units)}"
                 )
+        if "unit_scale_verified" in validation:
+            conversion = target.get("unit_conversion")
+            if not isinstance(conversion, dict):
+                raise ExecutionError("unit_scale_verified requires unit_conversion")
+            scale_factor = conversion.get("scale_factor")
+            if (
+                conversion.get("target_unit") != target.get("unit")
+                or isinstance(scale_factor, bool)
+                or not isinstance(scale_factor, (int, float))
+                or not math.isfinite(float(scale_factor))
+                or float(scale_factor) == 0
+            ):
+                raise ExecutionError("unit_conversion target or scale factor is invalid")
+            expected_units = conversion.get("expected_input_units")
+            if not isinstance(expected_units, dict) or not expected_units:
+                raise ExecutionError("unit_conversion.expected_input_units must be non-empty")
+            for row in input_rows:
+                metric_name = str(row.get("metric") or "")
+                expected_unit = expected_units.get(metric_name)
+                if expected_unit is None or row.get("unit") != expected_unit:
+                    raise ExecutionError(
+                        f"input adaptation unit mismatch for {metric_name!r}: "
+                        f"expected {expected_unit!r}, got {row.get('unit')!r}"
+                    )
         if "metric_additive" in validation and (
             not input_rows or any(row.get("additive") is not True for row in input_rows)
         ):
@@ -1251,6 +1275,8 @@ def materialize_intermediate_facts(
         if len(revisions) > 1:
             raise ExecutionError("input adaptation source facts span multiple revisions")
         parsed_value = float(item["value"])
+        if "unit_scale_verified" in validation:
+            parsed_value *= float(target["unit_conversion"]["scale_factor"])
         if not math.isfinite(parsed_value):
             raise ExecutionError("materialized fact value must be finite")
         input_fact_ids = sorted({str(row.get("fact_id")) for row in input_rows})
@@ -1329,8 +1355,17 @@ def validate_attribution_result(
         if not isinstance(result.get(key), list):
             raise ExecutionError(f"attribution result {key} must be a list")
     residual = result["summary"].get("residual")
-    if residual is not None and abs(float(residual)) > tolerance:
-        return f"attribution residual {residual} exceeds tolerance {tolerance}"
+    scale_values = [
+        abs(float(result["summary"][key]))
+        for key in ("analysis_value", "comparison_value", "change_value")
+        if result["summary"].get(key) is not None
+    ]
+    effective_tolerance = max(tolerance, max(scale_values, default=0.0) * tolerance)
+    if residual is not None and abs(float(residual)) > effective_tolerance:
+        return (
+            f"attribution residual {residual} exceeds tolerance "
+            f"{effective_tolerance} (base={tolerance}, scale-aware)"
+        )
     return None
 
 
@@ -1504,7 +1539,10 @@ def compute_run_status(nodes: dict[str, dict[str, Any]], results: dict[str, dict
     if any(node.get("criticality") == "required" and node.get("status") == "blocked" for node in nodes.values()):
         return "partial_success"
     for node_id, result in results.items():
-        if nodes[node_id].get("criticality") == "core" and result.get("status") != "success":
+        if (
+            nodes[node_id].get("criticality") == "core"
+            and result.get("status") in {"failed", "blocked"}
+        ):
             return "blocked"
     for node_id, result in results.items():
         if nodes[node_id].get("criticality") == "required" and result.get("status") != "success":
