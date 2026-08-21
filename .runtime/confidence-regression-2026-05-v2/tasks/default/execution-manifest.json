@@ -1,0 +1,1168 @@
+{
+  "execution_mode": "analysis_orchestration",
+  "analysis_ir": {
+    "ir_version": "analysis_ir/1.0",
+    "analysis_task": {
+      "query": "26年5月，线上社零表现怎么样？相比上个月涨幅变化如何？",
+      "analysis_goal": "回答2026年5月线上社零表现及相比2026年4月的涨幅变化",
+      "metrics": [
+        {
+          "metric_id": "online_retail",
+          "name": "线上社零",
+          "metric_object": "ratio",
+          "unit": "%",
+          "definition": "仅包含商品零售;1月不单独披露,2月数字为1+2月合计;线上化率计算公式 = 实物商品网上零售额/社会消费品零售总额:商品零售",
+          "metric_object_source": "business_intent_policy",
+          "business_intent_id": "growth_ratio_metric",
+          "business_intent_candidate_id": "intent_candidate_0fb2c78995c727537def9af7",
+          "source_metric_name": "实物商品网上零售额同比增速",
+          "source_dimension_bindings": {},
+          "source_metric_object": "ratio",
+          "unit_source": "source_metric_metadata",
+          "definition_source": "source_metric_metadata",
+          "aggregation": "不可聚合",
+          "additive": false
+        }
+      ],
+      "periods": {
+        "analysis": "2026-05",
+        "comparison": "2026-04"
+      },
+      "scope": "整体",
+      "filters": [],
+      "assumptions": [],
+      "selector_dimensions": {}
+    },
+    "views": [
+      {
+        "view_id": "online_retail_view"
+      }
+    ],
+    "dimension_trees": [],
+    "input_adaptations": [],
+    "fact_observations": [
+      {
+        "requirement_id": "online_retail_facts",
+        "metric_ref": "online_retail",
+        "period_roles": [
+          "analysis",
+          "comparison"
+        ],
+        "view_id": "online_retail_view",
+        "dimensions": {},
+        "dimension_refs": [],
+        "criticality": "core"
+      }
+    ],
+    "metric_compositions": [],
+    "derived_requirements": [
+      {
+        "requirement_id": "online_retail_mom_change",
+        "derived_metric_id": "mom_growth",
+        "definition_status": "registered",
+        "metric_ref": "online_retail",
+        "metric_object": "ratio",
+        "view_id": "online_retail_view",
+        "dimensions": {},
+        "dimension_refs": [],
+        "criticality": "core",
+        "metric_object_source": "business_intent_policy"
+      }
+    ],
+    "custom_calculations": [],
+    "attribution_targets": [],
+    "output_requirements": [
+      {
+        "requirement_id": "online_retail_answer",
+        "source_requirement_refs": [
+          "online_retail_facts",
+          "online_retail_mom_change"
+        ],
+        "criticality": "core"
+      }
+    ],
+    "clarifications": [],
+    "fact_capability_plan": [
+      {
+        "requirement_id": "online_retail_facts",
+        "metric_ref": "online_retail",
+        "source_metric_name": "实物商品网上零售额同比增速",
+        "period_role": "analysis",
+        "period": "2026-05",
+        "grain": "month",
+        "selector_dimensions": {},
+        "group_dimensions": [],
+        "direct": {
+          "status": "available",
+          "grain": "month",
+          "period": "2026-05",
+          "dimension": "无",
+          "source_metric_name": "实物商品网上零售额同比增速",
+          "source_dimension": "无"
+        },
+        "path": "direct_fact"
+      },
+      {
+        "requirement_id": "online_retail_facts",
+        "metric_ref": "online_retail",
+        "source_metric_name": "实物商品网上零售额同比增速",
+        "period_role": "comparison",
+        "period": "2026-04",
+        "grain": "month",
+        "selector_dimensions": {},
+        "group_dimensions": [],
+        "direct": {
+          "status": "available",
+          "grain": "month",
+          "period": "2026-04",
+          "dimension": "无",
+          "source_metric_name": "实物商品网上零售额同比增速",
+          "source_dimension": "无"
+        },
+        "path": "direct_fact"
+      }
+    ],
+    "canonical_fact_selectors": [
+      {
+        "metric_ref": "online_retail",
+        "source_metric_name": "实物商品网上零售额同比增速",
+        "period_role": "analysis",
+        "period": "2026-05",
+        "grain": "month",
+        "selector_dimensions": {},
+        "group_dimensions": [],
+        "capability_path": "direct_fact",
+        "source_binding": {
+          "schema_version": "source_binding/1.0",
+          "provider_id": "feishu_competitor",
+          "source_id": "competitor_macro_sheet",
+          "config_hash": "88be25405565cfe3e808851bfe02844a88bd4de46149818937ece30c05948002",
+          "revision": 1165,
+          "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb",
+          "freshness": "live",
+          "resolution_policy_hash": "2ad594ad3139946c9e79c58e03b11e6050377b3166170a0af39a2f320d2bcfc7",
+          "business_intent_policy_hash": "8332f908041576831287301631dda9313f710414b67862b68b9aa181de878933",
+          "resolution_engine_version": "2.3.0"
+        }
+      },
+      {
+        "metric_ref": "online_retail",
+        "source_metric_name": "实物商品网上零售额同比增速",
+        "period_role": "comparison",
+        "period": "2026-04",
+        "grain": "month",
+        "selector_dimensions": {},
+        "group_dimensions": [],
+        "capability_path": "direct_fact",
+        "source_binding": {
+          "schema_version": "source_binding/1.0",
+          "provider_id": "feishu_competitor",
+          "source_id": "competitor_macro_sheet",
+          "config_hash": "88be25405565cfe3e808851bfe02844a88bd4de46149818937ece30c05948002",
+          "revision": 1165,
+          "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb",
+          "freshness": "live",
+          "resolution_policy_hash": "2ad594ad3139946c9e79c58e03b11e6050377b3166170a0af39a2f320d2bcfc7",
+          "business_intent_policy_hash": "8332f908041576831287301631dda9313f710414b67862b68b9aa181de878933",
+          "resolution_engine_version": "2.3.0"
+        }
+      }
+    ]
+  },
+  "compiler": {
+    "name": "scene-analysis-plan-compiler",
+    "version": "1.6.0",
+    "source_ir_version": "analysis_ir/1.0",
+    "source_ir_sha256": "e7ce90b75896c02df166a8888b08e86aa2fd2fe716dd83b70410476d8b93c9a5",
+    "timings": {
+      "operator_resolution_ms": 0.0,
+      "compile_ms": 2.359,
+      "plan_validation_ms": 0.469,
+      "recompile_ms": null
+    }
+  },
+  "analysis_task": {
+    "analysis_goal": "回答2026年5月线上社零表现及相比2026年4月的涨幅变化",
+    "query": "26年5月，线上社零表现怎么样？相比上个月涨幅变化如何？",
+    "metrics": [
+      {
+        "metric_id": "online_retail",
+        "name": "线上社零",
+        "metric_object": "ratio",
+        "unit": "%",
+        "definition": "仅包含商品零售;1月不单独披露,2月数字为1+2月合计;线上化率计算公式 = 实物商品网上零售额/社会消费品零售总额:商品零售",
+        "metric_object_source": "business_intent_policy",
+        "business_intent_id": "growth_ratio_metric",
+        "business_intent_candidate_id": "intent_candidate_0fb2c78995c727537def9af7",
+        "source_metric_name": "实物商品网上零售额同比增速",
+        "source_dimension_bindings": {},
+        "source_metric_object": "ratio",
+        "unit_source": "source_metric_metadata",
+        "definition_source": "source_metric_metadata",
+        "aggregation": "不可聚合",
+        "additive": false
+      }
+    ],
+    "periods": {
+      "analysis": "2026-05",
+      "comparison": "2026-04"
+    },
+    "dimensions": [],
+    "filters": [],
+    "selector_dimensions": {},
+    "scope": "整体",
+    "fact_requirements": [
+      {
+        "fact_slot_id": "fact_66d52166d6d9ffb9",
+        "metric_ref": "online_retail",
+        "period_role": "comparison",
+        "period": "2026-04",
+        "view_id": "online_retail_view",
+        "dimension_refs": [],
+        "selector_dimensions": {},
+        "source_dimension_refs": [],
+        "source_selector_dimensions": {},
+        "dimension_projection": {},
+        "source_dimension_domains": {},
+        "component": null,
+        "scope": "整体",
+        "filters": [],
+        "metric": "线上社零",
+        "source_metric_name": "实物商品网上零售额同比增速",
+        "metric_object": "ratio",
+        "unit": "%",
+        "requirement_refs": [
+          "online_retail_facts",
+          "online_retail_mom_change"
+        ],
+        "grain": "month",
+        "capability_path": "direct_fact",
+        "source_binding": {
+          "schema_version": "source_binding/1.0",
+          "provider_id": "feishu_competitor",
+          "source_id": "competitor_macro_sheet",
+          "config_hash": "88be25405565cfe3e808851bfe02844a88bd4de46149818937ece30c05948002",
+          "revision": 1165,
+          "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb",
+          "freshness": "live",
+          "resolution_policy_hash": "2ad594ad3139946c9e79c58e03b11e6050377b3166170a0af39a2f320d2bcfc7",
+          "business_intent_policy_hash": "8332f908041576831287301631dda9313f710414b67862b68b9aa181de878933",
+          "resolution_engine_version": "2.3.0"
+        }
+      },
+      {
+        "fact_slot_id": "fact_67013df1208119b6",
+        "metric_ref": "online_retail",
+        "period_role": "analysis",
+        "period": "2026-05",
+        "view_id": "online_retail_view",
+        "dimension_refs": [],
+        "selector_dimensions": {},
+        "source_dimension_refs": [],
+        "source_selector_dimensions": {},
+        "dimension_projection": {},
+        "source_dimension_domains": {},
+        "component": null,
+        "scope": "整体",
+        "filters": [],
+        "metric": "线上社零",
+        "source_metric_name": "实物商品网上零售额同比增速",
+        "metric_object": "ratio",
+        "unit": "%",
+        "requirement_refs": [
+          "online_retail_facts",
+          "online_retail_mom_change"
+        ],
+        "grain": "month",
+        "capability_path": "direct_fact",
+        "source_binding": {
+          "schema_version": "source_binding/1.0",
+          "provider_id": "feishu_competitor",
+          "source_id": "competitor_macro_sheet",
+          "config_hash": "88be25405565cfe3e808851bfe02844a88bd4de46149818937ece30c05948002",
+          "revision": 1165,
+          "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb",
+          "freshness": "live",
+          "resolution_policy_hash": "2ad594ad3139946c9e79c58e03b11e6050377b3166170a0af39a2f320d2bcfc7",
+          "business_intent_policy_hash": "8332f908041576831287301631dda9313f710414b67862b68b9aa181de878933",
+          "resolution_engine_version": "2.3.0"
+        }
+      }
+    ],
+    "input_adaptations": [],
+    "metric_compositions": [],
+    "derived_requirements": [
+      {
+        "requirement_id": "online_retail_mom_change",
+        "derived_metric_id": "mom_growth",
+        "definition_status": "registered",
+        "metric_ref": "online_retail",
+        "metric_object": "ratio",
+        "view_id": "online_retail_view",
+        "dimensions": {},
+        "dimension_refs": [],
+        "criticality": "core",
+        "metric_object_source": "business_intent_policy"
+      }
+    ],
+    "custom_calculations": [],
+    "attribution_requirements": [],
+    "operator_queries": [],
+    "operator_contracts": [],
+    "assumptions": [],
+    "degradation_scope": []
+  },
+  "attribution_targets": [],
+  "derived_metric_registry": {
+    "source": "references/derived-metric-registry.json",
+    "version": "1.3.0",
+    "sha256": "8d72941336f49db578235d1ecd2585e4bd60983ab90778da5735dd010f12d262"
+  },
+  "metric_composition_registry": {
+    "source": "references/metric-composition-registry.json",
+    "version": "1.0.0",
+    "sha256": "38b518c4a594aee99a13babc920caa6f596e5ba97d6ac6422535052394192cc8"
+  },
+  "dimension_set_registry": {
+    "source": "references/dimension-set-registry.json",
+    "schema_version": "dimension_set_registry/1.0",
+    "sha256": "9e06214b91e2f6bd13e1f2f8662d5abe535f0ef987cdc05be6d409d0e50833e3"
+  },
+  "execution_runtime": {
+    "version": "1.0",
+    "periods": {
+      "analysis": "2026-05",
+      "comparison": "2026-04"
+    },
+    "dimension_fields": [],
+    "max_workers": 4,
+    "residual_tolerance": 1e-08
+  },
+  "nodes": [
+    {
+      "node_id": "fact_artifact",
+      "type": "fact_query",
+      "status": "success",
+      "criticality": "core",
+      "requirement_refs": [
+        "online_retail_facts",
+        "online_retail_mom_change"
+      ],
+      "depends_on": [],
+      "inputs": {
+        "fact_slot_ids": [
+          "fact_66d52166d6d9ffb9",
+          "fact_67013df1208119b6"
+        ]
+      },
+      "outputs": [
+        "normalized_facts"
+      ],
+      "execution": {
+        "mode": "lightweight_executor",
+        "handler": "fact_artifact"
+      },
+      "quality_gate": [
+        "all required fact slots resolved or explicitly missing"
+      ],
+      "failure_strategy": "block calculations that depend on unavailable facts"
+    },
+    {
+      "node_id": "derived_online_retail_mom_change_8b9076",
+      "type": "derived_metric",
+      "status": "success",
+      "criticality": "core",
+      "requirement_refs": [
+        "online_retail_mom_change"
+      ],
+      "depends_on": [
+        "fact_artifact"
+      ],
+      "inputs": {
+        "metric_ref": "online_retail",
+        "view_id": "online_retail_view",
+        "apply_to": []
+      },
+      "outputs": [
+        "mom_growth"
+      ],
+      "execution": {
+        "mode": "lightweight_executor",
+        "handler": "derived",
+        "derived_metric_id": "mom_growth",
+        "definition_source": "references/derived-metric-registry.json",
+        "definition_version": "1.2.0",
+        "definition_status": "registered",
+        "expression": {
+          "op": "subtract",
+          "args": [
+            {
+              "fact": {
+                "metric": "线上社零",
+                "period_role": "analysis",
+                "dimensions": {},
+                "view_id": "online_retail_view",
+                "dimensions_exact": true
+              }
+            },
+            {
+              "fact": {
+                "metric": "线上社零",
+                "period_role": "comparison",
+                "dimensions": {},
+                "view_id": "online_retail_view",
+                "dimensions_exact": true
+              }
+            }
+          ]
+        },
+        "formula": {
+          "op": "subtract",
+          "args": [
+            {
+              "fact": {
+                "metric": "线上社零",
+                "period_role": "analysis",
+                "dimensions": {},
+                "view_id": "online_retail_view",
+                "dimensions_exact": true
+              }
+            },
+            {
+              "fact": {
+                "metric": "线上社零",
+                "period_role": "comparison",
+                "dimensions": {},
+                "view_id": "online_retail_view",
+                "dimensions_exact": true
+              }
+            }
+          ]
+        },
+        "unit": "pp",
+        "metric": "线上社零",
+        "metric_object": "ratio",
+        "view_id": "online_retail_view",
+        "period_roles": [
+          "analysis",
+          "comparison"
+        ],
+        "apply_to": [],
+        "group_dimensions": []
+      },
+      "quality_gate": [
+        "facts_present",
+        "unit_consistent",
+        "required_denominator_nonzero"
+      ],
+      "failure_strategy": "isolate failure and preserve independent results"
+    },
+    {
+      "node_id": "conclusion_organization",
+      "type": "conclusion_organization",
+      "status": "success",
+      "criticality": "core",
+      "requirement_refs": [
+        "online_retail_answer"
+      ],
+      "depends_on": [
+        "derived_online_retail_mom_change_8b9076",
+        "fact_artifact"
+      ],
+      "inputs": {
+        "source_requirement_refs": [
+          "online_retail_facts",
+          "online_retail_mom_change"
+        ]
+      },
+      "outputs": [
+        "conclusions",
+        "scope_and_quality_notes"
+      ],
+      "execution": {
+        "mode": "model_owned",
+        "handler": "model_owned"
+      },
+      "quality_gate": [
+        "only use successful result references",
+        "disclose blocked and failed requirements"
+      ],
+      "failure_strategy": "isolate failure and preserve independent results"
+    }
+  ],
+  "resolution_requests": [],
+  "fetch_requests": [
+    {
+      "request_id": "fetch_unified_1",
+      "dimension_set_registry_hash": "9e06214b91e2f6bd13e1f2f8662d5abe535f0ef987cdc05be6d409d0e50833e3",
+      "purpose": "initial_unified_fetch",
+      "scope": "整体",
+      "filters": [],
+      "metrics": [
+        "线上社零"
+      ],
+      "periods": [
+        "2026-04",
+        "2026-05"
+      ],
+      "fact_layout": {
+        "type": "wide_by_grain",
+        "format": "wide_facts/1.0",
+        "row_keys": [
+          "view_id",
+          "period",
+          "dimensions"
+        ],
+        "fact_mappings": {
+          "mapping_2719c7b7fe15": {
+            "metric": "线上社零",
+            "view_id": "online_retail_view",
+            "unit": "%",
+            "value_column": "mapping_2719c7b7fe15__value"
+          }
+        }
+      },
+      "fact_slots": [
+        {
+          "fact_slot_id": "fact_66d52166d6d9ffb9",
+          "metric_ref": "online_retail",
+          "period_role": "comparison",
+          "period": "2026-04",
+          "view_id": "online_retail_view",
+          "dimension_refs": [],
+          "selector_dimensions": {},
+          "source_dimension_refs": [],
+          "source_selector_dimensions": {},
+          "dimension_projection": {},
+          "source_dimension_domains": {},
+          "component": null,
+          "scope": "整体",
+          "filters": [],
+          "metric": "线上社零",
+          "source_metric_name": "实物商品网上零售额同比增速",
+          "metric_object": "ratio",
+          "unit": "%",
+          "requirement_refs": [
+            "online_retail_facts",
+            "online_retail_mom_change"
+          ],
+          "grain": "month",
+          "capability_path": "direct_fact",
+          "source_binding": {
+            "schema_version": "source_binding/1.0",
+            "provider_id": "feishu_competitor",
+            "source_id": "competitor_macro_sheet",
+            "config_hash": "88be25405565cfe3e808851bfe02844a88bd4de46149818937ece30c05948002",
+            "revision": 1165,
+            "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb",
+            "freshness": "live",
+            "resolution_policy_hash": "2ad594ad3139946c9e79c58e03b11e6050377b3166170a0af39a2f320d2bcfc7",
+            "business_intent_policy_hash": "8332f908041576831287301631dda9313f710414b67862b68b9aa181de878933",
+            "resolution_engine_version": "2.3.0"
+          }
+        },
+        {
+          "fact_slot_id": "fact_67013df1208119b6",
+          "metric_ref": "online_retail",
+          "period_role": "analysis",
+          "period": "2026-05",
+          "view_id": "online_retail_view",
+          "dimension_refs": [],
+          "selector_dimensions": {},
+          "source_dimension_refs": [],
+          "source_selector_dimensions": {},
+          "dimension_projection": {},
+          "source_dimension_domains": {},
+          "component": null,
+          "scope": "整体",
+          "filters": [],
+          "metric": "线上社零",
+          "source_metric_name": "实物商品网上零售额同比增速",
+          "metric_object": "ratio",
+          "unit": "%",
+          "requirement_refs": [
+            "online_retail_facts",
+            "online_retail_mom_change"
+          ],
+          "grain": "month",
+          "capability_path": "direct_fact",
+          "source_binding": {
+            "schema_version": "source_binding/1.0",
+            "provider_id": "feishu_competitor",
+            "source_id": "competitor_macro_sheet",
+            "config_hash": "88be25405565cfe3e808851bfe02844a88bd4de46149818937ece30c05948002",
+            "revision": 1165,
+            "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb",
+            "freshness": "live",
+            "resolution_policy_hash": "2ad594ad3139946c9e79c58e03b11e6050377b3166170a0af39a2f320d2bcfc7",
+            "business_intent_policy_hash": "8332f908041576831287301631dda9313f710414b67862b68b9aa181de878933",
+            "resolution_engine_version": "2.3.0"
+          }
+        }
+      ],
+      "fact_demands": [
+        {
+          "fact_demand_id": "demand_7e65fa0ca0047f2c9481765d",
+          "source_metric_name": "实物商品网上零售额同比增速",
+          "metric": "线上社零",
+          "period": "2026-04",
+          "dimension_refs": [],
+          "dimension_projection": {},
+          "source_dimension_domains": {},
+          "component": null,
+          "scope": "整体",
+          "filters": [],
+          "selector_dimensions": {},
+          "metric_ref": "online_retail",
+          "metric_object": "ratio",
+          "unit": "%",
+          "consumer_bindings": [
+            {
+              "binding_id": "binding_af794056bf5606ce0a787a7b",
+              "task_id": "default",
+              "fact_slot_id": "fact_66d52166d6d9ffb9",
+              "period_role": "comparison",
+              "view_id": "online_retail_view",
+              "selector_dimensions": {},
+              "source_selector_dimensions": {},
+              "dimension_projection": {},
+              "source_dimension_domains": {},
+              "requirement_refs": [
+                "online_retail_facts",
+                "online_retail_mom_change"
+              ],
+              "metric_ref": "online_retail",
+              "metric": "线上社零",
+              "metric_object": "ratio",
+              "unit": "%"
+            }
+          ]
+        },
+        {
+          "fact_demand_id": "demand_93af5cbf5e308a24ff47b0ec",
+          "source_metric_name": "实物商品网上零售额同比增速",
+          "metric": "线上社零",
+          "period": "2026-05",
+          "dimension_refs": [],
+          "dimension_projection": {},
+          "source_dimension_domains": {},
+          "component": null,
+          "scope": "整体",
+          "filters": [],
+          "selector_dimensions": {},
+          "metric_ref": "online_retail",
+          "metric_object": "ratio",
+          "unit": "%",
+          "consumer_bindings": [
+            {
+              "binding_id": "binding_7cc76180234d80ed923ac5bf",
+              "task_id": "default",
+              "fact_slot_id": "fact_67013df1208119b6",
+              "period_role": "analysis",
+              "view_id": "online_retail_view",
+              "selector_dimensions": {},
+              "source_selector_dimensions": {},
+              "dimension_projection": {},
+              "source_dimension_domains": {},
+              "requirement_refs": [
+                "online_retail_facts",
+                "online_retail_mom_change"
+              ],
+              "metric_ref": "online_retail",
+              "metric": "线上社零",
+              "metric_object": "ratio",
+              "unit": "%"
+            }
+          ]
+        }
+      ],
+      "covered_requirement_refs": [
+        "online_retail_facts",
+        "online_retail_mom_change"
+      ]
+    }
+  ],
+  "clarifications": [],
+  "requirement_compilation": [
+    {
+      "requirement_id": "online_retail_answer",
+      "kind": "output_requirement",
+      "status": "compiled",
+      "node_ids": [
+        "conclusion_organization"
+      ],
+      "fact_slot_ids": []
+    },
+    {
+      "requirement_id": "online_retail_facts",
+      "kind": "fact_observation",
+      "status": "compiled",
+      "node_ids": [
+        "fact_artifact"
+      ],
+      "fact_slot_ids": [
+        "fact_66d52166d6d9ffb9",
+        "fact_67013df1208119b6"
+      ]
+    },
+    {
+      "requirement_id": "online_retail_mom_change",
+      "kind": "registered_derived",
+      "status": "compiled",
+      "node_ids": [
+        "derived_online_retail_mom_change_8b9076"
+      ],
+      "fact_slot_ids": [
+        "fact_66d52166d6d9ffb9",
+        "fact_67013df1208119b6"
+      ]
+    }
+  ],
+  "validation_reports": {
+    "final": {
+      "artifact": ".runtime/confidence-regression-2026-05-v2/tasks/default/final-validation.json",
+      "exit_code": 0
+    }
+  },
+  "status": "success",
+  "execution_profile": "fast_derived",
+  "fast_query_admission": {
+    "schema_version": "fast_query_admission/1.0",
+    "eligible": true,
+    "execution_profile": "fast_derived",
+    "validation_profile": "minimal",
+    "features": {
+      "metrics": 1,
+      "views": 1,
+      "dimension_levels": 0,
+      "max_dimension_depth": 0,
+      "fact_slots": 2,
+      "calculation_nodes": 1,
+      "max_expression_depth": 2,
+      "result_refs": 0,
+      "attribution_targets": 0,
+      "blocking_clarifications": 0,
+      "blocked_nodes": 0,
+      "inferred_ambiguities": 0,
+      "estimated_result_rows": null,
+      "adaptive_fetch": false
+    },
+    "limits": {
+      "metrics": 3,
+      "views": 3,
+      "dimension_levels": 3,
+      "max_dimension_depth": 2,
+      "fact_slots": 16,
+      "calculation_nodes": 4,
+      "expression_depth": 4,
+      "result_rows": 1000
+    },
+    "reasons": [],
+    "evidence": {
+      "blocking_clarifications": [],
+      "blocked_nodes": []
+    },
+    "fallback_triggers": [
+      "response_not_machine_parseable",
+      "fact_slot_unbound",
+      "period_view_or_grain_mismatch",
+      "unit_or_definition_conflict",
+      "non_finite_value_or_unsupported_missing_state",
+      "derived_binding_or_denominator_failure",
+      "result_row_budget_exceeded",
+      "incomplete_group_coverage_when_full_required",
+      "additional_fetch_required"
+    ]
+  },
+  "source_resolution": [],
+  "resolved_dimension_domains": {},
+  "fetch_results": [
+    {
+      "attempt_id": "attempt_1787307435544204000",
+      "request_id": "fetch_unified_1",
+      "status": "success",
+      "started_at": "2026-08-21T10:17:15.544201+00:00",
+      "ended_at": "2026-08-21T10:17:18.137081+00:00",
+      "duration_ms": 2592.877,
+      "response_format": "scene_facts/2.0",
+      "source": {
+        "url": "https://bytedance.larkoffice.com/wiki/TrBAw0rDXiBrcUkJlbgcjsyYnkg?sheet=ESXBdZ&table=tbl5Ny6EgnsBwEBK&view=vew6r3PPJm",
+        "title": "【电商小策】电商竞品与宏观数据_2608",
+        "revision": 1165,
+        "freshness": "live",
+        "cache_status": "rebuilt",
+        "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb",
+        "source_binding": {
+          "schema_version": "source_binding/1.0",
+          "provider_id": "feishu_competitor",
+          "source_id": "competitor_macro_sheet",
+          "config_hash": "88be25405565cfe3e808851bfe02844a88bd4de46149818937ece30c05948002",
+          "revision": 1165,
+          "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb",
+          "freshness": "live",
+          "resolution_policy_hash": "2ad594ad3139946c9e79c58e03b11e6050377b3166170a0af39a2f320d2bcfc7",
+          "business_intent_policy_hash": "8332f908041576831287301631dda9313f710414b67862b68b9aa181de878933",
+          "resolution_engine_version": "2.3.0"
+        },
+        "dimension_set_registry_hash": "9e06214b91e2f6bd13e1f2f8662d5abe535f0ef987cdc05be6d409d0e50833e3",
+        "warnings": [
+          "数据块拒绝匹配：闭环电商佣金收入 / 平台",
+          "数据块拒绝匹配：闭环电商广告收入 / 平台",
+          "数据块需澄清：社会消费品零售总额 -> 社会消费品零售",
+          "数据块需澄清：社会消费品零售总额增速 -> 社会消费品零售增速"
+        ],
+        "index_path": "/Users/bytedance/Desktop/Job/code/ecom-competitor-scene-analysis-compliant/.runtime/ecom-competitor-scene-cache/cdd0bd54b4287a7bc14877d1/index.json",
+        "call_attempts": [
+          {
+            "operation": "sheets +revision-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 1275.995
+          },
+          {
+            "operation": "wiki +node-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 1065.745
+          },
+          {
+            "operation": "sheets +revision-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 1089.548
+          },
+          {
+            "operation": "sheets +workbook-info",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 973.992
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 1657.634
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 2999.831
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 1369.476
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 2821.198
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 4202.236
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 5525.402
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 1714.189
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 3249.262
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 4680.024
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 5906.527
+          },
+          {
+            "operation": "sheets +revision-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 934.412
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 1604.695
+          },
+          {
+            "operation": "sheets +revision-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 987.01
+          }
+        ]
+      },
+      "replayed": false,
+      "raw_bytes": 7706,
+      "facts_artifact": ".runtime/confidence-regression-2026-05-v2/tasks/default/logical-facts.json",
+      "bundle_request_id": "fetch_bundle_1"
+    }
+  ],
+  "executor": {
+    "name": "scene-analysis-lightweight-executor",
+    "version": "1.8.1"
+  },
+  "plan_hash": "595c561cfe1c8b4dee04348fc0697b8d9a327b58ce41419eeb6c93b42cce6fa7",
+  "facts_hash": "a8406fcdc3137b2b8f91bb7535ba87e0596bf761573df9624970022665d543ce",
+  "engine_hash": null,
+  "started_at": "2026-08-21T10:17:18.144723+00:00",
+  "ended_at": "2026-08-21T10:17:18.155773+00:00",
+  "declared_status": "success",
+  "computed_status": "success",
+  "normalized_fact_summary": {
+    "records": 2,
+    "missing_records": 0
+  },
+  "performance_metrics": {
+    "input_layout": "long",
+    "raw_bytes": null,
+    "physical_rows": 2,
+    "logical_facts": 2,
+    "parse_ms": 0.0,
+    "normalize_ms": 0.12,
+    "total_fetch_ms": 2592.88,
+    "fetch_timing_complete": true,
+    "fetch_attempts": 1
+  },
+  "node_results": [
+    {
+      "node_id": "derived_online_retail_mom_change_8b9076",
+      "handler": "derived",
+      "status": "success",
+      "input_hash": "b40ed27b0dbdb3461dea953fc8b7eed25e943b5ddf955f7e4ca1372e22d53ff7",
+      "result": 0.024,
+      "queued_at": "2026-08-21T10:17:18.150724+00:00",
+      "started_at": "2026-08-21T10:17:18.150846+00:00",
+      "ended_at": "2026-08-21T10:17:18.151014+00:00",
+      "duration_ms": 0.168
+    },
+    {
+      "node_id": "fact_artifact",
+      "handler": "fact_artifact",
+      "status": "success",
+      "input_hash": "792dc1e6b7b7e7730172be1a4113e0129b59aed73a59a1510891899fac680677",
+      "result": {
+        "records": 2,
+        "facts_hash": "a8406fcdc3137b2b8f91bb7535ba87e0596bf761573df9624970022665d543ce"
+      },
+      "queued_at": "2026-08-21T10:17:18.146855+00:00",
+      "started_at": "2026-08-21T10:17:18.146997+00:00",
+      "ended_at": "2026-08-21T10:17:18.147111+00:00",
+      "duration_ms": 0.109
+    }
+  ],
+  "result_index": {
+    "derived_online_retail_mom_change_8b9076": {
+      "status": "success",
+      "result_ref": "$.node_results[0]",
+      "input_hash": "b40ed27b0dbdb3461dea953fc8b7eed25e943b5ddf955f7e4ca1372e22d53ff7"
+    },
+    "fact_artifact": {
+      "status": "success",
+      "result_ref": "$.node_results[1]",
+      "input_hash": "792dc1e6b7b7e7730172be1a4113e0129b59aed73a59a1510891899fac680677"
+    }
+  },
+  "execution_summary": {
+    "succeeded_nodes": [
+      "conclusion_organization",
+      "derived_online_retail_mom_change_8b9076",
+      "fact_artifact"
+    ],
+    "failed_nodes": [],
+    "partial_nodes": [],
+    "skipped_nodes": [],
+    "blocked_nodes": [],
+    "duration_ms": 10.252
+  },
+  "derived_results": [
+    {
+      "derived_metric_id": "mom_growth",
+      "node_id": "derived_online_retail_mom_change_8b9076",
+      "status": "success",
+      "input_refs": [
+        {
+          "fact": {
+            "metric": "线上社零",
+            "period_role": "analysis",
+            "dimensions": {},
+            "view_id": "online_retail_view",
+            "dimensions_exact": true
+          }
+        },
+        {
+          "fact": {
+            "metric": "线上社零",
+            "period_role": "comparison",
+            "dimensions": {},
+            "view_id": "online_retail_view",
+            "dimensions_exact": true
+          }
+        }
+      ],
+      "formula": {
+        "op": "subtract",
+        "args": [
+          {
+            "fact": {
+              "metric": "线上社零",
+              "period_role": "analysis",
+              "dimensions": {},
+              "view_id": "online_retail_view",
+              "dimensions_exact": true
+            }
+          },
+          {
+            "fact": {
+              "metric": "线上社零",
+              "period_role": "comparison",
+              "dimensions": {},
+              "view_id": "online_retail_view",
+              "dimensions_exact": true
+            }
+          }
+        ]
+      },
+      "unit": "pp",
+      "value": 0.024,
+      "input_hash": "b40ed27b0dbdb3461dea953fc8b7eed25e943b5ddf955f7e4ca1372e22d53ff7",
+      "definition_source": "references/derived-metric-registry.json",
+      "definition_version": "1.2.0",
+      "definition_status": "registered",
+      "metric": "线上社零",
+      "metric_object": "ratio",
+      "view_id": "online_retail_view",
+      "period_roles": [
+        "analysis",
+        "comparison"
+      ]
+    }
+  ],
+  "attribution_results": [],
+  "normalized_facts": [
+    {
+      "fact_id": "fact_24148a1ec5127c564db197d3",
+      "metric_ref": "online_retail",
+      "metric": "线上社零",
+      "source_metric_name": "实物商品网上零售额同比增速",
+      "metric_object": "ratio",
+      "component": null,
+      "scope": "整体",
+      "filters": [],
+      "period": "2026-04",
+      "dimensions": {},
+      "value": 0.002,
+      "unit": "%",
+      "definition": "仅包含商品零售;1月不单独披露,2月数字为1+2月合计;线上化率计算公式 = 实物商品网上零售额/社会消费品零售总额:商品零售",
+      "additive": false,
+      "aggregation": "不可聚合",
+      "missing": false,
+      "raw_missing": false,
+      "normalization_reason": "unchanged",
+      "value_derived_from_components": false,
+      "source_request_id": "fetch_unified_1",
+      "source_ref": {
+        "sheet": "月度表",
+        "sheet_id": "Hia4IK",
+        "row": 62,
+        "column": "BA",
+        "revision": 1165,
+        "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb"
+      },
+      "coverage": "full",
+      "fact_slot_id": "fact_66d52166d6d9ffb9",
+      "period_role": "comparison",
+      "view_id": "online_retail_view",
+      "consumer_task_id": "default",
+      "requirement_refs": [
+        "online_retail_facts",
+        "online_retail_mom_change"
+      ]
+    },
+    {
+      "fact_id": "fact_4b6658524bdb798bc708d1d3",
+      "metric_ref": "online_retail",
+      "metric": "线上社零",
+      "source_metric_name": "实物商品网上零售额同比增速",
+      "metric_object": "ratio",
+      "component": null,
+      "scope": "整体",
+      "filters": [],
+      "period": "2026-05",
+      "dimensions": {},
+      "value": 0.026000000000000002,
+      "unit": "%",
+      "definition": "仅包含商品零售;1月不单独披露,2月数字为1+2月合计;线上化率计算公式 = 实物商品网上零售额/社会消费品零售总额:商品零售",
+      "additive": false,
+      "aggregation": "不可聚合",
+      "missing": false,
+      "raw_missing": false,
+      "normalization_reason": "unchanged",
+      "value_derived_from_components": false,
+      "source_request_id": "fetch_unified_1",
+      "source_ref": {
+        "sheet": "月度表",
+        "sheet_id": "Hia4IK",
+        "row": 62,
+        "column": "BB",
+        "revision": 1165,
+        "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb"
+      },
+      "coverage": "full",
+      "fact_slot_id": "fact_67013df1208119b6",
+      "period_role": "analysis",
+      "view_id": "online_retail_view",
+      "consumer_task_id": "default",
+      "requirement_refs": [
+        "online_retail_facts",
+        "online_retail_mom_change"
+      ]
+    }
+  ],
+  "conclusions": [
+    {
+      "conclusion_id": "fast_query_result",
+      "status": "success",
+      "result_refs": [
+        "derived_online_retail_mom_change_8b9076",
+        "fact_artifact"
+      ],
+      "statement": "Fast query completed from validated facts and deterministic calculations."
+    }
+  ],
+  "model_completion": {
+    "required": false,
+    "query": "26年5月，线上社零表现怎么样？相比上个月涨幅变化如何？",
+    "successful_result_refs": [
+      "derived_online_retail_mom_change_8b9076",
+      "fact_artifact"
+    ],
+    "incomplete_node_ids": [],
+    "instruction": "Compare the original query with successful facts/results. Complete only calculations whose inputs and business definitions are unambiguous; otherwise disclose the gap."
+  }
+}

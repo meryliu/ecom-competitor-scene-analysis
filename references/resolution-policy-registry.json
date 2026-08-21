@@ -1,8 +1,36 @@
 {
-  "schema_version": "resolution_policy/1.0",
-  "policy_version": "1.0.0",
+  "schema_version": "resolution_policy/2.0",
+  "policy_version": "2.0.0",
   "limits": {
     "max_candidates_per_case": 3
+  },
+  "semantic_normalization": {
+    "comparison_terms": {
+      "yoy": ["同比"],
+      "mom": ["环比"],
+      "ytd": ["累计"]
+    },
+    "measure_terms": {
+      "growth_rate": ["增速", "增长率", "涨幅"],
+      "delta": ["增量", "绝对变化"],
+      "count": ["订单量"],
+      "price": ["订单价"],
+      "gmv": ["gmv"]
+    },
+    "equivalence_rules": [
+      {
+        "rule_id": "yoy_ratio_abbreviation",
+        "comparison_type": "yoy",
+        "measure_type": "growth_rate",
+        "required_metric_object": "ratio",
+        "required_units": ["%", "pp", "rate", "ratio", "share"]
+      }
+    ]
+  },
+  "candidate_evaluation": {
+    "lexical_recall_floor": 0.78,
+    "minimum_candidate_margin": 0.1,
+    "allow_unique_capability_selection": true
   },
   "rules": {
     "fact_block_joint_resolution": {

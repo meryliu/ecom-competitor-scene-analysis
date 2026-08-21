@@ -1,0 +1,447 @@
+{
+  "schema_version": "resolved_capabilities/1.0",
+  "provider": {
+    "provider_id": "feishu_competitor",
+    "contract_version": "1.0"
+  },
+  "source": {
+    "schema_version": "source_binding/1.0",
+    "provider_id": "feishu_competitor",
+    "source_id": "competitor_macro_sheet",
+    "config_hash": "88be25405565cfe3e808851bfe02844a88bd4de46149818937ece30c05948002",
+    "revision": 1165,
+    "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb",
+    "freshness": "live",
+    "resolution_policy_hash": "2ad594ad3139946c9e79c58e03b11e6050377b3166170a0af39a2f320d2bcfc7",
+    "business_intent_policy_hash": "8332f908041576831287301631dda9313f710414b67862b68b9aa181de878933",
+    "resolution_engine_version": "2.3.0"
+  },
+  "metric_bindings": {
+    "线上社零": "实物商品网上零售额同比增速"
+  },
+  "task_resolutions": {
+    "default": {
+      "metric_bindings": {
+        "线上社零": "实物商品网上零售额同比增速"
+      },
+      "metric_statuses": {
+        "online_retail": {
+          "requested_metric": "线上社零",
+          "status": "bound",
+          "binding": "实物商品网上零售额同比增速"
+        }
+      },
+      "intent_resolutions": {
+        "online_retail": {
+          "status": "selected",
+          "selected_candidate": {
+            "candidate_id": "intent_candidate_0fb2c78995c727537def9af7",
+            "intent_id": "growth_ratio_metric",
+            "status": "viable",
+            "metric": "实物商品网上零售额同比增速",
+            "metric_object": "ratio",
+            "requested_terms": [
+              "线上社零同比增速",
+              "线上社零增速"
+            ],
+            "confidence": 0.98,
+            "confidence_detail": {
+              "lexical": 0.98,
+              "semantic": "equivalent",
+              "metadata": "pass",
+              "fact_capability": "pass"
+            },
+            "semantic_status": "equivalent",
+            "soft_conflicts": [],
+            "path": "direct_fact",
+            "grain": "month",
+            "dimension": "无",
+            "periods": [
+              "2026-04",
+              "2026-05"
+            ],
+            "capability": {
+              "dimension": {
+                "status": "available",
+                "dimension": "无"
+              },
+              "periods": [
+                {
+                  "status": "available",
+                  "path": "direct_fact",
+                  "grain": "month",
+                  "period": "2026-04",
+                  "dimension": "无"
+                },
+                {
+                  "status": "available",
+                  "path": "direct_fact",
+                  "grain": "month",
+                  "period": "2026-05",
+                  "dimension": "无"
+                }
+              ]
+            },
+            "evidence": [
+              "business_intent_rule:growth_ratio_metric",
+              "source_metadata_evaluated",
+              "semantic_equivalence"
+            ],
+            "conflicts": [],
+            "object_override_allowed": true
+          },
+          "case_id": "resolution_case_44919ea0fce1804957a3dfb0",
+          "business_intent_policy_hash": "8332f908041576831287301631dda9313f710414b67862b68b9aa181de878933"
+        }
+      },
+      "composition_resolutions": [],
+      "resolution_cases": [],
+      "metric_dimension_bindings": {}
+    }
+  },
+  "dimension_bindings": {},
+  "metrics": {
+    "实物商品网上零售额同比增速": {
+      "additive": false,
+      "aggregation": "不可聚合",
+      "aggregation_mode": "non_additive",
+      "aliases": [
+        "线上社零同比",
+        "线上社零增速",
+        "线上商品零售增速",
+        "线上商品零售同比",
+        "线上同比",
+        "线上增速"
+      ],
+      "arithmetic": false,
+      "dimensions": [
+        "无"
+      ],
+      "notes": "仅包含商品零售;1月不单独披露,2月数字为1+2月合计;线上化率计算公式 = 实物商品网上零售额/社会消费品零售总额:商品零售",
+      "supported_grains": [
+        "month"
+      ],
+      "unit": "%"
+    }
+  },
+  "dimensions": {},
+  "availability": {
+    "month": {
+      "periods": [
+        "2022-01",
+        "2022-02",
+        "2022-03",
+        "2022-04",
+        "2022-05",
+        "2022-06",
+        "2022-07",
+        "2022-08",
+        "2022-09",
+        "2022-10",
+        "2022-11",
+        "2022-12",
+        "2023-01",
+        "2023-02",
+        "2023-03",
+        "2023-04",
+        "2023-05",
+        "2023-06",
+        "2023-07",
+        "2023-08",
+        "2023-09",
+        "2023-10",
+        "2023-11",
+        "2023-12",
+        "2024-01",
+        "2024-02",
+        "2024-03",
+        "2024-04",
+        "2024-05",
+        "2024-06",
+        "2024-07",
+        "2024-08",
+        "2024-09",
+        "2024-10",
+        "2024-11",
+        "2024-12",
+        "2025-01",
+        "2025-02",
+        "2025-03",
+        "2025-04",
+        "2025-05",
+        "2025-06",
+        "2025-07",
+        "2025-08",
+        "2025-09",
+        "2025-10",
+        "2025-11",
+        "2025-12",
+        "2026-01",
+        "2026-02",
+        "2026-03",
+        "2026-04",
+        "2026-05",
+        "2026-06",
+        "2026-07"
+      ],
+      "metrics": {
+        "实物商品网上零售额同比增速": {
+          "dimension": "无"
+        }
+      }
+    },
+    "week": {
+      "periods": [
+        "2025-W02",
+        "2025-W03",
+        "2025-W04",
+        "2025-W05",
+        "2025-W06",
+        "2025-W07",
+        "2025-W08",
+        "2025-W09",
+        "2025-W10",
+        "2025-W11",
+        "2025-W12",
+        "2025-W13",
+        "2025-W14",
+        "2025-W15",
+        "2025-W16",
+        "2025-W17",
+        "2025-W18",
+        "2025-W19",
+        "2025-W20",
+        "2025-W21",
+        "2025-W22",
+        "2025-W23",
+        "2025-W24",
+        "2025-W25",
+        "2025-W26",
+        "2025-W27",
+        "2025-W28",
+        "2025-W29",
+        "2025-W30",
+        "2025-W31",
+        "2025-W32",
+        "2025-W33",
+        "2025-W34",
+        "2025-W35",
+        "2025-W36",
+        "2025-W37",
+        "2025-W38",
+        "2025-W39",
+        "2025-W40",
+        "2025-W41",
+        "2025-W42",
+        "2025-W43",
+        "2025-W44",
+        "2025-W45",
+        "2025-W46",
+        "2025-W47",
+        "2025-W48",
+        "2025-W49",
+        "2025-W50",
+        "2025-W51",
+        "2025-W52",
+        "2025-W53",
+        "2026-W02",
+        "2026-W03",
+        "2026-W04",
+        "2026-W05",
+        "2026-W06",
+        "2026-W07",
+        "2026-W08",
+        "2026-W09",
+        "2026-W10",
+        "2026-W11",
+        "2026-W12",
+        "2026-W13",
+        "2026-W14",
+        "2026-W15",
+        "2026-W16",
+        "2026-W17",
+        "2026-W18",
+        "2026-W19",
+        "2026-W20",
+        "2026-W21",
+        "2026-W22",
+        "2026-W23",
+        "2026-W24",
+        "2026-W25",
+        "2026-W26",
+        "2026-W27",
+        "2026-W28",
+        "2026-W29",
+        "2026-W30",
+        "2026-W31",
+        "2026-W32",
+        "2026-W33"
+      ],
+      "metrics": {}
+    },
+    "year": {
+      "periods": [
+        "2022",
+        "2023",
+        "2024",
+        "2025"
+      ],
+      "metrics": {}
+    }
+  },
+  "metric_dimension_bindings": {},
+  "task_metric_dimension_bindings": {
+    "default": {}
+  },
+  "resolution_cases": [],
+  "resolution_decisions": [
+    {
+      "case_id": "resolution_case_44919ea0fce1804957a3dfb0",
+      "action": "auto",
+      "kind": "interpretation",
+      "requested_term": "线上社零",
+      "task_ids": [
+        "default"
+      ],
+      "metric_ref": "online_retail",
+      "selected_candidate_id": "intent_candidate_0fb2c78995c727537def9af7",
+      "policy_version": "2.0.0",
+      "resolution_policy_hash": "2ad594ad3139946c9e79c58e03b11e6050377b3166170a0af39a2f320d2bcfc7",
+      "business_intent_policy_version": "1.0.0",
+      "business_intent_policy_hash": "8332f908041576831287301631dda9313f710414b67862b68b9aa181de878933",
+      "source_revision": 1165,
+      "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb",
+      "resolution_engine_version": "2.3.0",
+      "intent_fingerprint": "intent_24af8d4a428195976ba06699",
+      "patch_status": null,
+      "candidates": [
+        {
+          "candidate_id": "intent_candidate_0fb2c78995c727537def9af7",
+          "intent_id": "growth_ratio_metric",
+          "status": "viable",
+          "metric": "实物商品网上零售额同比增速",
+          "metric_object": "ratio",
+          "requested_terms": [
+            "线上社零同比增速",
+            "线上社零增速"
+          ],
+          "confidence": 0.98,
+          "confidence_detail": {
+            "lexical": 0.98,
+            "semantic": "equivalent",
+            "metadata": "pass",
+            "fact_capability": "pass"
+          },
+          "semantic_status": "equivalent",
+          "soft_conflicts": [],
+          "path": "direct_fact",
+          "grain": "month",
+          "dimension": "无",
+          "periods": [
+            "2026-04",
+            "2026-05"
+          ],
+          "capability": {
+            "dimension": {
+              "status": "available",
+              "dimension": "无"
+            },
+            "periods": [
+              {
+                "status": "available",
+                "path": "direct_fact",
+                "grain": "month",
+                "period": "2026-04",
+                "dimension": "无"
+              },
+              {
+                "status": "available",
+                "path": "direct_fact",
+                "grain": "month",
+                "period": "2026-05",
+                "dimension": "无"
+              }
+            ]
+          },
+          "evidence": [
+            "business_intent_rule:growth_ratio_metric",
+            "source_metadata_evaluated",
+            "semantic_equivalence"
+          ],
+          "conflicts": [],
+          "object_override_allowed": true
+        },
+        {
+          "candidate_id": "intent_candidate_60c1f4d2c9ddf2a3256dd899",
+          "intent_id": "declared_metric",
+          "status": "infeasible",
+          "metric": "实物商品网上零售额",
+          "metric_object": "volume",
+          "requested_terms": [
+            "线上社零"
+          ],
+          "confidence": 0.98,
+          "confidence_detail": {
+            "lexical": 0.98,
+            "semantic": "equivalent",
+            "metadata": "pass",
+            "fact_capability": "fail"
+          },
+          "semantic_status": "equivalent",
+          "soft_conflicts": [],
+          "path": null,
+          "grain": "month",
+          "dimension": "无",
+          "periods": [
+            "2026-04",
+            "2026-05"
+          ],
+          "capability": {
+            "dimension": {
+              "status": "available",
+              "dimension": "无"
+            },
+            "periods": [
+              {
+                "status": "unavailable",
+                "reason": "metadata_grain_unsupported",
+                "grain": "month",
+                "supported_grains": [
+                  "year"
+                ]
+              },
+              {
+                "status": "unavailable",
+                "reason": "metadata_grain_unsupported",
+                "grain": "month",
+                "supported_grains": [
+                  "year"
+                ]
+              }
+            ]
+          },
+          "evidence": [
+            "business_intent_rule:declared_metric",
+            "source_metadata_evaluated",
+            "semantic_equivalence"
+          ],
+          "conflicts": [
+            "metadata_grain_unsupported"
+          ],
+          "object_override_allowed": false
+        }
+      ]
+    }
+  ],
+  "resolution_policy": {
+    "schema_version": "resolution_policy/2.0",
+    "policy_version": "2.0.0",
+    "engine_version": "2.3.0",
+    "sha256": "2ad594ad3139946c9e79c58e03b11e6050377b3166170a0af39a2f320d2bcfc7"
+  },
+  "business_intent_policy": {
+    "schema_version": "business_intent_policy/1.0",
+    "policy_version": "1.0.0",
+    "sha256": "8332f908041576831287301631dda9313f710414b67862b68b9aa181de878933"
+  }
+}

@@ -26,7 +26,7 @@ facts = gateway.fetch(fetch_request)
   "freshness": "live",
   "resolution_policy_hash": "...",
   "business_intent_policy_hash": "...",
-  "resolution_engine_version": "2.1.0"
+  "resolution_engine_version": "2.3.0"
 }
 ```
 

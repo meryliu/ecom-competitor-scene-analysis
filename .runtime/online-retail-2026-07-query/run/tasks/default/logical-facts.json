@@ -1,0 +1,209 @@
+{
+  "schema_version": "scene_facts/1.0",
+  "facts": [
+    {
+      "fact_id": "fact_5ff108d5cb20ae6c78bb4dcc",
+      "metric_ref": "online_retail",
+      "metric": "线上社零",
+      "source_metric_name": "实物商品网上零售额同比增速",
+      "metric_object": "ratio",
+      "component": null,
+      "scope": "整体",
+      "filters": [],
+      "period": "2026-07",
+      "dimensions": {},
+      "value": 0.033,
+      "unit": "%",
+      "definition": "仅包含商品零售;1月不单独披露,2月数字为1+2月合计;线上化率计算公式 = 实物商品网上零售额/社会消费品零售总额:商品零售",
+      "additive": false,
+      "aggregation": "不可聚合",
+      "missing": false,
+      "raw_missing": false,
+      "normalization_reason": "unchanged",
+      "value_derived_from_components": false,
+      "source_request_id": "fetch_unified_1",
+      "source_ref": {
+        "sheet": "月度表",
+        "sheet_id": "Hia4IK",
+        "row": 62,
+        "column": "BD",
+        "revision": 1165,
+        "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb"
+      },
+      "coverage": "full",
+      "fact_slot_id": "fact_fe2334109fb6cbdb",
+      "period_role": "analysis",
+      "view_id": "online_retail_view",
+      "consumer_task_id": "default",
+      "requirement_refs": [
+        "online_retail_facts",
+        "online_retail_mom_change"
+      ]
+    },
+    {
+      "fact_id": "fact_b8b059298be94fe726a57f01",
+      "metric_ref": "online_retail",
+      "metric": "线上社零",
+      "source_metric_name": "实物商品网上零售额同比增速",
+      "metric_object": "ratio",
+      "component": null,
+      "scope": "整体",
+      "filters": [],
+      "period": "2026-06",
+      "dimensions": {},
+      "value": 0.039,
+      "unit": "%",
+      "definition": "仅包含商品零售;1月不单独披露,2月数字为1+2月合计;线上化率计算公式 = 实物商品网上零售额/社会消费品零售总额:商品零售",
+      "additive": false,
+      "aggregation": "不可聚合",
+      "missing": false,
+      "raw_missing": false,
+      "normalization_reason": "unchanged",
+      "value_derived_from_components": false,
+      "source_request_id": "fetch_unified_1",
+      "source_ref": {
+        "sheet": "月度表",
+        "sheet_id": "Hia4IK",
+        "row": 62,
+        "column": "BC",
+        "revision": 1165,
+        "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb"
+      },
+      "coverage": "full",
+      "fact_slot_id": "fact_623c7acf34340e0c",
+      "period_role": "comparison",
+      "view_id": "online_retail_view",
+      "consumer_task_id": "default",
+      "requirement_refs": [
+        "online_retail_facts",
+        "online_retail_mom_change"
+      ]
+    }
+  ],
+  "source": {
+    "url": "https://bytedance.larkoffice.com/wiki/TrBAw0rDXiBrcUkJlbgcjsyYnkg?sheet=ESXBdZ&table=tbl5Ny6EgnsBwEBK&view=vew6r3PPJm",
+    "title": "【电商小策】电商竞品与宏观数据_2608",
+    "revision": 1165,
+    "freshness": "live",
+    "cache_status": "rebuilt",
+    "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb",
+    "source_binding": {
+      "schema_version": "source_binding/1.0",
+      "provider_id": "feishu_competitor",
+      "source_id": "competitor_macro_sheet",
+      "config_hash": "88be25405565cfe3e808851bfe02844a88bd4de46149818937ece30c05948002",
+      "revision": 1165,
+      "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb",
+      "freshness": "live",
+      "resolution_policy_hash": "2ad594ad3139946c9e79c58e03b11e6050377b3166170a0af39a2f320d2bcfc7",
+      "business_intent_policy_hash": "8332f908041576831287301631dda9313f710414b67862b68b9aa181de878933",
+      "resolution_engine_version": "2.3.0"
+    },
+    "dimension_set_registry_hash": "9e06214b91e2f6bd13e1f2f8662d5abe535f0ef987cdc05be6d409d0e50833e3",
+    "warnings": [
+      "数据块拒绝匹配：闭环电商佣金收入 / 平台",
+      "数据块拒绝匹配：闭环电商广告收入 / 平台",
+      "数据块需澄清：社会消费品零售总额 -> 社会消费品零售",
+      "数据块需澄清：社会消费品零售总额增速 -> 社会消费品零售增速"
+    ],
+    "index_path": "/Users/bytedance/Desktop/Job/code/ecom-competitor-scene-analysis-compliant/.runtime/ecom-competitor-scene-cache-2026-07-query/cdd0bd54b4287a7bc14877d1/index.json",
+    "call_attempts": [
+      {
+        "operation": "wiki +node-get",
+        "attempt": 1,
+        "status": "success",
+        "duration_ms": 994.255
+      },
+      {
+        "operation": "sheets +revision-get",
+        "attempt": 1,
+        "status": "success",
+        "duration_ms": 1027.064
+      },
+      {
+        "operation": "sheets +workbook-info",
+        "attempt": 1,
+        "status": "success",
+        "duration_ms": 935.823
+      },
+      {
+        "operation": "sheets +csv-get",
+        "attempt": 1,
+        "status": "success",
+        "duration_ms": 1462.394
+      },
+      {
+        "operation": "sheets +csv-get",
+        "attempt": 1,
+        "status": "success",
+        "duration_ms": 2669.278
+      },
+      {
+        "operation": "sheets +csv-get",
+        "attempt": 1,
+        "status": "success",
+        "duration_ms": 1422.462
+      },
+      {
+        "operation": "sheets +csv-get",
+        "attempt": 1,
+        "status": "success",
+        "duration_ms": 3018.78
+      },
+      {
+        "operation": "sheets +csv-get",
+        "attempt": 1,
+        "status": "success",
+        "duration_ms": 4387.997
+      },
+      {
+        "operation": "sheets +csv-get",
+        "attempt": 1,
+        "status": "success",
+        "duration_ms": 5957.065
+      },
+      {
+        "operation": "sheets +csv-get",
+        "attempt": 1,
+        "status": "success",
+        "duration_ms": 1382.563
+      },
+      {
+        "operation": "sheets +csv-get",
+        "attempt": 1,
+        "status": "success",
+        "duration_ms": 2905.018
+      },
+      {
+        "operation": "sheets +csv-get",
+        "attempt": 1,
+        "status": "success",
+        "duration_ms": 4114.75
+      },
+      {
+        "operation": "sheets +csv-get",
+        "attempt": 1,
+        "status": "success",
+        "duration_ms": 5457.988
+      },
+      {
+        "operation": "sheets +revision-get",
+        "attempt": 1,
+        "status": "success",
+        "duration_ms": 945.603
+      },
+      {
+        "operation": "sheets +csv-get",
+        "attempt": 1,
+        "status": "success",
+        "duration_ms": 1299.366
+      },
+      {
+        "operation": "sheets +revision-get",
+        "attempt": 1,
+        "status": "success",
+        "duration_ms": 918.959
+      }
+    ]
+  }
+}

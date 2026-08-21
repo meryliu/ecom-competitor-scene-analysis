@@ -24,7 +24,7 @@
       "intent_id": "growth_ratio_metric",
       "priority": 90,
       "triggers": {
-        "any": ["增速", "增长率", "涨幅"]
+        "any": ["同比", "增速", "增长率", "涨幅"]
       },
       "metric_term_templates": ["{metric}同比增速", "{metric}增速"],
       "metric_object": "ratio",

@@ -21,8 +21,8 @@ from business_intent_policy import (
 )
 
 
-POLICY_SCHEMA = "resolution_policy/1.0"
-ENGINE_VERSION = "2.1.0"
+POLICY_SCHEMA = "resolution_policy/2.0"
+ENGINE_VERSION = "2.3.0"
 DEFAULT_POLICY_PATH = (
     Path(__file__).resolve().parents[1]
     / "references"
@@ -46,7 +46,14 @@ ALLOWED_EVIDENCE = {
     "confirmed_patch",
 }
 UNRESOLVED_UNITS = {"", "unknown", "待元信息解析", "未解析"}
-ALLOWED_POLICY_KEYS = {"schema_version", "policy_version", "limits", "rules"}
+ALLOWED_POLICY_KEYS = {
+    "schema_version",
+    "policy_version",
+    "limits",
+    "rules",
+    "semantic_normalization",
+    "candidate_evaluation",
+}
 ALLOWED_RULE_KEYS = {"hard_gates", "strong_evidence", "auto", "confirm"}
 ALLOWED_AUTO_KEYS = {
     "require_unique_viable",
@@ -104,6 +111,86 @@ def validate_resolution_policy(policy: dict[str, Any]) -> None:
             "INVALID_RESOLUTION_POLICY_LIMIT",
             "max_candidates_per_case 必须是 1 到 10 的整数",
         )
+    semantic_normalization = policy.get("semantic_normalization") or {}
+    if not isinstance(semantic_normalization, dict):
+        raise ResolutionPolicyError(
+            "INVALID_RESOLUTION_POLICY", "semantic_normalization 必须是对象"
+        )
+    allowed_semantic_keys = {"comparison_terms", "measure_terms", "equivalence_rules"}
+    unknown_semantic = set(semantic_normalization) - allowed_semantic_keys
+    if unknown_semantic:
+        raise ResolutionPolicyError(
+            "INVALID_RESOLUTION_POLICY_FIELD",
+            "semantic_normalization 包含未允许字段",
+            {"fields": sorted(unknown_semantic)},
+        )
+    for field in ("comparison_terms", "measure_terms"):
+        values = semantic_normalization.get(field) or {}
+        if not isinstance(values, dict) or any(
+            not isinstance(key, str)
+            or not key
+            or not isinstance(tokens, list)
+            or not tokens
+            or not all(isinstance(token, str) and token for token in tokens)
+            for key, tokens in values.items()
+        ):
+            raise ResolutionPolicyError(
+                "INVALID_RESOLUTION_POLICY",
+                f"semantic_normalization.{field} 必须是非空词组映射",
+            )
+    equivalence_rules = semantic_normalization.get("equivalence_rules") or []
+    if not isinstance(equivalence_rules, list) or any(
+        not isinstance(item, dict)
+        or not item.get("rule_id")
+        or not item.get("comparison_type")
+        or not item.get("measure_type")
+        or set(item) - {
+            "rule_id",
+            "comparison_type",
+            "measure_type",
+            "required_metric_object",
+            "required_units",
+        }
+        or (
+            item.get("required_metric_object") is not None
+            and item.get("required_metric_object") not in {"volume", "ratio"}
+        )
+        or (
+            item.get("required_units") is not None
+            and (
+                not isinstance(item.get("required_units"), list)
+                or not all(isinstance(unit, str) and unit for unit in item.get("required_units"))
+            )
+        )
+        for item in equivalence_rules
+    ):
+        raise ResolutionPolicyError(
+            "INVALID_RESOLUTION_POLICY",
+            "semantic_normalization.equivalence_rules 配置非法",
+        )
+    candidate_evaluation = policy.get("candidate_evaluation") or {}
+    if not isinstance(candidate_evaluation, dict):
+        raise ResolutionPolicyError(
+            "INVALID_RESOLUTION_POLICY", "candidate_evaluation 必须是对象"
+        )
+    unknown_evaluation = set(candidate_evaluation) - {
+        "lexical_recall_floor",
+        "minimum_candidate_margin",
+        "allow_unique_capability_selection",
+    }
+    if unknown_evaluation:
+        raise ResolutionPolicyError(
+            "INVALID_RESOLUTION_POLICY_FIELD",
+            "candidate_evaluation 包含未允许字段",
+            {"fields": sorted(unknown_evaluation)},
+        )
+    for field in ("lexical_recall_floor", "minimum_candidate_margin"):
+        value = candidate_evaluation.get(field, 0.78 if field == "lexical_recall_floor" else 0.1)
+        if not isinstance(value, (int, float)) or not 0 <= float(value) <= 1:
+            raise ResolutionPolicyError(
+                "INVALID_RESOLUTION_POLICY",
+                f"candidate_evaluation.{field} 必须是 0 到 1 的数值",
+            )
     rules = policy.get("rules")
     if not isinstance(rules, dict):
         raise ResolutionPolicyError("INVALID_RESOLUTION_POLICY", "rules 必须是对象")
@@ -157,6 +244,112 @@ def _unit_compatible(expected: Any, actual: Any) -> bool:
     expected_text = str(expected or "").strip().lower()
     actual_text = str(actual or "").strip().lower()
     return expected_text in UNRESOLVED_UNITS or not expected_text or expected_text == actual_text
+
+
+def _semantic_signature(
+    value: Any,
+    metadata: dict[str, Any],
+    expected_object: str | None,
+    policy: dict[str, Any],
+) -> dict[str, str | None]:
+    """Normalize comparison and measure terms without treating every token as distinct."""
+    text = normalize_match_text(value)
+    semantic = policy.get("semantic_normalization") or {}
+    comparison_type: str | None = None
+    for comparison, tokens in (semantic.get("comparison_terms") or {}).items():
+        if any(normalize_match_text(token) in text for token in tokens):
+            comparison_type = str(comparison)
+            break
+    measure_type: str | None = None
+    for measure, tokens in (semantic.get("measure_terms") or {}).items():
+        if any(normalize_match_text(token) in text for token in tokens):
+            measure_type = str(measure)
+            break
+    actual_object = _metric_object(metadata)
+    unit = str(metadata.get("unit") or "").strip().lower()
+    # A comparison-only shorthand such as "同比" is expanded only by a
+    # configured equivalence rule whose object and unit constraints pass.
+    if comparison_type and measure_type is None:
+        for rule in semantic.get("equivalence_rules") or []:
+            required_object = str(rule.get("required_metric_object") or "")
+            required_units = {
+                str(item).strip().lower()
+                for item in rule.get("required_units") or []
+            }
+            if (
+                str(rule.get("comparison_type") or "") == comparison_type
+                and (not required_object or expected_object == required_object or actual_object == required_object)
+                and (not required_units or unit in required_units)
+            ):
+                measure_type = str(rule.get("measure_type") or "") or None
+                break
+    return {
+        "comparison_type": comparison_type,
+        "measure_type": measure_type,
+        "object": expected_object or actual_object,
+        "unit": unit or None,
+    }
+
+
+def _semantic_compatibility(
+    requested_text: str,
+    candidate_text: str,
+    candidate_name: str,
+    metadata: dict[str, Any],
+    expected_object: str | None,
+    policy: dict[str, Any],
+) -> dict[str, Any]:
+    """Classify protected-token differences as equivalent, unknown, or conflict."""
+    requested = _semantic_signature(requested_text, metadata, expected_object, policy)
+    candidate = _semantic_signature(candidate_text, metadata, expected_object, policy)
+    canonical = _semantic_signature(candidate_name, metadata, expected_object, policy)
+    # Canonical metadata names are stronger evidence than a fragmented alias.
+    for field in ("comparison_type", "measure_type"):
+        if requested.get(field) is None:
+            continue
+        if candidate.get(field) is None:
+            candidate[field] = canonical.get(field)
+    requested_measure = requested.get("measure_type")
+    candidate_measure = candidate.get("measure_type")
+    requested_comparison = requested.get("comparison_type")
+    candidate_comparison = candidate.get("comparison_type")
+    if requested_measure and candidate_measure and requested_measure != candidate_measure:
+        return {
+            "status": "conflict",
+            "requested": requested,
+            "candidate": candidate,
+            "reason": "measure_type_conflict",
+        }
+    if requested_comparison and candidate_comparison and requested_comparison != candidate_comparison:
+        return {
+            "status": "conflict",
+            "requested": requested,
+            "candidate": candidate,
+            "reason": "comparison_type_conflict",
+        }
+    if (
+        requested_measure
+        and requested_measure == candidate_measure
+        and (
+            requested_comparison is None
+            or candidate_comparison == requested_comparison
+        )
+    ) or (
+        requested_comparison == candidate_comparison
+        and requested_comparison is not None
+        and requested_measure in {None, candidate_measure}
+    ):
+        status = "equivalent"
+    elif requested_measure or requested_comparison or candidate_measure or candidate_comparison:
+        status = "unknown"
+    else:
+        status = "equivalent"
+    return {
+        "status": status,
+        "requested": requested,
+        "candidate": candidate,
+        "reason": "semantic_equivalence" if status == "equivalent" else "semantic_incomplete",
+    }
 
 
 def _context_tasks(contexts: list[dict[str, Any]], requested_name: str, candidate_name: str) -> list[str]:
@@ -239,7 +432,12 @@ def _query_metric_resolution(
     for raw in match.get("candidates") or []:
         candidate_name = str(raw.get("name") or "")
         metadata = catalogue.get(candidate_name) or {}
-        conflicts = list(raw.get("conflicts") or [])
+        raw_conflicts = list(raw.get("conflicts") or [])
+        conflicts = [
+            conflict
+            for conflict in raw_conflicts
+            if not str(conflict).startswith("protected_term_difference:")
+        ]
         expected_object = requested.get("metric_object")
         actual_object = _metric_object(metadata)
         if (
@@ -254,13 +452,35 @@ def _query_metric_resolution(
             and not _unit_compatible(requested.get("unit"), metadata.get("unit"))
         ):
             conflicts.append("unit_mismatch")
+        semantic = _semantic_compatibility(
+            name,
+            str(raw.get("matched_text") or candidate_name),
+            candidate_name,
+            metadata,
+            str(expected_object) if expected_object else None,
+            policy,
+        )
+        protected_conflicts = [
+            conflict
+            for conflict in raw_conflicts
+            if str(conflict).startswith("protected_term_difference:")
+        ]
+        soft_conflicts: list[str] = []
+        if protected_conflicts and semantic["status"] == "conflict":
+            conflicts.append(f"protected_semantics_conflict:{semantic['reason']}")
+        elif protected_conflicts and semantic["status"] == "unknown":
+            soft_conflicts.extend(protected_conflicts)
         candidate = {
             "name": candidate_name,
             "confidence": float(raw.get("confidence") or 0.0),
+            "lexical_score": float(raw.get("confidence") or 0.0),
             "evidence": [
                 str(raw.get("match_method") or match.get("match_method") or "name_similarity")
             ],
             "conflicts": sorted(set(conflicts)),
+            "soft_conflicts": sorted(set(soft_conflicts)),
+            "semantic_status": semantic["status"],
+            "semantic": semantic,
             "match_method": raw.get("match_method") or match.get("match_method"),
         }
         if conflicts:
@@ -268,7 +488,7 @@ def _query_metric_resolution(
             continue
         semantic_hint = (
             expected_object == "ratio"
-            and any(token in query for token in ("同比", "增速", "占比", "率"))
+            and any(token in query for token in ("同比", "增速", "增长率", "涨幅", "占比", "率"))
             and actual_object == "ratio"
         )
         provenance = str(requested.get("provenance") or "model_inferred")
@@ -278,24 +498,37 @@ def _query_metric_resolution(
             or provenance in {"user_explicit", "user_formula", "registered_definition", "source_metadata"}
             or semantic_hint
         )
+        if semantic["status"] == "unknown" and not semantic_hint:
+            candidate["strong"] = False
+        if semantic["status"] == "equivalent":
+            candidate["evidence"].append("semantic_equivalence")
         viable.append(candidate)
     viable.sort(key=lambda item: item["confidence"], reverse=True)
     rule = policy["rules"]["query_name_resolution"]["auto"]
-    minimum_confidence = float(rule.get("minimum_confidence", 1.0))
+    evaluation = policy.get("candidate_evaluation") or {}
+    minimum_confidence = float(
+        evaluation.get("lexical_recall_floor", rule.get("minimum_confidence", 1.0))
+    )
     eligible = [
         item for item in viable if item["confidence"] >= minimum_confidence
     ]
-    margin = viable[0]["confidence"] - (viable[1]["confidence"] if len(viable) > 1 else 0.0) if viable else 0.0
+    margin = (
+        eligible[0]["confidence"] - (eligible[1]["confidence"] if len(eligible) > 1 else 0.0)
+        if eligible
+        else 0.0
+    )
     if (
         len(eligible) == 1
-        and margin >= float(rule.get("minimum_candidate_margin", 1.0))
+        and margin >= float(
+            evaluation.get("minimum_candidate_margin", rule.get("minimum_candidate_margin", 1.0))
+        )
         and (eligible[0]["strong"] or not rule.get("require_strong_provenance_or_semantics"))
     ):
         return {
             "action": "auto",
             "status": "bound",
             "binding": eligible[0]["name"],
-            "decision_basis": "policy",
+            "decision_basis": "unique_lexical_candidate_after_semantic_filter",
             "candidates": viable,
             "rejected_candidates": rejected,
         }
@@ -486,6 +719,9 @@ def _intent_candidate_packet(candidate: dict[str, Any]) -> dict[str, Any]:
             "metric_object",
             "requested_terms",
             "confidence",
+            "confidence_detail",
+            "semantic_status",
+            "soft_conflicts",
             "path",
             "grain",
             "dimension",
@@ -546,7 +782,9 @@ def _resolve_business_intent(
                         {
                             "metric": item.get("name"),
                             "confidence": item.get("confidence"),
+                            "semantic_status": item.get("semantic_status"),
                             "conflicts": list(item.get("conflicts") or []),
+                            "soft_conflicts": list(item.get("soft_conflicts") or []),
                         }
                         for item in (resolution.get("candidates") or [])[:3]
                     ],
@@ -577,6 +815,14 @@ def _resolve_business_intent(
                 for period in planning_context.get("periods") or []
                 if (parsed := _normalize_period(period)) is not None
             }
+            selected_resolution_candidate = next(
+                (
+                    item
+                    for item in resolution.get("candidates") or []
+                    if str(item.get("name") or "") == str(binding)
+                ),
+                {},
+            )
             candidate = {
                 "intent_id": hypothesis.get("intent_id"),
                 "status": "viable" if viable else "infeasible",
@@ -587,6 +833,14 @@ def _resolve_business_intent(
                     [float(item.get("confidence") or 0.0) for item in resolution.get("candidates") or []]
                     or [0.0]
                 ),
+                "confidence_detail": {
+                    "lexical": float(selected_resolution_candidate.get("lexical_score") or 0.0),
+                    "semantic": selected_resolution_candidate.get("semantic_status", "unknown"),
+                    "metadata": "pass" if dimension_failure is None else "fail",
+                    "fact_capability": "pass" if viable else "fail",
+                },
+                "semantic_status": selected_resolution_candidate.get("semantic_status", "unknown"),
+                "soft_conflicts": list(selected_resolution_candidate.get("soft_conflicts") or []),
                 "path": path,
                 "grain": next(iter(parsed_grains)) if len(parsed_grains) == 1 else None,
                 "dimension": dimension,
@@ -595,7 +849,9 @@ def _resolve_business_intent(
                     "dimension": dimension_failure or {"status": "available", "dimension": dimension},
                     "periods": period_checks,
                 },
-                "evidence": list(hypothesis.get("evidence") or []) + ["source_metadata_evaluated"],
+                "evidence": list(hypothesis.get("evidence") or [])
+                + ["source_metadata_evaluated"]
+                + (["semantic_equivalence"] if selected_resolution_candidate.get("semantic_status") == "equivalent" else []),
                 "conflicts": [] if viable else sorted({
                     str(item.get("reason"))
                     for item in ([dimension_failure] if dimension_failure else []) + period_checks

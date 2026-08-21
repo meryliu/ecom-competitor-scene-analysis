@@ -1,0 +1,235 @@
+{
+  "schema_version": "analysis_run_state/1.0",
+  "input_hash": "65812c4ba945c3871507efaa55e567c2b6d501623b9901350efa480765e9a98d",
+  "status": "success",
+  "stages": {
+    "input": {
+      "status": "success",
+      "task_count": 1
+    },
+    "source_prepare": {
+      "status": "success",
+      "source_revision": 1165,
+      "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb",
+      "config_hash": "88be25405565cfe3e808851bfe02844a88bd4de46149818937ece30c05948002",
+      "freshness": "live"
+    },
+    "compile": {
+      "status": "success",
+      "task_count": 1,
+      "compiled_task_count": 1,
+      "waiting_confirmation_task_count": 0,
+      "blocked_task_count": 0
+    },
+    "fetch": {
+      "status": "success",
+      "request_hash": "7b1a9e151e7087ac2973e797aba80fcf853f57668c6969a6201568e7c835299d",
+      "source_revision": 1165,
+      "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb",
+      "source_binding": {
+        "schema_version": "source_binding/1.0",
+        "provider_id": "feishu_competitor",
+        "source_id": "competitor_macro_sheet",
+        "config_hash": "88be25405565cfe3e808851bfe02844a88bd4de46149818937ece30c05948002",
+        "revision": 1165,
+        "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb",
+        "freshness": "live",
+        "resolution_policy_hash": "2ad594ad3139946c9e79c58e03b11e6050377b3166170a0af39a2f320d2bcfc7",
+        "business_intent_policy_hash": "8332f908041576831287301631dda9313f710414b67862b68b9aa181de878933",
+        "resolution_engine_version": "2.3.0"
+      },
+      "dimension_set_registry_hash": "9e06214b91e2f6bd13e1f2f8662d5abe535f0ef987cdc05be6d409d0e50833e3"
+    },
+    "execute": {
+      "status": "success",
+      "task_count": 1
+    }
+  },
+  "artifacts": {
+    "resolved_capabilities": {
+      "path": ".runtime/confidence-regression-2026-05-v2/resolved-capabilities.json",
+      "sha256": "b4013e79b619c8a19ca48051893dcc19e1fc76a7dc966fd1b5e5f34b6bc3031e",
+      "bytes": 12231
+    },
+    "prepared_input": {
+      "path": ".runtime/confidence-regression-2026-05-v2/prepared-input.json",
+      "sha256": "751dc828af93d35d96104941a61a7b35d69473768521aafa76948152bcaffa89",
+      "bytes": 6880
+    },
+    "fetch_request": {
+      "path": ".runtime/confidence-regression-2026-05-v2/fetch-request.json",
+      "sha256": "26bdcd7c8bbe888940f518d9d056d0bbbdd0a9b93908b65f6dcd068c92bddd27",
+      "bytes": 3329
+    },
+    "facts": {
+      "path": ".runtime/confidence-regression-2026-05-v2/facts.json",
+      "sha256": "7053e12379895935e46b967b0def9b50b745ebf76ef85ac54e3febd70a73232b",
+      "bytes": 7706
+    },
+    "answer": {
+      "path": ".runtime/confidence-regression-2026-05-v2/answer-payload.json",
+      "sha256": "4dd15e7b82f8c62ebc78e698a022c82d57470e7a34498b0c081579683e2d7b90",
+      "bytes": 2057
+    }
+  },
+  "fetch_attempts": [
+    {
+      "attempt_id": "attempt_1787307435544204000",
+      "request_id": "fetch_bundle_1",
+      "status": "success",
+      "started_at": "2026-08-21T10:17:15.544201+00:00",
+      "ended_at": "2026-08-21T10:17:18.137081+00:00",
+      "duration_ms": 2592.877,
+      "response_format": "scene_facts/2.0",
+      "source": {
+        "url": "https://bytedance.larkoffice.com/wiki/TrBAw0rDXiBrcUkJlbgcjsyYnkg?sheet=ESXBdZ&table=tbl5Ny6EgnsBwEBK&view=vew6r3PPJm",
+        "title": "【电商小策】电商竞品与宏观数据_2608",
+        "revision": 1165,
+        "freshness": "live",
+        "cache_status": "rebuilt",
+        "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb",
+        "source_binding": {
+          "schema_version": "source_binding/1.0",
+          "provider_id": "feishu_competitor",
+          "source_id": "competitor_macro_sheet",
+          "config_hash": "88be25405565cfe3e808851bfe02844a88bd4de46149818937ece30c05948002",
+          "revision": 1165,
+          "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb",
+          "freshness": "live",
+          "resolution_policy_hash": "2ad594ad3139946c9e79c58e03b11e6050377b3166170a0af39a2f320d2bcfc7",
+          "business_intent_policy_hash": "8332f908041576831287301631dda9313f710414b67862b68b9aa181de878933",
+          "resolution_engine_version": "2.3.0"
+        },
+        "dimension_set_registry_hash": "9e06214b91e2f6bd13e1f2f8662d5abe535f0ef987cdc05be6d409d0e50833e3",
+        "warnings": [
+          "数据块拒绝匹配：闭环电商佣金收入 / 平台",
+          "数据块拒绝匹配：闭环电商广告收入 / 平台",
+          "数据块需澄清：社会消费品零售总额 -> 社会消费品零售",
+          "数据块需澄清：社会消费品零售总额增速 -> 社会消费品零售增速"
+        ],
+        "index_path": "/Users/bytedance/Desktop/Job/code/ecom-competitor-scene-analysis-compliant/.runtime/ecom-competitor-scene-cache/cdd0bd54b4287a7bc14877d1/index.json",
+        "call_attempts": [
+          {
+            "operation": "sheets +revision-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 1275.995
+          },
+          {
+            "operation": "wiki +node-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 1065.745
+          },
+          {
+            "operation": "sheets +revision-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 1089.548
+          },
+          {
+            "operation": "sheets +workbook-info",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 973.992
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 1657.634
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 2999.831
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 1369.476
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 2821.198
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 4202.236
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 5525.402
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 1714.189
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 3249.262
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 4680.024
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 5906.527
+          },
+          {
+            "operation": "sheets +revision-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 934.412
+          },
+          {
+            "operation": "sheets +csv-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 1604.695
+          },
+          {
+            "operation": "sheets +revision-get",
+            "attempt": 1,
+            "status": "success",
+            "duration_ms": 987.01
+          }
+        ]
+      },
+      "replayed": false,
+      "raw_bytes": 7706,
+      "facts_artifact": ".runtime/confidence-regression-2026-05-v2/facts.json"
+    }
+  ],
+  "resume_decisions": [
+    {
+      "at": "2026-08-21T10:17:15.544190+00:00",
+      "stage": "fetch",
+      "reused": false,
+      "reason": "disabled"
+    }
+  ],
+  "timings_ms": {
+    "source_prepare": 19860.575,
+    "compile": 7.699,
+    "execute": 22.878,
+    "workflow": 22491.884
+  }
+}

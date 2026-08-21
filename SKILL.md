@@ -2,7 +2,7 @@
 name: ecom-competitor-scene-analysis-compliant
 description: WHEN 用户需要基于竞品飞书宏观表格做竞品事实查询、指标组合、派生指标、时期适配、TOP6平台拆解或可选归因分析时使用；触发关键词：竞品数据、宏观竞品、TOP6平台、竞品指标、竞品归因。DO NOT USE WHEN 用户要求修改源表、创建/发布看板、调用其他 Skill/小策 CLI、查询非竞品宏观数据或绕过飞书权限。
 metadata:
-  version: 1.1.0
+  version: 1.2.0
   source_skill: ecom-competitor-scene-analysis
   compliance: das-databp
 ---
@@ -31,7 +31,7 @@ metadata:
 
 1. 读取统一分析请求契约，从 Query 生成精简 `analysis_ir/1.0`；同一轮多个独立问题生成一个 `analysis_bundle/1.0`。
 2. 只声明用户要求的业务指标、时期、范围、派生和归因目标。不要为标准指标组合补写基础指标，不要为年/季/月粒度降级手写 `input_adaptations` 或计算 AST；统一 runner 根据源表能力生成这些执行细节。
-3. 统一 runner 在编译前按 Query 级事实能力规划生成 canonical selector。复合语义先按 [references/business-intent-policy-registry.json](references/business-intent-policy-registry.json) 生成最多三个原始意图假设，再用同一份实时结构索引联合校验名称、指标对象、元信息粒度/维度/聚合方式、实际事实块和周期；只有完整可执行候选参与自动选择或一次性澄清。规划顺序固定为：规范化任务过滤并继承到所有事实叶子 -> 有界意图假设 -> 指标/维度绑定 -> 元信息能力校验 -> 实际事实块和周期校验 -> `direct_fact` -> 安全 `aggregate_fact` -> 用户明确公式的目标 `formula_computed`。Compile 只消费唯一规划结果，不重新猜指标、粒度、维度或路径；指标因子按普通事实取数，归因目标源事实优先。任务过滤与局部维度冲突时阻断；自动聚合按规范化物理时期复用内部角色；公式目标回退只在乘除公式、直接事实因子和单位量级均可证明时生成显式换算契约。
+3. 统一 runner 在编译前按 Query 级事实能力规划生成 canonical selector。复合语义先按 [references/business-intent-policy-registry.json](references/business-intent-policy-registry.json) 生成最多三个原始意图假设，再用同一份实时结构索引联合校验名称、指标对象、元信息粒度/维度/聚合方式、实际事实块和周期；候选的词面分仅用于召回，保护词按 [references/resolution-policy-registry.json](references/resolution-policy-registry.json) 归一化为比较方式和指标对象，只有完整可执行候选参与自动选择或一次性澄清。规划顺序固定为：规范化任务过滤并继承到所有事实叶子 -> 有界意图假设 -> 指标/维度绑定 -> 元信息能力校验 -> 实际事实块和周期校验 -> `direct_fact` -> 安全 `aggregate_fact` -> 用户明确公式的目标 `formula_computed`。Compile 只消费唯一规划结果，不重新猜指标、粒度、维度或路径；指标因子按普通事实取数，归因目标源事实优先。任务过滤与局部维度冲突时阻断；自动聚合按规范化物理时期复用内部角色；公式目标回退只在乘除公式、直接事实因子和单位量级均可证明时生成显式换算契约。
 4. 只运行一次统一入口：
 
 ```bash

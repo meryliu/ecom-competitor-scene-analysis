@@ -1,0 +1,2196 @@
+{
+  "dimensions": {
+    "TOP4平台": {
+      "aliases": [
+        "各家",
+        "各公司"
+      ],
+      "values": [
+        "淘系",
+        "拼多多",
+        "京东",
+        "抖音"
+      ]
+    },
+    "TOP6平台": {
+      "aliases": [
+        "各家",
+        "各公司"
+      ],
+      "values": [
+        "淘系",
+        "拼多多",
+        "京东",
+        "快手",
+        "视频号",
+        "抖音"
+      ]
+    },
+    "原材料类目": {
+      "aliases": [
+        "原材料品类"
+      ],
+      "values": [
+        "原油",
+        "燃油",
+        "化学纤维",
+        "塑料",
+        "手机内存芯片",
+        "有色金属",
+        "金",
+        "银"
+      ]
+    },
+    "社零类目": {
+      "aliases": [
+        "品类",
+        "行业",
+        "赛道"
+      ],
+      "values": [
+        "粮油食品类",
+        "中西药品类",
+        "饮料类",
+        "日用品类",
+        "烟酒类",
+        "服装鞋帽针纺织品类",
+        "通讯器材类",
+        "文化办公用品类",
+        "化妆品类",
+        "金银珠宝类",
+        "家用电器和音像器材类",
+        "家具类",
+        "建筑及装潢材料类",
+        "汽车类",
+        "石油及制品类"
+      ]
+    }
+  },
+  "metadata_sheets": {
+    "dimension": {
+      "sheet_id": "ukCj5k",
+      "sheet_name": "维度元信息"
+    },
+    "metric": {
+      "sheet_id": "ESXBdZ",
+      "sheet_name": "指标元信息"
+    }
+  },
+  "metrics": {
+    "DAC": {
+      "additive": true,
+      "aggregation": "可聚合,可做加减乘除",
+      "aggregation_mode": "additive",
+      "aliases": [
+        "日度购买用户数"
+      ],
+      "arithmetic": true,
+      "dimensions": [
+        "TOP4平台"
+      ],
+      "notes": "平台维度枚举值仅淘系、京东、拼多多、抖音,区别于其他指标的平台维度枚举值",
+      "supported_grains": [
+        "month"
+      ],
+      "unit": "万人"
+    },
+    "DAC日单量": {
+      "additive": false,
+      "aggregation": "不可聚合",
+      "aggregation_mode": "non_additive",
+      "aliases": [
+        "DAC日频次",
+        "DAC日频"
+      ],
+      "arithmetic": false,
+      "dimensions": [
+        "TOP4平台"
+      ],
+      "notes": "与支付订单量、MAC单月量不同;平台维度枚举值仅淘系、京东、拼多多、抖音,区别于其他指标的平台维度枚举值",
+      "supported_grains": [
+        "month"
+      ],
+      "unit": "单"
+    },
+    "MAC": {
+      "additive": true,
+      "aggregation": "可聚合,可做加减乘除",
+      "aggregation_mode": "additive",
+      "aliases": [
+        "月度购买用户数"
+      ],
+      "arithmetic": true,
+      "dimensions": [
+        "TOP6平台"
+      ],
+      "notes": "",
+      "supported_grains": [
+        "month"
+      ],
+      "unit": "万人"
+    },
+    "MAC月单量": {
+      "additive": false,
+      "aggregation": "不可聚合",
+      "aggregation_mode": "non_additive",
+      "aliases": [
+        "MAC月频次",
+        "MAC月频"
+      ],
+      "arithmetic": false,
+      "dimensions": [
+        "TOP6平台"
+      ],
+      "notes": "",
+      "supported_grains": [
+        "month"
+      ],
+      "unit": "单"
+    },
+    "MAC订单价": {
+      "additive": false,
+      "aggregation": "不可聚合",
+      "aggregation_mode": "non_additive",
+      "aliases": [],
+      "arithmetic": false,
+      "dimensions": [
+        "TOP6平台"
+      ],
+      "notes": "",
+      "supported_grains": [
+        "month"
+      ],
+      "unit": "元"
+    },
+    "剔除抖音包裹后邮政快递揽收量-同比增速": {
+      "additive": false,
+      "aggregation": "不可聚合",
+      "aggregation_mode": "non_additive",
+      "aliases": [
+        "剔抖音快递增速"
+      ],
+      "arithmetic": false,
+      "dimensions": [
+        "无"
+      ],
+      "notes": "剔除抖音包裹后邮政快递揽收量计算公式 = 邮政快递揽收量 - 抖音包裹量",
+      "supported_grains": [
+        "week"
+      ],
+      "unit": "%"
+    },
+    "剔除抖音包裹后邮政行业快递业务量完成量": {
+      "additive": true,
+      "aggregation": "可聚合,可做加减乘除",
+      "aggregation_mode": "additive",
+      "aliases": [
+        "剔抖音大盘快递"
+      ],
+      "arithmetic": true,
+      "dimensions": [
+        "无"
+      ],
+      "notes": "",
+      "supported_grains": [
+        "year"
+      ],
+      "unit": "亿件"
+    },
+    "原材料价格涨幅": {
+      "additive": false,
+      "aggregation": "不可聚合",
+      "aggregation_mode": "non_additive",
+      "aliases": [
+        "原材料价格变化",
+        "原材料价格同比"
+      ],
+      "arithmetic": false,
+      "dimensions": [
+        "原材料类目"
+      ],
+      "notes": "",
+      "supported_grains": [
+        "month"
+      ],
+      "unit": "%"
+    },
+    "实物商品网上零售额": {
+      "additive": true,
+      "aggregation": "可聚合,可做加减乘除",
+      "aggregation_mode": "additive",
+      "aliases": [
+        "线上社零",
+        "线上商品零售",
+        "线上销售额"
+      ],
+      "arithmetic": true,
+      "dimensions": [
+        "无"
+      ],
+      "notes": "仅包含商品零售,无餐饮及服务收入;线上化率计算公式 = 实物商品网上零售额/社会消费品零售总额:商品零售",
+      "supported_grains": [
+        "year"
+      ],
+      "unit": "亿元"
+    },
+    "实物商品网上零售额同比增速": {
+      "additive": false,
+      "aggregation": "不可聚合",
+      "aggregation_mode": "non_additive",
+      "aliases": [
+        "线上社零同比",
+        "线上社零增速",
+        "线上商品零售增速",
+        "线上商品零售同比",
+        "线上同比",
+        "线上增速"
+      ],
+      "arithmetic": false,
+      "dimensions": [
+        "无"
+      ],
+      "notes": "仅包含商品零售;1月不单独披露,2月数字为1+2月合计;线上化率计算公式 = 实物商品网上零售额/社会消费品零售总额:商品零售",
+      "supported_grains": [
+        "month"
+      ],
+      "unit": "%"
+    },
+    "抖音包裹市占率-同比增速": {
+      "additive": false,
+      "aggregation": "不可聚合",
+      "aggregation_mode": "non_additive",
+      "aliases": [
+        "抖音包裹占大盘增速"
+      ],
+      "arithmetic": false,
+      "dimensions": [
+        "无"
+      ],
+      "notes": "抖音市占率计算公式 = 抖音包裹量 / 邮政快递揽收量",
+      "supported_grains": [
+        "week"
+      ],
+      "unit": "pp"
+    },
+    "抖音包裹量": {
+      "additive": true,
+      "aggregation": "可聚合,可做加减乘除",
+      "aggregation_mode": "additive",
+      "aliases": [
+        "抖音快递量"
+      ],
+      "arithmetic": true,
+      "dimensions": [
+        "无"
+      ],
+      "notes": "",
+      "supported_grains": [
+        "week"
+      ],
+      "unit": "亿件"
+    },
+    "支付GMV": {
+      "additive": true,
+      "aggregation": "可聚合,可做加减乘除",
+      "aggregation_mode": "additive",
+      "aliases": [],
+      "arithmetic": true,
+      "dimensions": [
+        "TOP6平台"
+      ],
+      "notes": "",
+      "supported_grains": [
+        "month"
+      ],
+      "unit": "亿元"
+    },
+    "支付订单价": {
+      "additive": false,
+      "aggregation": "不可聚合",
+      "aggregation_mode": "non_additive",
+      "aliases": [],
+      "arithmetic": false,
+      "dimensions": [
+        "TOP6平台"
+      ],
+      "notes": "",
+      "supported_grains": [
+        "month"
+      ],
+      "unit": "元"
+    },
+    "支付订单量": {
+      "additive": true,
+      "aggregation": "可聚合,可做加减乘除",
+      "aggregation_mode": "additive",
+      "aliases": [],
+      "arithmetic": true,
+      "dimensions": [
+        "TOP6平台"
+      ],
+      "notes": "",
+      "supported_grains": [
+        "month"
+      ],
+      "unit": "亿单"
+    },
+    "社会消费品零售": {
+      "additive": true,
+      "aggregation": "可聚合,可做加减乘除",
+      "aggregation_mode": "additive",
+      "aliases": [
+        "社零总额"
+      ],
+      "arithmetic": true,
+      "dimensions": [
+        "无"
+      ],
+      "notes": "包含商品零售+餐饮收入",
+      "supported_grains": [
+        "year"
+      ],
+      "unit": "亿元"
+    },
+    "社会消费品零售增速": {
+      "additive": false,
+      "aggregation": "不可聚合",
+      "aggregation_mode": "non_additive",
+      "aliases": [
+        "社零总额同比增速",
+        "社零总额同比"
+      ],
+      "arithmetic": false,
+      "dimensions": [
+        "无"
+      ],
+      "notes": "包含商品零售+餐饮收入;1月不单独披露,2月数字为1+2月合计",
+      "supported_grains": [
+        "month"
+      ],
+      "unit": "%"
+    },
+    "社会消费品零售总额:商品零售": {
+      "additive": true,
+      "aggregation": "可聚合,可做加减乘除",
+      "aggregation_mode": "additive",
+      "aliases": [
+        "社零商品",
+        "线上+线下零售额"
+      ],
+      "arithmetic": true,
+      "dimensions": [
+        "无"
+      ],
+      "notes": "仅包含商品零售,无餐饮收入",
+      "supported_grains": [
+        "year"
+      ],
+      "unit": "亿元"
+    },
+    "社会消费品零售总额:商品零售增速": {
+      "additive": false,
+      "aggregation": "不可聚合",
+      "aggregation_mode": "non_additive",
+      "aliases": [
+        "社零商品同比增速",
+        "社零商品同比",
+        "线上+线下零售额同比增速",
+        "线上+线下零售额同比",
+        "线上线下零售额同比增速",
+        "线上线下零售额同比"
+      ],
+      "arithmetic": false,
+      "dimensions": [
+        "无"
+      ],
+      "notes": "仅包含商品零售,无餐饮收入;1月不单独披露,2月数字为1+2月合计",
+      "supported_grains": [
+        "month"
+      ],
+      "unit": "%"
+    },
+    "线上化率": {
+      "additive": false,
+      "aggregation": "不可聚合",
+      "aggregation_mode": "non_additive",
+      "aliases": [],
+      "arithmetic": false,
+      "dimensions": [
+        "无"
+      ],
+      "notes": "线上化率计算公式 = 实物商品网上零售额/社会消费品零售总额:商品零售",
+      "supported_grains": [
+        "month"
+      ],
+      "unit": "%"
+    },
+    "结算GMV": {
+      "additive": true,
+      "aggregation": "可聚合,可做加减乘除",
+      "aggregation_mode": "additive",
+      "aliases": [],
+      "arithmetic": true,
+      "dimensions": [
+        "TOP6平台"
+      ],
+      "notes": "",
+      "supported_grains": [
+        "month"
+      ],
+      "unit": "亿元"
+    },
+    "邮政快递揽收量": {
+      "additive": true,
+      "aggregation": "可聚合,可做加减乘除",
+      "aggregation_mode": "additive",
+      "aliases": [
+        "大盘快递",
+        "快递总量"
+      ],
+      "arithmetic": true,
+      "dimensions": [
+        "无"
+      ],
+      "notes": "包含电商快递和非电商快递",
+      "supported_grains": [
+        "week"
+      ],
+      "unit": "亿件"
+    },
+    "邮政快递揽收量-同比增速": {
+      "additive": false,
+      "aggregation": "不可聚合",
+      "aggregation_mode": "non_additive",
+      "aliases": [
+        "大盘快递同比"
+      ],
+      "arithmetic": false,
+      "dimensions": [
+        "无"
+      ],
+      "notes": "",
+      "supported_grains": [
+        "week"
+      ],
+      "unit": "%"
+    },
+    "邮政行业快递业务量完成量": {
+      "additive": true,
+      "aggregation": "可聚合,可做加减乘除",
+      "aggregation_mode": "additive",
+      "aliases": [
+        "大盘快递",
+        "快递总量"
+      ],
+      "arithmetic": true,
+      "dimensions": [
+        "无"
+      ],
+      "notes": "包含电商快递和非电商快递",
+      "supported_grains": [
+        "year"
+      ],
+      "unit": "亿件"
+    },
+    "闭环电商佣金收入": {
+      "additive": true,
+      "aggregation": "可聚合,可做加减乘除",
+      "aggregation_mode": "additive",
+      "aliases": [],
+      "arithmetic": true,
+      "dimensions": [
+        "TOP6平台"
+      ],
+      "notes": "",
+      "supported_grains": [
+        "month"
+      ],
+      "unit": "亿元"
+    },
+    "闭环电商广告收入": {
+      "additive": true,
+      "aggregation": "可聚合,可做加减乘除",
+      "aggregation_mode": "additive",
+      "aliases": [],
+      "arithmetic": true,
+      "dimensions": [
+        "TOP6平台"
+      ],
+      "notes": "",
+      "supported_grains": [
+        "month"
+      ],
+      "unit": "亿元"
+    },
+    "限额以上企业零售额增速": {
+      "additive": false,
+      "aggregation": "不可聚合",
+      "aggregation_mode": "non_additive",
+      "aliases": [
+        "社零分类目同比增速",
+        "社零分类目同比",
+        "线上+线下分类目同比增速",
+        "线上+线下分类目同比",
+        "分类目同比增速",
+        "分类目同比"
+      ],
+      "arithmetic": false,
+      "dimensions": [
+        "社零类目"
+      ],
+      "notes": "包含线上+线下;1月不单独披露,2月数字为1+2月合计;需提醒用户该类目口径仅包含限额以上单位是指年主营业务收入2000万元及以上的批发业企业(单位、个体户)、500万元及以上的零售业企业(单位、个体户)、200万元及以上的住宿和餐饮业企业(单位、个体户)",
+      "supported_grains": [
+        "month"
+      ],
+      "unit": "%"
+    }
+  },
+  "schema_version": "competitor_source_index/2.2",
+  "sheets": {
+    "month": {
+      "available": true,
+      "blocks": {
+        "DAC": {
+          "dimension": "TOP4平台",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "TOP4平台",
+                "name": "TOP4平台"
+              }
+            ],
+            "canonical_name": "TOP4平台",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "TOP4平台"
+          },
+          "header_row": 43,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "DAC",
+                "name": "DAC"
+              }
+            ],
+            "canonical_name": "DAC",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "DAC"
+          },
+          "raw_dimension": "TOP4平台",
+          "raw_metric": "DAC",
+          "rows": {
+            "京东": 45,
+            "抖音": 47,
+            "拼多多": 46,
+            "淘系": 44
+          }
+        },
+        "DAC日单量": {
+          "dimension": "TOP4平台",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "TOP4平台",
+                "name": "TOP4平台"
+              }
+            ],
+            "canonical_name": "TOP4平台",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "TOP4平台"
+          },
+          "header_row": 49,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "DAC日单量",
+                "name": "DAC日单量"
+              }
+            ],
+            "canonical_name": "DAC日单量",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "DAC日单量"
+          },
+          "raw_dimension": "TOP4平台",
+          "raw_metric": "DAC日单量",
+          "rows": {
+            "京东": 51,
+            "抖音": 53,
+            "拼多多": 52,
+            "淘系": 50
+          }
+        },
+        "MAC": {
+          "dimension": "TOP6平台",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "TOP6平台",
+                "name": "TOP6平台"
+              }
+            ],
+            "canonical_name": "TOP6平台",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "TOP6平台"
+          },
+          "header_row": 19,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "MAC",
+                "name": "MAC"
+              }
+            ],
+            "canonical_name": "MAC",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "MAC"
+          },
+          "raw_dimension": "TOP6平台",
+          "raw_metric": "MAC",
+          "rows": {
+            "京东": 21,
+            "快手": 23,
+            "抖音": 25,
+            "拼多多": 22,
+            "淘系": 20,
+            "视频号": 24
+          }
+        },
+        "MAC月单量": {
+          "dimension": "TOP6平台",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "TOP6平台",
+                "name": "TOP6平台"
+              }
+            ],
+            "canonical_name": "TOP6平台",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "TOP6平台"
+          },
+          "header_row": 27,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "MAC月单量",
+                "name": "MAC月单量"
+              }
+            ],
+            "canonical_name": "MAC月单量",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "MAC月单量"
+          },
+          "raw_dimension": "TOP6平台",
+          "raw_metric": "MAC月单量",
+          "rows": {
+            "京东": 29,
+            "快手": 31,
+            "抖音": 33,
+            "拼多多": 30,
+            "淘系": 28,
+            "视频号": 32
+          }
+        },
+        "MAC订单价": {
+          "dimension": "TOP6平台",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "TOP6平台",
+                "name": "TOP6平台"
+              }
+            ],
+            "canonical_name": "TOP6平台",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "TOP6平台"
+          },
+          "header_row": 35,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "MAC订单价",
+                "name": "MAC订单价"
+              }
+            ],
+            "canonical_name": "MAC订单价",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "MAC订单价"
+          },
+          "raw_dimension": "TOP6平台",
+          "raw_metric": "MAC订单价",
+          "rows": {
+            "京东": 37,
+            "快手": 39,
+            "抖音": 41,
+            "拼多多": 38,
+            "淘系": 36,
+            "视频号": 40
+          }
+        },
+        "剔除抖音包裹后邮政行业快递业务量完成量": {
+          "dimension": "无",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "name": "无"
+              }
+            ],
+            "canonical_name": "无",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "explicit_no_dimension"
+            ],
+            "match_method": "no_dimension",
+            "source_value": "无"
+          },
+          "header_row": 87,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "剔除抖音包裹后邮政行业快递业务量完成量",
+                "name": "剔除抖音包裹后邮政行业快递业务量完成量"
+              }
+            ],
+            "canonical_name": "剔除抖音包裹后邮政行业快递业务量完成量",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "剔除抖音包裹后邮政行业快递业务量完成量"
+          },
+          "raw_dimension": "无",
+          "raw_metric": "剔除抖音包裹后邮政行业快递业务量完成量",
+          "rows": {
+            "整体": 88
+          }
+        },
+        "原材料价格涨幅": {
+          "dimension": "原材料类目",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "原材料类目",
+                "name": "原材料类目"
+              }
+            ],
+            "canonical_name": "原材料类目",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "原材料类目"
+          },
+          "header_row": 90,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "原材料价格涨幅",
+                "name": "原材料价格涨幅"
+              }
+            ],
+            "canonical_name": "原材料价格涨幅",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "原材料价格涨幅"
+          },
+          "raw_dimension": "原材料类目",
+          "raw_metric": "原材料价格涨幅",
+          "rows": {
+            "化学纤维": 93,
+            "原油": 91,
+            "塑料": 94,
+            "手机内存芯片": 95,
+            "有色金属": 96,
+            "燃油": 92,
+            "金": 97,
+            "银": 98
+          }
+        },
+        "实物商品网上零售额同比增速": {
+          "dimension": "无",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "name": "无"
+              }
+            ],
+            "canonical_name": "无",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "explicit_no_dimension"
+            ],
+            "match_method": "no_dimension",
+            "source_value": "无"
+          },
+          "header_row": 61,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "实物商品网上零售额同比增速",
+                "name": "实物商品网上零售额同比增速"
+              }
+            ],
+            "canonical_name": "实物商品网上零售额同比增速",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "实物商品网上零售额同比增速"
+          },
+          "raw_dimension": "无",
+          "raw_metric": "实物商品网上零售额同比增速",
+          "rows": {
+            "整体": 62
+          }
+        },
+        "支付GMV": {
+          "dimension": "TOP6平台",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "TOP6平台",
+                "name": "TOP6平台"
+              }
+            ],
+            "canonical_name": "TOP6平台",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "TOP6平台"
+          },
+          "header_row": 3,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "支付GMV",
+                "name": "支付GMV"
+              }
+            ],
+            "canonical_name": "支付GMV",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "支付GMV"
+          },
+          "raw_dimension": "TOP6平台",
+          "raw_metric": "支付GMV",
+          "rows": {
+            "京东": 5,
+            "快手": 7,
+            "抖音": 9,
+            "拼多多": 6,
+            "淘系": 4,
+            "视频号": 8
+          }
+        },
+        "社会消费品零售总额:商品零售增速": {
+          "dimension": "无",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "name": "无"
+              }
+            ],
+            "canonical_name": "无",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "explicit_no_dimension"
+            ],
+            "match_method": "no_dimension",
+            "source_value": "无"
+          },
+          "header_row": 58,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "社会消费品零售总额:商品零售增速",
+                "name": "社会消费品零售总额:商品零售增速"
+              }
+            ],
+            "canonical_name": "社会消费品零售总额:商品零售增速",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "社会消费品零售总额:商品零售增速"
+          },
+          "raw_dimension": "无",
+          "raw_metric": "社会消费品零售总额:商品零售增速",
+          "rows": {
+            "整体": 59
+          }
+        },
+        "线上化率": {
+          "dimension": "无",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "name": "无"
+              }
+            ],
+            "canonical_name": "无",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "explicit_no_dimension"
+            ],
+            "match_method": "no_dimension",
+            "source_value": "无"
+          },
+          "header_row": 64,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "线上化率",
+                "name": "线上化率"
+              }
+            ],
+            "canonical_name": "线上化率",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "线上化率"
+          },
+          "raw_dimension": "无",
+          "raw_metric": "线上化率",
+          "rows": {
+            "整体": 65
+          }
+        },
+        "结算GMV": {
+          "dimension": "TOP6平台",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "TOP6平台",
+                "name": "TOP6平台"
+              }
+            ],
+            "canonical_name": "TOP6平台",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "TOP6平台"
+          },
+          "header_row": 11,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "结算GMV",
+                "name": "结算GMV"
+              }
+            ],
+            "canonical_name": "结算GMV",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "结算GMV"
+          },
+          "raw_dimension": "TOP6平台",
+          "raw_metric": "结算GMV",
+          "rows": {
+            "京东": 13,
+            "快手": 15,
+            "抖音": 17,
+            "拼多多": 14,
+            "淘系": 12,
+            "视频号": 16
+          }
+        },
+        "邮政行业快递业务量完成量": {
+          "dimension": "无",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "name": "无"
+              }
+            ],
+            "canonical_name": "无",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "explicit_no_dimension"
+            ],
+            "match_method": "no_dimension",
+            "source_value": "无"
+          },
+          "header_row": 84,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "邮政行业快递业务量完成量",
+                "name": "邮政行业快递业务量完成量"
+              }
+            ],
+            "canonical_name": "邮政行业快递业务量完成量",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "邮政行业快递业务量完成量"
+          },
+          "raw_dimension": "无",
+          "raw_metric": "邮政行业快递业务量完成量",
+          "rows": {
+            "整体": 85
+          }
+        },
+        "限额以上企业零售额增速": {
+          "dimension": "社零类目",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "社零类目",
+                "name": "社零类目"
+              }
+            ],
+            "canonical_name": "社零类目",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "社零类目"
+          },
+          "header_row": 67,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "限额以上企业零售额增速",
+                "name": "限额以上企业零售额增速"
+              }
+            ],
+            "canonical_name": "限额以上企业零售额增速",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "限额以上企业零售额增速"
+          },
+          "raw_dimension": "社零类目",
+          "raw_metric": "限额以上企业零售额增速",
+          "rows": {
+            "中西药品类": 69,
+            "化妆品类": 76,
+            "家具类": 79,
+            "家用电器和音像器材类": 78,
+            "建筑及装潢材料类": 80,
+            "文化办公用品类": 75,
+            "日用品类": 71,
+            "服装鞋帽针纺织品类": 73,
+            "汽车类": 81,
+            "烟酒类": 72,
+            "石油及制品类": 82,
+            "粮油食品类": 68,
+            "通讯器材类": 74,
+            "金银珠宝类": 77,
+            "饮料类": 70
+          }
+        }
+      },
+      "granularity": "month",
+      "name_hint": "month",
+      "period_row": 1,
+      "periods": {
+        "2022-01": "B",
+        "2022-02": "C",
+        "2022-03": "D",
+        "2022-04": "E",
+        "2022-05": "F",
+        "2022-06": "G",
+        "2022-07": "H",
+        "2022-08": "I",
+        "2022-09": "J",
+        "2022-10": "K",
+        "2022-11": "L",
+        "2022-12": "M",
+        "2023-01": "N",
+        "2023-02": "O",
+        "2023-03": "P",
+        "2023-04": "Q",
+        "2023-05": "R",
+        "2023-06": "S",
+        "2023-07": "T",
+        "2023-08": "U",
+        "2023-09": "V",
+        "2023-10": "W",
+        "2023-11": "X",
+        "2023-12": "Y",
+        "2024-01": "Z",
+        "2024-02": "AA",
+        "2024-03": "AB",
+        "2024-04": "AC",
+        "2024-05": "AD",
+        "2024-06": "AE",
+        "2024-07": "AF",
+        "2024-08": "AG",
+        "2024-09": "AH",
+        "2024-10": "AI",
+        "2024-11": "AJ",
+        "2024-12": "AK",
+        "2025-01": "AL",
+        "2025-02": "AM",
+        "2025-03": "AN",
+        "2025-04": "AO",
+        "2025-05": "AP",
+        "2025-06": "AQ",
+        "2025-07": "AR",
+        "2025-08": "AS",
+        "2025-09": "AT",
+        "2025-10": "AU",
+        "2025-11": "AV",
+        "2025-12": "AW",
+        "2026-01": "AX",
+        "2026-02": "AY",
+        "2026-03": "AZ",
+        "2026-04": "BA",
+        "2026-05": "BB",
+        "2026-06": "BC",
+        "2026-07": "BD"
+      },
+      "reason": null,
+      "sheet_id": "Hia4IK",
+      "sheet_name": "月度表",
+      "unresolved_blocks": [
+        {
+          "decision": "clarify",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "name": "无"
+              }
+            ],
+            "canonical_name": "无",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "explicit_no_dimension"
+            ],
+            "match_method": "no_dimension",
+            "source_value": "无"
+          },
+          "header_row": 55,
+          "metric_match": {
+            "candidate_margin": 0.042,
+            "candidates": [
+              {
+                "confidence": 0.922,
+                "conflicts": [],
+                "dimension_match": true,
+                "match_method": "contextual:standard_name",
+                "matched_text": "社会消费品零售增速",
+                "name": "社会消费品零售增速",
+                "name_similarity": 0.9,
+                "row_overlap": null
+              },
+              {
+                "confidence": 0.88,
+                "conflicts": [],
+                "dimension_match": true,
+                "match_method": "contextual:standard_name",
+                "matched_text": "社会消费品零售总额:商品零售增速",
+                "name": "社会消费品零售总额:商品零售增速",
+                "name_similarity": 0.846154,
+                "row_overlap": null
+              },
+              {
+                "confidence": 0.826667,
+                "conflicts": [
+                  "protected_term_difference:增速"
+                ],
+                "dimension_match": true,
+                "match_method": "contextual:standard_name",
+                "matched_text": "社会消费品零售",
+                "name": "社会消费品零售",
+                "name_similarity": 0.777778,
+                "row_overlap": null
+              }
+            ],
+            "canonical_name": null,
+            "confidence": 0.922,
+            "conflicts": [],
+            "decision": "clarify",
+            "evidence": [
+              "name_similarity",
+              "dimension_exact"
+            ],
+            "match_method": "contextual:standard_name",
+            "source_value": "社会消费品零售总额增速",
+            "suggested_name": "社会消费品零售增速"
+          },
+          "raw_dimension": "无",
+          "raw_metric": "社会消费品零售总额增速",
+          "rows": {
+            "整体": 56
+          }
+        }
+      ],
+      "warnings": [
+        "数据块需澄清：社会消费品零售总额增速 -> 社会消费品零售增速"
+      ]
+    },
+    "quarter": {
+      "available": false,
+      "blocks": {},
+      "granularity": "quarter",
+      "name_hint": "quarter",
+      "period_row": 1,
+      "periods": {
+        "2022-Q1": "B",
+        "2022-Q2": "C",
+        "2022-Q3": "D",
+        "2022-Q4": "E",
+        "2023-Q1": "F",
+        "2023-Q2": "G",
+        "2023-Q3": "H",
+        "2023-Q4": "I",
+        "2024-Q1": "J",
+        "2024-Q2": "K",
+        "2024-Q3": "L",
+        "2024-Q4": "M",
+        "2025-Q1": "N",
+        "2025-Q2": "O",
+        "2025-Q3": "P",
+        "2025-Q4": "Q",
+        "2026-Q1": "R",
+        "2026-Q2": "S"
+      },
+      "reason": "已发现标准周期表头，但指标块尚待解析",
+      "sheet_id": "1SZQcN",
+      "sheet_name": "季度表",
+      "unresolved_blocks": [
+        {
+          "decision": "reject",
+          "dimension_match": {
+            "candidate_margin": 0.0,
+            "candidates": [
+              {
+                "confidence": 0.5,
+                "conflicts": [],
+                "dimension_match": null,
+                "match_method": "contextual:standard_name",
+                "matched_text": "TOP6平台",
+                "name": "TOP6平台",
+                "name_similarity": 0.5,
+                "row_overlap": null
+              },
+              {
+                "confidence": 0.5,
+                "conflicts": [],
+                "dimension_match": null,
+                "match_method": "contextual:standard_name",
+                "matched_text": "TOP4平台",
+                "name": "TOP4平台",
+                "name_similarity": 0.5,
+                "row_overlap": null
+              },
+              {
+                "confidence": 0.0,
+                "conflicts": [],
+                "dimension_match": null,
+                "match_method": "contextual:standard_name",
+                "matched_text": "社零类目",
+                "name": "社零类目",
+                "name_similarity": 0.0,
+                "row_overlap": null
+              }
+            ],
+            "canonical_name": null,
+            "confidence": 0.5,
+            "conflicts": [],
+            "decision": "reject",
+            "evidence": [
+              "name_similarity"
+            ],
+            "match_method": "contextual:standard_name",
+            "source_value": "平台",
+            "suggested_name": "TOP6平台"
+          },
+          "header_row": 3,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "闭环电商广告收入",
+                "name": "闭环电商广告收入"
+              }
+            ],
+            "canonical_name": "闭环电商广告收入",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "闭环电商广告收入"
+          },
+          "raw_dimension": "平台",
+          "raw_metric": "闭环电商广告收入",
+          "rows": {
+            "京东": 7,
+            "快手": 8,
+            "抖音": 4,
+            "拼多多": 6,
+            "视频号": 9,
+            "阿里": 5
+          }
+        },
+        {
+          "decision": "reject",
+          "dimension_match": {
+            "candidate_margin": 0.0,
+            "candidates": [
+              {
+                "confidence": 0.5,
+                "conflicts": [],
+                "dimension_match": null,
+                "match_method": "contextual:standard_name",
+                "matched_text": "TOP6平台",
+                "name": "TOP6平台",
+                "name_similarity": 0.5,
+                "row_overlap": null
+              },
+              {
+                "confidence": 0.5,
+                "conflicts": [],
+                "dimension_match": null,
+                "match_method": "contextual:standard_name",
+                "matched_text": "TOP4平台",
+                "name": "TOP4平台",
+                "name_similarity": 0.5,
+                "row_overlap": null
+              },
+              {
+                "confidence": 0.0,
+                "conflicts": [],
+                "dimension_match": null,
+                "match_method": "contextual:standard_name",
+                "matched_text": "社零类目",
+                "name": "社零类目",
+                "name_similarity": 0.0,
+                "row_overlap": null
+              }
+            ],
+            "canonical_name": null,
+            "confidence": 0.5,
+            "conflicts": [],
+            "decision": "reject",
+            "evidence": [
+              "name_similarity"
+            ],
+            "match_method": "contextual:standard_name",
+            "source_value": "平台",
+            "suggested_name": "TOP6平台"
+          },
+          "header_row": 12,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "闭环电商佣金收入",
+                "name": "闭环电商佣金收入"
+              }
+            ],
+            "canonical_name": "闭环电商佣金收入",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "闭环电商佣金收入"
+          },
+          "raw_dimension": "平台",
+          "raw_metric": "闭环电商佣金收入",
+          "rows": {
+            "京东(仅3P佣金)": 16,
+            "京东(可比口径,3P佣金+1P自营货盘采销价差-1P履约)": 19,
+            "快手": 17,
+            "抖音": 13,
+            "拼多多": 15,
+            "视频号": 18,
+            "阿里": 14
+          }
+        }
+      ],
+      "warnings": [
+        "数据块拒绝匹配：闭环电商广告收入 / 平台",
+        "数据块拒绝匹配：闭环电商佣金收入 / 平台"
+      ]
+    },
+    "week": {
+      "available": true,
+      "blocks": {
+        "剔除抖音包裹后邮政快递揽收量-同比增速": {
+          "dimension": "无",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "name": "无"
+              }
+            ],
+            "canonical_name": "无",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "explicit_no_dimension"
+            ],
+            "match_method": "no_dimension",
+            "source_value": "无"
+          },
+          "header_row": 13,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "剔除抖音包裹后邮政快递揽收量-同比增速",
+                "name": "剔除抖音包裹后邮政快递揽收量-同比增速"
+              }
+            ],
+            "canonical_name": "剔除抖音包裹后邮政快递揽收量-同比增速",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "剔除抖音包裹后邮政快递揽收量-同比增速"
+          },
+          "raw_dimension": "无",
+          "raw_metric": "剔除抖音包裹后邮政快递揽收量-同比增速",
+          "rows": {
+            "整体": 14
+          }
+        },
+        "抖音包裹市占率-同比增速": {
+          "dimension": "无",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "name": "无"
+              }
+            ],
+            "canonical_name": "无",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "explicit_no_dimension"
+            ],
+            "match_method": "no_dimension",
+            "source_value": "无"
+          },
+          "header_row": 16,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "抖音包裹市占率-同比增速",
+                "name": "抖音包裹市占率-同比增速"
+              }
+            ],
+            "canonical_name": "抖音包裹市占率-同比增速",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "抖音包裹市占率-同比增速"
+          },
+          "raw_dimension": "无",
+          "raw_metric": "抖音包裹市占率-同比增速",
+          "rows": {
+            "整体": 17
+          }
+        },
+        "抖音包裹量": {
+          "dimension": "无",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "name": "无"
+              }
+            ],
+            "canonical_name": "无",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "explicit_no_dimension"
+            ],
+            "match_method": "no_dimension",
+            "source_value": "无"
+          },
+          "header_row": 10,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "抖音包裹量",
+                "name": "抖音包裹量"
+              }
+            ],
+            "canonical_name": "抖音包裹量",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "抖音包裹量"
+          },
+          "raw_dimension": "无",
+          "raw_metric": "抖音包裹量",
+          "rows": {
+            "整体": 11
+          }
+        },
+        "邮政快递揽收量": {
+          "dimension": "无",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "name": "无"
+              }
+            ],
+            "canonical_name": "无",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "explicit_no_dimension"
+            ],
+            "match_method": "no_dimension",
+            "source_value": "无"
+          },
+          "header_row": 4,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "邮政快递揽收量",
+                "name": "邮政快递揽收量"
+              }
+            ],
+            "canonical_name": "邮政快递揽收量",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "邮政快递揽收量"
+          },
+          "raw_dimension": "无",
+          "raw_metric": "邮政快递揽收量",
+          "rows": {
+            "整体": 5
+          }
+        },
+        "邮政快递揽收量-同比增速": {
+          "dimension": "无",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "name": "无"
+              }
+            ],
+            "canonical_name": "无",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "explicit_no_dimension"
+            ],
+            "match_method": "no_dimension",
+            "source_value": "无"
+          },
+          "header_row": 7,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "邮政快递揽收量-同比增速",
+                "name": "邮政快递揽收量-同比增速"
+              }
+            ],
+            "canonical_name": "邮政快递揽收量-同比增速",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "邮政快递揽收量-同比增速"
+          },
+          "raw_dimension": "无",
+          "raw_metric": "邮政快递揽收量-同比增速",
+          "rows": {
+            "整体": 8
+          }
+        }
+      },
+      "granularity": "week",
+      "name_hint": "week",
+      "period_row": 1,
+      "periods": {
+        "2025-W02": "B",
+        "2025-W03": "C",
+        "2025-W04": "D",
+        "2025-W05": "E",
+        "2025-W06": "F",
+        "2025-W07": "G",
+        "2025-W08": "H",
+        "2025-W09": "I",
+        "2025-W10": "J",
+        "2025-W11": "K",
+        "2025-W12": "L",
+        "2025-W13": "M",
+        "2025-W14": "N",
+        "2025-W15": "O",
+        "2025-W16": "P",
+        "2025-W17": "Q",
+        "2025-W18": "R",
+        "2025-W19": "S",
+        "2025-W20": "T",
+        "2025-W21": "U",
+        "2025-W22": "V",
+        "2025-W23": "W",
+        "2025-W24": "X",
+        "2025-W25": "Y",
+        "2025-W26": "Z",
+        "2025-W27": "AA",
+        "2025-W28": "AB",
+        "2025-W29": "AC",
+        "2025-W30": "AD",
+        "2025-W31": "AE",
+        "2025-W32": "AF",
+        "2025-W33": "AG",
+        "2025-W34": "AH",
+        "2025-W35": "AI",
+        "2025-W36": "AJ",
+        "2025-W37": "AK",
+        "2025-W38": "AL",
+        "2025-W39": "AM",
+        "2025-W40": "AN",
+        "2025-W41": "AO",
+        "2025-W42": "AP",
+        "2025-W43": "AQ",
+        "2025-W44": "AR",
+        "2025-W45": "AS",
+        "2025-W46": "AT",
+        "2025-W47": "AU",
+        "2025-W48": "AV",
+        "2025-W49": "AW",
+        "2025-W50": "AX",
+        "2025-W51": "AY",
+        "2025-W52": "AZ",
+        "2025-W53": "BA",
+        "2026-W02": "BB",
+        "2026-W03": "BC",
+        "2026-W04": "BD",
+        "2026-W05": "BE",
+        "2026-W06": "BF",
+        "2026-W07": "BG",
+        "2026-W08": "BH",
+        "2026-W09": "BI",
+        "2026-W10": "BJ",
+        "2026-W11": "BK",
+        "2026-W12": "BL",
+        "2026-W13": "BM",
+        "2026-W14": "BN",
+        "2026-W15": "BO",
+        "2026-W16": "BP",
+        "2026-W17": "BQ",
+        "2026-W18": "BR",
+        "2026-W19": "BS",
+        "2026-W20": "BT",
+        "2026-W21": "BU",
+        "2026-W22": "BV",
+        "2026-W23": "BW",
+        "2026-W24": "BX",
+        "2026-W25": "BY",
+        "2026-W26": "BZ",
+        "2026-W27": "CA",
+        "2026-W28": "CB",
+        "2026-W29": "CC",
+        "2026-W30": "CD",
+        "2026-W31": "CE",
+        "2026-W32": "CF",
+        "2026-W33": "CG"
+      },
+      "reason": null,
+      "sheet_id": "lw66O0",
+      "sheet_name": "周度表",
+      "unresolved_blocks": [],
+      "warnings": []
+    },
+    "year": {
+      "available": true,
+      "blocks": {
+        "实物商品网上零售额": {
+          "dimension": "无",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "name": "无"
+              }
+            ],
+            "canonical_name": "无",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "explicit_no_dimension"
+            ],
+            "match_method": "no_dimension",
+            "source_value": "无"
+          },
+          "header_row": 9,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "实物商品网上零售额",
+                "name": "实物商品网上零售额"
+              }
+            ],
+            "canonical_name": "实物商品网上零售额",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "实物商品网上零售额"
+          },
+          "raw_dimension": "无",
+          "raw_metric": "实物商品网上零售额",
+          "rows": {
+            "整体": 10
+          }
+        },
+        "社会消费品零售总额:商品零售": {
+          "dimension": "无",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "name": "无"
+              }
+            ],
+            "canonical_name": "无",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "explicit_no_dimension"
+            ],
+            "match_method": "no_dimension",
+            "source_value": "无"
+          },
+          "header_row": 6,
+          "metric_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "conflicts": [],
+                "match_method": "standard_name",
+                "matched_text": "社会消费品零售总额:商品零售",
+                "name": "社会消费品零售总额:商品零售"
+              }
+            ],
+            "canonical_name": "社会消费品零售总额:商品零售",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "standard_name"
+            ],
+            "match_method": "standard_name",
+            "source_value": "社会消费品零售总额: 商品零售"
+          },
+          "raw_dimension": "无",
+          "raw_metric": "社会消费品零售总额: 商品零售",
+          "rows": {
+            "整体": 7
+          }
+        }
+      },
+      "granularity": "year",
+      "name_hint": "year",
+      "period_row": 1,
+      "periods": {
+        "2022": "B",
+        "2023": "C",
+        "2024": "D",
+        "2025": "E"
+      },
+      "reason": null,
+      "sheet_id": "gaEAJs",
+      "sheet_name": "年度表",
+      "unresolved_blocks": [
+        {
+          "decision": "clarify",
+          "dimension_match": {
+            "candidate_margin": 1.0,
+            "candidates": [
+              {
+                "confidence": 1.0,
+                "name": "无"
+              }
+            ],
+            "canonical_name": "无",
+            "confidence": 1.0,
+            "conflicts": [],
+            "decision": "auto",
+            "evidence": [
+              "explicit_no_dimension"
+            ],
+            "match_method": "no_dimension",
+            "source_value": "无"
+          },
+          "header_row": 3,
+          "metric_match": {
+            "candidate_margin": 0.044318,
+            "candidates": [
+              {
+                "confidence": 0.9025,
+                "conflicts": [],
+                "dimension_match": true,
+                "match_method": "contextual:standard_name",
+                "matched_text": "社会消费品零售",
+                "name": "社会消费品零售",
+                "name_similarity": 0.875,
+                "row_overlap": null
+              },
+              {
+                "confidence": 0.858182,
+                "conflicts": [],
+                "dimension_match": true,
+                "match_method": "contextual:standard_name",
+                "matched_text": "社会消费品零售总额:商品零售",
+                "name": "社会消费品零售总额:商品零售",
+                "name_similarity": 0.818182,
+                "row_overlap": null
+              },
+              {
+                "confidence": 0.826667,
+                "conflicts": [
+                  "protected_term_difference:增速"
+                ],
+                "dimension_match": true,
+                "match_method": "contextual:standard_name",
+                "matched_text": "社会消费品零售增速",
+                "name": "社会消费品零售增速",
+                "name_similarity": 0.777778,
+                "row_overlap": null
+              }
+            ],
+            "canonical_name": null,
+            "confidence": 0.9025,
+            "conflicts": [],
+            "decision": "clarify",
+            "evidence": [
+              "name_similarity",
+              "dimension_exact"
+            ],
+            "match_method": "contextual:standard_name",
+            "source_value": "社会消费品零售总额",
+            "suggested_name": "社会消费品零售"
+          },
+          "raw_dimension": "无",
+          "raw_metric": "社会消费品零售总额",
+          "rows": {
+            "整体": 4
+          }
+        }
+      ],
+      "warnings": [
+        "数据块需澄清：社会消费品零售总额 -> 社会消费品零售"
+      ]
+    }
+  },
+  "source": {
+    "fetched_at": "2026-08-21T10:17:15.518952+00:00",
+    "revision": 1165,
+    "schema_hash": "18fb2ec4b2fe6dce3ba1d0a8966552778ce3d0da755766c4f2bdc0cfcbd40bcb",
+    "spreadsheet_token": "Iz2gsIcM0hGaDxtQEnNciqetngf",
+    "title": "【电商小策】电商竞品与宏观数据_2608",
+    "url": "https://bytedance.larkoffice.com/wiki/TrBAw0rDXiBrcUkJlbgcjsyYnkg?sheet=ESXBdZ&table=tbl5Ny6EgnsBwEBK&view=vew6r3PPJm",
+    "wiki_node_token": "TrBAw0rDXiBrcUkJlbgcjsyYnkg"
+  },
+  "status": "ok",
+  "values": {},
+  "warnings": [
+    "数据块拒绝匹配：闭环电商佣金收入 / 平台",
+    "数据块拒绝匹配：闭环电商广告收入 / 平台",
+    "数据块需澄清：社会消费品零售总额 -> 社会消费品零售",
+    "数据块需澄清：社会消费品零售总额增速 -> 社会消费品零售增速"
+  ]
+}

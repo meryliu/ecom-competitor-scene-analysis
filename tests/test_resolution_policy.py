@@ -440,6 +440,43 @@ class ResolutionPolicyTests(unittest.TestCase):
         self.assertEqual(ratio["status"], "infeasible")
         self.assertIn("operation_metric_object_unsupported", ratio["conflicts"])
 
+    def test_intent_candidate_uses_unique_capability_evidence_for_fragmented_alias(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "实物商品网上零售额同比增速": {
+                    "aliases": ["线上社零同比", "增速"], "unit": "%",
+                    "metric_object": "ratio", "supported_grains": ["month"],
+                    "dimensions": ["无"],
+                },
+                "社会消费品零售增速": {
+                    "aliases": ["社零总额同比", "增速"], "unit": "%",
+                    "metric_object": "ratio", "supported_grains": ["month"],
+                    "dimensions": ["无"],
+                },
+            },
+            "dimensions": {},
+            "sheets": {"month": {
+                "available": True, "periods": {"2026-04": "B", "2026-05": "C"},
+                "blocks": {"实物商品网上零售额同比增速": {"dimension": "无"}},
+            }},
+        }
+        request = {"metrics": ["线上社零"], "contexts": [{
+            "task_id": "q", "query": "线上社零表现和涨幅变化", "periods": ["2026-04", "2026-05"],
+            "dimensions": [], "metrics": [{
+                "metric_ref": "m", "name": "线上社零", "metric_object": "volume",
+                "metric_object_provenance": "model_inferred", "unit": "待元信息解析",
+                "consumers": [{"requirement_type": "fact_observations"}],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertEqual(task["metric_bindings"]["线上社零"], "实物商品网上零售额同比增速")
+        selected = task["intent_resolutions"]["m"]["selected_candidate"]
+        self.assertIn("semantic_equivalence", selected["evidence"])
+        self.assertEqual(selected["confidence_detail"]["semantic"], "equivalent")
+        self.assertEqual(selected["confidence_detail"]["fact_capability"], "pass")
+
 
 if __name__ == "__main__":
     unittest.main()

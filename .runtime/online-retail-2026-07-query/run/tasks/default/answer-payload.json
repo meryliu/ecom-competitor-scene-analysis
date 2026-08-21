@@ -1,0 +1,117 @@
+{
+  "schema_version": "fast_query_answer/1.0",
+  "status": "success",
+  "execution_profile": "fast_derived",
+  "views": [
+    {
+      "view_id": "online_retail_view",
+      "rows": [
+        {
+          "metric": "线上社零",
+          "period": "2026-07",
+          "period_role": "analysis",
+          "dimensions": {},
+          "value": 0.033,
+          "unit": "%",
+          "missing": false
+        },
+        {
+          "metric": "线上社零",
+          "period": "2026-06",
+          "period_role": "comparison",
+          "dimensions": {},
+          "value": 0.039,
+          "unit": "%",
+          "missing": false
+        }
+      ]
+    }
+  ],
+  "derived_results": [
+    {
+      "derived_metric_id": "mom_growth",
+      "node_id": "derived_online_retail_mom_change_8b9076",
+      "status": "success",
+      "input_refs": [
+        {
+          "fact": {
+            "metric": "线上社零",
+            "period_role": "analysis",
+            "dimensions": {},
+            "view_id": "online_retail_view",
+            "dimensions_exact": true
+          }
+        },
+        {
+          "fact": {
+            "metric": "线上社零",
+            "period_role": "comparison",
+            "dimensions": {},
+            "view_id": "online_retail_view",
+            "dimensions_exact": true
+          }
+        }
+      ],
+      "formula": {
+        "op": "subtract",
+        "args": [
+          {
+            "fact": {
+              "metric": "线上社零",
+              "period_role": "analysis",
+              "dimensions": {},
+              "view_id": "online_retail_view",
+              "dimensions_exact": true
+            }
+          },
+          {
+            "fact": {
+              "metric": "线上社零",
+              "period_role": "comparison",
+              "dimensions": {},
+              "view_id": "online_retail_view",
+              "dimensions_exact": true
+            }
+          }
+        ]
+      },
+      "unit": "pp",
+      "value": -0.005999999999999998,
+      "input_hash": "152fad954f5a36740160597041688dc2c523494f916b65ab60e2df3087cc00f7",
+      "definition_source": "references/derived-metric-registry.json",
+      "definition_version": "1.2.0",
+      "definition_status": "registered",
+      "metric": "线上社零",
+      "metric_object": "ratio",
+      "view_id": "online_retail_view",
+      "period_roles": [
+        "analysis",
+        "comparison"
+      ]
+    }
+  ],
+  "attribution_results": [],
+  "model_completion": {
+    "required": false,
+    "query": "26年7月，线上社零表现怎么样？相比上个月涨幅变化如何？",
+    "successful_result_refs": [
+      "derived_online_retail_mom_change_8b9076",
+      "fact_artifact"
+    ],
+    "incomplete_node_ids": [],
+    "instruction": "Compare the original query with successful facts/results. Complete only calculations whose inputs and business definitions are unambiguous; otherwise disclose the gap."
+  },
+  "quality": {
+    "logical_facts": 2,
+    "missing_facts": 0,
+    "fetch_attempts": 1,
+    "validation_profile": "minimal",
+    "response_adaptations": []
+  },
+  "scope_and_assumptions": {
+    "scope": "整体",
+    "assumptions": []
+  },
+  "task_id": "default",
+  "source_revision": 1165
+}

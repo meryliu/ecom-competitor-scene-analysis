@@ -1,0 +1,9 @@
+{"timestamp": "2026-08-21T10:17:18.146066+00:00", "event": "run_started", "plan_hash": "595c561cfe1c8b4dee04348fc0697b8d9a327b58ce41419eeb6c93b42cce6fa7", "facts_hash": "a8406fcdc3137b2b8f91bb7535ba87e0596bf761573df9624970022665d543ce", "runnable_nodes": 2}
+{"timestamp": "2026-08-21T10:17:18.146755+00:00", "event": "preflight_finished", "nodes": 2, "failed_nodes": []}
+{"timestamp": "2026-08-21T10:17:18.146860+00:00", "event": "node_queued", "node_id": "fact_artifact", "handler": "fact_artifact"}
+{"timestamp": "2026-08-21T10:17:18.147042+00:00", "event": "node_started", "node_id": "fact_artifact", "handler": "fact_artifact", "input_hash": "792dc1e6b7b7e7730172be1a4113e0129b59aed73a59a1510891899fac680677"}
+{"timestamp": "2026-08-21T10:17:18.147156+00:00", "event": "node_finished", "node_id": "fact_artifact", "status": "success", "duration_ms": 0.109}
+{"timestamp": "2026-08-21T10:17:18.150730+00:00", "event": "node_queued", "node_id": "derived_online_retail_mom_change_8b9076", "handler": "derived"}
+{"timestamp": "2026-08-21T10:17:18.150894+00:00", "event": "node_started", "node_id": "derived_online_retail_mom_change_8b9076", "handler": "derived", "input_hash": "b40ed27b0dbdb3461dea953fc8b7eed25e943b5ddf955f7e4ca1372e22d53ff7"}
+{"timestamp": "2026-08-21T10:17:18.151054+00:00", "event": "node_finished", "node_id": "derived_online_retail_mom_change_8b9076", "status": "success", "duration_ms": 0.168}
+{"timestamp": "2026-08-21T10:17:18.155786+00:00", "event": "run_finished", "status": "success", "duration_ms": 10.252}

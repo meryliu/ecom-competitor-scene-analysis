@@ -42,6 +42,22 @@ class BusinessIntentPolicyTests(unittest.TestCase):
         self.assertEqual(growth["metric_object"], "ratio")
         self.assertIn("线上社零同比增速", growth["requested_terms"])
 
+    def test_yoy_shorthand_also_generates_growth_hypothesis(self) -> None:
+        hypotheses = generate_metric_hypotheses(
+            {"query": "线上社零同比是多少"},
+            {
+                "name": "线上社零",
+                "metric_object": "volume",
+                "metric_object_provenance": "model_inferred",
+                "consumers": [{"requirement_type": "fact_observations"}],
+            },
+            self.policy,
+        )
+        self.assertIn(
+            "growth_ratio_metric",
+            [item["intent_id"] for item in hypotheses],
+        )
+
     def test_attribution_consumer_does_not_expand_alternative_intents(self) -> None:
         hypotheses = generate_metric_hypotheses(
             {"query": "支付GMV涨幅贡献"},

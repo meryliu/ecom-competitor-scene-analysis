@@ -12,7 +12,7 @@
 https://bytedance.larkoffice.com/wiki/TrBAw0rDXiBrcUkJlbgcjsyYnkg?sheet=ESXBdZ&table=tbl5Ny6EgnsBwEBK&view=vew6r3PPJm
 ```
 
-允许标准 Sheet 换序、插入行列、指标块移动、周期新增以及名称中的空格/全半角变化；不允许通过内容猜测标准 Sheet。元信息 Sheet 缺失或同一角色匹配多张表时拒绝。指标或维度存在保护词冲突、候选不唯一、维度不支持或事实块重复时必须澄清或拒绝。配置维护见 [data-sources/competitor-macro/source-guide.md](data-sources/competitor-macro/source-guide.md)。
+允许标准 Sheet 换序、插入行列、指标块移动、周期新增以及名称中的空格/全半角变化；不允许通过内容猜测标准 Sheet。元信息 Sheet 缺失或同一角色匹配多张表时拒绝。指标或维度存在真实保护语义冲突、候选不唯一、维度不支持或事实块重复时必须澄清或拒绝；同义简称、同比/同比增速等在指标对象和单位证明等价时不视为保护语义冲突。配置维护见 [data-sources/competitor-macro/source-guide.md](data-sources/competitor-macro/source-guide.md)。
 
 ## Gateway 请求
 
