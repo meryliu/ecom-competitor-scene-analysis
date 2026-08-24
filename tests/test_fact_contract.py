@@ -142,19 +142,38 @@ class FactContractTests(unittest.TestCase):
             "schema_version": "scene_facts/2.0",
             "facts": [{"fact_id": "f1", "value": 1}],
             "bindings": [
-                {"fact_id": "f1", "task_id": "q", "fact_slot_id": "share", "period_role": "analysis", "view_id": "v"},
-                {"fact_id": "f1", "task_id": "q", "fact_slot_id": "attr", "period_role": "analysis", "view_id": "v"},
+                {"binding_id": "b1", "fact_id": "f1", "task_id": "q", "fact_slot_id": "share", "period_role": "analysis", "view_id": "share_view"},
+                {"binding_id": "b2", "fact_id": "f1", "task_id": "q", "fact_slot_id": "attr", "period_role": "analysis", "view_id": "attr_view"},
             ],
         }
         rows = project_scene_facts(payload, "q")
         self.assertEqual(len(rows), 2)
         self.assertEqual({row["fact_slot_id"] for row in rows}, {"share", "attr"})
+        self.assertEqual({row["physical_fact_id"] for row in rows}, {"f1"})
+        self.assertEqual({row["binding_id"] for row in rows}, {"b1", "b2"})
+        self.assertEqual(len({row["fact_id"] for row in rows}), 2)
+
+    def test_v2_projection_requires_binding_identity(self) -> None:
+        payload = {
+            "schema_version": "scene_facts/2.0",
+            "facts": [{"fact_id": "f1", "value": 1}],
+            "bindings": [{
+                "fact_id": "f1",
+                "task_id": "q",
+                "fact_slot_id": "fact",
+                "period_role": "analysis",
+                "view_id": "v",
+            }],
+        }
+        with self.assertRaisesRegex(ValueError, "binding_id"):
+            project_scene_facts(payload, "q")
 
     def test_v2_projection_preserves_observed_unit_over_placeholder(self) -> None:
         payload = {
             "schema_version": "scene_facts/2.0",
             "facts": [{"fact_id": "f1", "value": 1, "unit": "亿元"}],
             "bindings": [{
+                "binding_id": "b1",
                 "fact_id": "f1",
                 "task_id": "q",
                 "fact_slot_id": "fact",
@@ -195,6 +214,7 @@ class FactContractTests(unittest.TestCase):
             "schema_version": "scene_facts/2.0",
             "facts": [{"fact_id": "f1", "value": 1, "unit": "亿元"}],
             "bindings": [{
+                "binding_id": "b1",
                 "fact_id": "f1",
                 "task_id": "q",
                 "fact_slot_id": "fact",

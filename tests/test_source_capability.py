@@ -42,6 +42,11 @@ class SourceCapabilityTests(unittest.TestCase):
         result = evaluate_structural_grain_capability({}, "month")
         self.assertEqual(result["status"], "unknown")
 
+    def test_unknown_aggregation_metadata_blocks_rollup(self) -> None:
+        result = evaluate_structural_grain_capability({"supported_grains": ["week"]}, "month")
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["reason"], "metric_aggregation_unknown")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -26,11 +26,12 @@ facts = gateway.fetch(fetch_request)
   "freshness": "live",
   "resolution_policy_hash": "...",
   "business_intent_policy_hash": "...",
-  "resolution_engine_version": "2.5.0"
+  "resolution_engine_version": "2.5.0",
+  "fact_provider_version": "1.1.0"
 }
 ```
 
-Gateway 必须拒绝与本次 resolve 不一致的 binding。config、revision、schema、resolution policy、business intent policy 或 resolution engine 变化都会改变请求 hash，旧 checkpoint 不得误复用。
+Gateway 必须拒绝与本次 resolve 不一致的 binding。config、revision、schema、resolution policy、business intent policy、resolution engine 或 fact provider 版本变化都会改变请求 hash，旧 checkpoint 不得误复用。Provider 版本只标识取数与源单元格规范化语义，不进入 Intent Resolution 候选判断。
 
 ## 固定快照与失败策略
 

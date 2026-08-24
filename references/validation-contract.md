@@ -40,7 +40,7 @@ python3 scripts/validate_execution.py --input <execution.json> --phase final --r
 2. 节点依赖存在、DAG 无环、状态转换一致。
 3. 最终校验时所有节点到达终态。
 4. 事实需求、派生输入和归因输入有可追溯来源。
-5. `fact_demand_id` 唯一；同一物理事实只有一个 `fact_id`，所有 binding 引用存在的 fact、task 和 slot。
+5. `fact_demand_id` 唯一；Provider 中同一物理事实只有一个物理 `fact_id`，所有 binding 引用存在的 fact、task 和 slot；投影后保留 `physical_fact_id`、`binding_id`，逻辑 `fact_id` 唯一且由前两者稳定生成。
 6. 每次真实调用使用唯一 `attempt_id`，重试关系可追溯，成功后不重试；恢复复用不伪造新 attempt。
 7. 标准事实保留 `raw_missing`，并生成受支持的 `normalization_reason`；`missing=true` 时保持 `value=null`，`denominator=0` 时必须缺失。
 8. 成功的派生结果保留输入引用、公式、单位和值。
@@ -65,6 +65,7 @@ python3 scripts/validate_execution.py --input <execution.json> --phase final --r
 27. 归因目标声明非空 `parent_dimensions` 时必须使用 `for_each_parent_group` 且两处父维度一致；每个运行时归因 payload 只能包含一个父节点。
 28. 归因结果中的 `ranking` 是可选展示视图；正/负过滤、贡献率/绝对值排序和 TopK 稳定性只产生 `WARNING`，不得因排序视图异常掩盖完整 `rows` 或阻断整体输出。
 29. 输入适配目标不进入物理取数请求；适配节点必须保存安全表达式、目标事实、规则来源和显式依赖。`metric_additive` 只能由输入事实元信息证明。
+30. 周上卷适配若声明 `rollup`，必须使用 `calendar=iso8601`；每个来源周唯一且存在，`overlap_days` 必须为 1 到 7，`weight` 必须等于 `overlap_days/7`，并与目标期间实际日期交集一致。缺失周不得补零，计划不得混合不同上卷路径。
 30. 最终组织节点即使存在失败依赖也可成功完成“整理可用结果”职责；manifest 保留失败/跳过节点和原始 Query，供模型检查并补足低风险计算。模型补足不改变节点执行状态。
 31. 每个事实槽位的 `selector_dimensions` 键必须全部进入物理 `dimension_refs`；计算节点是否逐成员返回仍由其显式 `group_dimensions` 决定。
 32. 公式归因的每个因子必须有唯一稳定 `factor_id` 和合法 `kind`；`factor_order` 必须与 binding 顺序一致，公式 AST 必须恰好引用全部因子一次。

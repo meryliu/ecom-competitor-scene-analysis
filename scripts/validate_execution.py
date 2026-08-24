@@ -13,6 +13,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
+from fact_contract import stable_id
+from time_rollup import normalize_period, overlap_days
+
 
 NODE_STATUSES = {
     "planned",
@@ -48,7 +51,7 @@ NORMALIZATION_REASONS = {
     "unchanged",
 }
 REFERENCE_STORAGE_VERSION = "2.0"
-REFERENCE_EXECUTOR_VERSIONS = {"1.3.0", "1.4.0", "1.5.0", "1.6.0", "1.7.0", "1.8.0", "1.8.1"}
+REFERENCE_EXECUTOR_VERSIONS = {"1.3.0", "1.4.0", "1.5.0", "1.6.0", "1.7.0", "1.8.0", "1.8.1", "1.9.0"}
 
 
 def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -734,6 +737,34 @@ class Validator:
                                     "单位量级换算契约非法", "提供输入单位、目标单位和有限非零换算因子",
                                     node_id=node_id,
                                 )
+                        rollup = materialize_as.get("rollup")
+                        if rollup is not None:
+                            components = rollup.get("components") if isinstance(rollup, dict) else None
+                            if not isinstance(rollup, dict) or rollup.get("calendar") != "iso8601":
+                                self.add("ROLLUP-001", "ERROR", f"{path}.materialize_as.rollup", "周上卷必须使用 ISO 8601 日历", "声明 calendar=iso8601", node_id=node_id)
+                            elif not isinstance(components, list) or not components:
+                                self.add("ROLLUP-002", "ERROR", f"{path}.materialize_as.rollup.components", "上卷组件不能为空", "提供完整的来源期间列表", node_id=node_id)
+                            else:
+                                seen: set[str] = set()
+                                target_period = materialize_as.get("period")
+                                for component_index, component in enumerate(components):
+                                    component_path = f"{path}.materialize_as.rollup.components[{component_index}]"
+                                    period = component.get("period") if isinstance(component, dict) else None
+                                    if not isinstance(period, str) or normalize_period(period) is None or period in seen:
+                                        self.add("ROLLUP-003", "ERROR", component_path, "上卷组件期间非法或重复", "使用规范化且唯一的来源期间", node_id=node_id)
+                                        continue
+                                    seen.add(period)
+                                    weight = component.get("weight")
+                                    if isinstance(weight, bool) or not isinstance(weight, (int, float)) or not math.isfinite(float(weight)) or not 0 < float(weight) <= 1:
+                                        self.add("ROLLUP-004", "ERROR", f"{component_path}.weight", "上卷权重非法", "使用 overlap_days/7", node_id=node_id)
+                                    days = component.get("overlap_days")
+                                    if days is not None:
+                                        if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= 7:
+                                            self.add("ROLLUP-005", "ERROR", f"{component_path}.overlap_days", "交集天数非法", "使用 1 到 7 的整数", node_id=node_id)
+                                        elif isinstance(target_period, str) and normalize_period(target_period) is not None:
+                                            expected = overlap_days(period, target_period)
+                                            if expected != days or abs(float(weight) - days / 7.0) > 1e-12:
+                                                self.add("ROLLUP-006", "ERROR", component_path, "上卷覆盖天数与权重不一致", "重新按 ISO 周和目标区间计算", node_id=node_id)
             if handler == "attribution":
                 if not isinstance(execution.get("operator"), str) or not execution.get("operator"):
                     self.add("EXEC-008", "ERROR", f"{path}.operator", "attribution handler 缺少显式算子", "引用计划阶段已解析的算子", node_id=node_id)
@@ -1272,6 +1303,9 @@ class Validator:
             if isinstance(slot, dict)
         ]
         compiled_view_ids = {slot.get("view_id") for slot in compiled_fact_requirements}
+        executor_version = str((self.document.get("executor") or {}).get("version") or "")
+        require_projected_identity = executor_version == "1.9.0"
+        logical_fact_ids: set[str] = set()
         fact_count = 0
         missing_count = 0
         for index, fact in facts:
@@ -1284,6 +1318,31 @@ class Validator:
             if not isinstance(fact, dict):
                 self.add("FACT-001", "ERROR", path, "标准化事实必须是对象", "删除或改正该事实")
                 continue
+            fact_id = fact.get("fact_id")
+            if not isinstance(fact_id, str) or not fact_id:
+                self.add("FACT-017", "ERROR", f"{path}.fact_id", "事实缺少稳定逻辑 fact_id", "由事实投影层生成逻辑事实身份")
+            elif fact_id in logical_fact_ids:
+                self.add("FACT-018", "ERROR", f"{path}.fact_id", "逻辑 fact_id 重复", "按物理事实与消费 binding 生成唯一逻辑 ID")
+            else:
+                logical_fact_ids.add(fact_id)
+            is_intermediate = fact.get("intermediate") is True or (
+                isinstance(fact.get("source_ref"), dict)
+                and fact["source_ref"].get("type") == "input_adaptation"
+            )
+            if require_projected_identity and not is_intermediate:
+                physical_fact_id = fact.get("physical_fact_id")
+                binding_id = fact.get("binding_id")
+                if not isinstance(physical_fact_id, str) or not physical_fact_id:
+                    self.add("FACT-019", "ERROR", f"{path}.physical_fact_id", "源事实缺少物理事实 ID", "保留 Provider 生成的物理 fact_id")
+                if not isinstance(binding_id, str) or not binding_id:
+                    self.add("FACT-020", "ERROR", f"{path}.binding_id", "源事实缺少消费 binding ID", "保留 Fact Contract 投影使用的 binding_id")
+                if (
+                    isinstance(fact_id, str) and fact_id
+                    and isinstance(physical_fact_id, str) and physical_fact_id
+                    and isinstance(binding_id, str) and binding_id
+                    and fact_id != stable_id("fact", [physical_fact_id, binding_id])
+                ):
+                    self.add("FACT-021", "ERROR", f"{path}.fact_id", "逻辑事实 ID 与物理事实和 binding 不闭合", "按稳定身份公式重新投影事实")
             missing = fact.get("missing")
             missing_count += missing is True
             value = fact.get("value")

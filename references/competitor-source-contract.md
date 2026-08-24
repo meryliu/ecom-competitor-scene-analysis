@@ -25,7 +25,8 @@ https://bytedance.larkoffice.com/wiki/TrBAw0rDXiBrcUkJlbgcjsyYnkg?sheet=ESXBdZ&t
     "source_id": "competitor_macro_sheet",
     "config_hash": "...",
     "revision": 448,
-    "schema_hash": "..."
+    "schema_hash": "...",
+    "fact_provider_version": "1.1.0"
   },
   "fact_demands": [],
   "match_overrides": []
@@ -38,9 +39,9 @@ Provider 不接收自然语言查询，不调用其他 Skill，不调用小策 C
 
 ## 标准 facts
 
-Provider 读取基础单元格后直接生成 `scene_facts/2.0`。`facts` 中每个物理事实只出现一次，包含稳定 `fact_id`、指标、周期、维度、值、单位、源表可聚合性、定义、缺失状态和 `source_ref`；根级 `bindings` 将 `fact_id` 绑定到 `task_id`、`fact_slot_id`、`period_role`、`view_id` 和需求引用。需求中的 `source_dimension_domains` 显式携带物理维度全域意图，`resolved_dimension_domains` 记录对应 `domain_id` 在当前 source revision 的具体成员。执行器兼容层只做确定性投影，不重新解析业务结果。物理事实中的具体单位是运行时权威值；binding 中的单位只作为预期值校验，不得用占位值覆盖事实单位，两个具体单位冲突时必须阻断。
+Provider 读取基础单元格后直接生成 `scene_facts/2.0`。`facts` 中每个物理事实只出现一次，其 `fact_id` 是物理事实 ID；根级 `bindings` 使用唯一 `binding_id` 将物理 ID 绑定到 `task_id`、`fact_slot_id`、`period_role`、`view_id` 和需求引用。Fact Contract 投影时保留 `physical_fact_id` 和 `binding_id`，并由两者确定性生成唯一逻辑 `fact_id`；同一物理事实因此可服务多个逻辑视角，执行器不负责重建身份。需求中的 `source_dimension_domains` 显式携带物理维度全域意图，`resolved_dimension_domains` 记录对应 `domain_id` 在当前 source revision 的具体成员。物理事实中的具体单位是运行时权威值；binding 中的单位只作为预期值校验，不得用占位值覆盖事实单位，两个具体单位冲突时必须阻断。
 
-事实 `value` 统一使用 `unit` 声明单位下的数值，不转换成基础单位：`1.2 亿元` 记为 `value=1.2, unit=亿元`，源单元格展示 `28.1%` 且元信息单位为 `%` 时记为 `value=28.1, unit=%`。Provider 从当前 `csv-get` 展示文本去除 `%` 后保留数值，不除以 100。源表继续使用标准百分比单元格：底层比例 `0.281`、格式为百分比、展示为 `28.1%`，不改成普通数字 `28.1`。若未来接口改为只返回裸值 `0.281`，必须同时提供单元格格式或明确的数值表示契约；禁止根据数值大小猜测是否乘以 100。
+事实 `value` 统一使用元信息 `unit` 声明单位下的数值，不转换成基础单位。Provider 先取得指标元信息再解析展示文本：`%` 接受 `28.1%` 或 `28.1`，均记为 `value=28.1, unit=%`；`pp` 接受 `+2.3pp`、`-0.8PP` 或裸数值，保留声明单位下的量级；其他单位接受裸数值。显式 `%`/`pp` 后缀与声明单位不一致时返回 `numeric_unit_mismatch`，不得按数值大小推断或把非法值转成 missing。若未来接口改为只返回底层比例 `0.281`，必须同时提供单元格格式或明确数值表示契约。
 
 单值维度选择器在读取前必须跨当前维度元信息反向匹配。唯一匹配记录在根级 `dimension_resolutions`；多匹配返回澄清候选；候选维度与唯一元信息结果不一致时返回结构化 `resolution_patch`，不得按模型候选继续读取。
 

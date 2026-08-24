@@ -10,6 +10,7 @@ from typing import Any
 
 from source_capability import (
     evaluate_direct_capability,
+    metric_aggregation_eligibility,
     normalize_match_text,
     normalize_period,
     resolve_dimension,
@@ -17,6 +18,7 @@ from source_capability import (
     validate_capabilities,
 )
 from selector_context import SelectorContextError, apply_task_selector_context
+from time_rollup import iso_weeks_covering
 from unit_scale import UnitScaleError, conversion_factor, formula_scale
 
 
@@ -450,21 +452,43 @@ def _composition_input_refs(
 
 
 def _child_period_candidates(period: str) -> list[list[str]]:
+    """Compatibility view of candidate paths without rollup metadata."""
+    return [
+        [str(item["period"]) for item in path]
+        for path in _aggregation_candidate_paths(period)
+    ]
+
+
+def _aggregation_candidate_paths(period: str) -> list[list[dict[str, Any]]]:
     parsed = normalize_period(period)
     if parsed is None:
         return []
     grain, canonical = parsed
     year = int(canonical[:4])
+    if grain == "month":
+        return [iso_weeks_covering(canonical)]
     if grain == "quarter":
         quarter = int(canonical[-1])
         start = (quarter - 1) * 3 + 1
-        return [[f"{year:04d}-{month:02d}" for month in range(start, start + 3)]]
+        return [
+            [
+                {"period": f"{year:04d}-{month:02d}", "overlap_days": None, "weight": 1.0}
+                for month in range(start, start + 3)
+            ],
+            iso_weeks_covering(canonical),
+        ]
     if grain == "year":
         return [
-            [f"{year:04d}-Q{quarter}" for quarter in range(1, 5)],
-            [f"{year:04d}-{month:02d}" for month in range(1, 13)],
+            [
+                {"period": f"{year:04d}-Q{quarter}", "overlap_days": None, "weight": 1.0}
+                for quarter in range(1, 5)
+            ],
+            [
+                {"period": f"{year:04d}-{month:02d}", "overlap_days": None, "weight": 1.0}
+                for month in range(1, 13)
+            ],
+            iso_weeks_covering(canonical),
         ]
-    # Week-to-month boundaries require an explicit coverage calendar and are not guessed.
     return []
 
 
@@ -489,20 +513,31 @@ def _aggregation_children(
     dimensions: dict[str, Any],
     dimension_refs: list[str],
 ) -> list[str] | None:
+    components = _aggregation_components(
+        index, metric_name, target_period, dimensions, dimension_refs
+    )
+    return [str(item["period"]) for item in components] if components else None
+
+
+def _aggregation_components(
+    index: dict[str, Any],
+    metric_name: str,
+    target_period: str,
+    dimensions: dict[str, Any],
+    dimension_refs: list[str],
+) -> list[dict[str, Any]] | None:
     source_metric = _source_metric(metric_name, index)
     if source_metric is None:
         return None
     metadata = (index.get("metrics") or {}).get(source_metric) or {}
-    if metadata.get("aggregation_mode") not in (None, "additive") and metadata.get("additive") is not True:
+    if not metric_aggregation_eligibility(metadata)["allowed"]:
         return None
-    if metadata.get("aggregation_mode") is None and metadata.get("additive") is not True:
-        return None
-    for children in _child_period_candidates(target_period):
+    for components in _aggregation_candidate_paths(target_period):
         if all(
-            _direct_available(index, metric_name, period, dimensions, dimension_refs)
-            for period in children
+            _direct_available(index, metric_name, str(item["period"]), dimensions, dimension_refs)
+            for item in components
         ):
-            return children
+            return components
     return None
 
 
@@ -1097,15 +1132,16 @@ def prepare_analysis_ir(
             )
         ):
             continue
-        children = _aggregation_children(
+        components = _aggregation_components(
             index, metric["name"], periods[role], dimensions, dimension_refs
         )
-        if children is None:
+        if components is None:
             raise PreparationError(
                 "SOURCE_PATH_UNAVAILABLE",
                 f"指标 {metric['name']} 在 {periods[role]} 没有直接事实或安全聚合方案",
                 {"metric": metric["name"], "period": periods[role]},
             )
+        children = [str(item["period"]) for item in components]
         for item in capability_plan:
             if (
                 item.get("metric_ref") == metric_ref
@@ -1114,6 +1150,7 @@ def prepare_analysis_ir(
             ):
                 item["path"] = "aggregate_fact"
                 item["aggregate_source_periods"] = list(children)
+                item["aggregate_components"] = deepcopy(components)
                 break
         suffix = _stable_suffix(identity)
         source_roles: list[str] = []
@@ -1130,12 +1167,27 @@ def prepare_analysis_ir(
             "expression": {
                 "op": "sum",
                 "args": [
-                    {"fact": {"metric_ref": metric_ref, "period_role": source_role}}
-                    for source_role in source_roles
+                    (
+                        {"fact": {"metric_ref": metric_ref, "period_role": source_role}}
+                        if float(component.get("weight", 1.0)) == 1.0
+                        else {
+                            "op": "multiply",
+                            "args": [
+                                {"fact": {"metric_ref": metric_ref, "period_role": source_role}},
+                                {"literal": float(component.get("weight", 1.0))},
+                            ],
+                        }
+                    )
+                    for source_role, component in zip(source_roles, components)
                 ],
             },
             "rule_source": "source_metric_metadata",
             "validation": ["facts_present", "unit_consistent", "metric_additive"],
+            "rollup": {
+                "calendar": "iso8601",
+                "target_period": periods[role],
+                "components": deepcopy(components),
+            },
             "criticality": consumer.get("criticality", "required"),
             "generated": True,
         })

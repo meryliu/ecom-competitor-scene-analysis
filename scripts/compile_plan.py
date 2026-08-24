@@ -26,6 +26,7 @@ from fact_contract import build_fact_demands
 from fast_query_admission import assess_query
 from prepare_analysis import normalize_analysis_ir
 from selector_context import SelectorContextError, apply_task_selector_context
+from time_rollup import normalize_period, overlap_days
 from validate_execution import Validator, reject_duplicate_keys
 
 
@@ -1029,6 +1030,31 @@ class Compiler:
             rule_source = require_nonempty_string(
                 requirement.get("rule_source"), f"{requirement_id}.rule_source"
             )
+            rollup = requirement.get("rollup")
+            if rollup is not None:
+                if not isinstance(rollup, dict) or rollup.get("calendar") != "iso8601":
+                    raise CompileError(f"{requirement_id}.rollup must declare calendar=iso8601")
+                components = rollup.get("components")
+                if not isinstance(components, list) or not components:
+                    raise CompileError(f"{requirement_id}.rollup.components must be non-empty")
+                seen_periods: set[str] = set()
+                for index, component in enumerate(components):
+                    if not isinstance(component, dict) or not isinstance(component.get("period"), str):
+                        raise CompileError(f"{requirement_id}.rollup.components[{index}] is invalid")
+                    component_period = normalize_period(component["period"])
+                    if component_period is None or component["period"] in seen_periods:
+                        raise CompileError(f"{requirement_id}.rollup contains invalid or duplicate period")
+                    seen_periods.add(component["period"])
+                    weight = component.get("weight")
+                    if isinstance(weight, bool) or not isinstance(weight, (int, float)) or not math.isfinite(float(weight)) or not 0 < float(weight) <= 1:
+                        raise CompileError(f"{requirement_id}.rollup component weight is invalid")
+                    days = component.get("overlap_days")
+                    if days is not None:
+                        if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= 7:
+                            raise CompileError(f"{requirement_id}.rollup component overlap_days is invalid")
+                        expected_days = overlap_days(component["period"], target_period)
+                        if expected_days != days or abs(float(weight) - days / 7.0) > 1e-12:
+                            raise CompileError(f"{requirement_id}.rollup component coverage is inconsistent")
             validation = requirement.get(
                 "validation", ["facts_present", "unit_consistent"]
             )
@@ -1162,6 +1188,7 @@ class Compiler:
                         "unit": metric["unit"],
                         "validation": list(validation),
                         "rule_source": rule_source,
+                        **({"rollup": deepcopy(rollup)} if rollup is not None else {}),
                         **(
                             {"unit_conversion": deepcopy(unit_conversion)}
                             if unit_conversion is not None else {}

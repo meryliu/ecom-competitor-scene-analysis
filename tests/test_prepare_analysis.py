@@ -388,6 +388,47 @@ class PrepareAnalysisTests(unittest.TestCase):
         )
         self.assertTrue(any(item.get("mode") == "aggregate" for item in decisions))
 
+    def test_month_rolls_up_from_iso_weeks_with_boundary_weights(self) -> None:
+        index = source_index()
+        index["availability"].pop("month", None)
+        index["availability"]["week"] = {
+            "periods": ["2025-W05", "2025-W06", "2025-W07", "2025-W08", "2025-W09"],
+            "metrics": {"支付GMV": {"dimension": "平台"}},
+        }
+        index["metrics"]["支付GMV"]["supported_grains"] = ["week"]
+        ir = base_ir("支付GMV")
+        ir["analysis_task"]["periods"] = {"analysis": "2025-02"}
+        ir["fact_observations"] = [{
+            "requirement_id": "payment",
+            "metric_ref": "target",
+            "period_roles": ["analysis"],
+            "view_id": "v",
+            "dimensions": {"平台": "京东"},
+            "dimension_refs": [],
+        }]
+        prepared, decisions = prepare_analysis_ir(ir, index, self.compositions, self.derived)
+        adaptation = prepared["input_adaptations"][0]
+        components = adaptation["rollup"]["components"]
+        self.assertEqual([item["period"] for item in components], [
+            "2025-W05", "2025-W06", "2025-W07", "2025-W08", "2025-W09"
+        ])
+        self.assertEqual([item["overlap_days"] for item in components], [2, 7, 7, 7, 5])
+        args = adaptation["expression"]["args"]
+        self.assertEqual(args[0]["op"], "multiply")
+        self.assertAlmostEqual(args[0]["args"][1]["literal"], 2 / 7)
+        self.assertEqual(args[1].keys(), {"fact"})
+        self.assertEqual(args[-1]["op"], "multiply")
+        self.assertTrue(any(item.get("mode") == "aggregate" for item in decisions))
+        plan, report = compile_and_validate(
+            prepared,
+            ROOT / "references" / "derived-metric-registry.json",
+            ROOT / "references" / "metric-composition-registry.json",
+        )
+        self.assertTrue(report["valid"], report)
+        node = next(item for item in plan["nodes"] if item["type"] == "input_adaptation")
+        self.assertEqual(node["execution"]["materialize_as"]["rollup"]["calendar"], "iso8601")
+        self.assertEqual(node["execution"]["expression"]["args"][0]["op"], "multiply")
+
     def test_direct_settlement_rate_replaces_registered_composition(self) -> None:
         ir = base_ir("结算率", "ratio")
         ir["analysis_task"]["periods"] = {"analysis": "2026年5月"}

@@ -8,6 +8,7 @@ from copy import deepcopy
 from typing import Any
 
 from data_gateway import RESOLVED_CAPABILITIES_V1
+from time_rollup import normalize_period as _normalize_period
 
 
 DEFAULT_GRAIN_ROLLUP_EDGES = (
@@ -28,27 +29,18 @@ def normalize_match_text(value: Any) -> str:
 
 
 def normalize_period(value: Any) -> tuple[str, str] | None:
-    text = re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(value or ""))).lower()
-    patterns = [
-        ("month", r"(20\d{2})(?:年|[-/.])?(1[0-2]|0?[1-9])月?"),
-        ("week", r"(20\d{2})(?:年)?(?:第|[-/]?w)([0-5]?\d)周?"),
-        ("quarter", r"(20\d{2})(?:年)?(?:第?([1-4])季度|[-/]?q([1-4]))"),
-        ("year", r"(20\d{2})年?"),
-    ]
-    for grain, pattern in patterns:
-        match = re.fullmatch(pattern, text, flags=re.IGNORECASE)
-        if not match:
-            continue
-        year = int(match.group(1))
-        if grain == "month":
-            return grain, f"{year:04d}-{int(match.group(2)):02d}"
-        if grain == "week":
-            week = int(match.group(2))
-            return (grain, f"{year:04d}-W{week:02d}") if 1 <= week <= 53 else None
-        if grain == "quarter":
-            return grain, f"{year:04d}-Q{int(match.group(2) or match.group(3))}"
-        return grain, f"{year:04d}"
-    return None
+    return _normalize_period(value)
+
+
+def metric_aggregation_eligibility(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Return the common prerequisite for time and dimension aggregation."""
+    mode = metadata.get("aggregation_mode")
+    additive = metadata.get("additive")
+    if mode == "non_additive" or additive is False:
+        return {"allowed": False, "reason": "metric_non_additive"}
+    if mode == "additive" or additive is True:
+        return {"allowed": True, "reason": "metric_additive"}
+    return {"allowed": False, "reason": "metric_aggregation_unknown"}
 
 
 def can_rollup_grain(
@@ -97,11 +89,8 @@ def evaluate_structural_grain_capability(
             "source_grain": target_grain,
             "target_grain": target_grain,
         }
-    additive = (
-        metadata.get("aggregation_mode") == "additive"
-        or metadata.get("additive") is True
-    )
-    if additive:
+    aggregation = metric_aggregation_eligibility(metadata)
+    if aggregation["allowed"]:
         source_grain = next(
             (
                 grain
@@ -116,10 +105,15 @@ def evaluate_structural_grain_capability(
                 "path": "aggregate_fact",
                 "source_grain": source_grain,
                 "target_grain": target_grain,
+                "aggregation_reason": aggregation["reason"],
             }
     return {
         "status": "unavailable",
-        "reason": "metadata_grain_unsupported",
+        "reason": (
+            aggregation["reason"]
+            if not aggregation["allowed"]
+            else "metadata_grain_unsupported"
+        ),
         "target_grain": target_grain,
         "supported_grains": supported,
         "aggregation_mode": metadata.get("aggregation_mode") or "unknown",

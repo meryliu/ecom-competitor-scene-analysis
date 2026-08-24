@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -37,14 +38,26 @@ from source_runtime import ManagedLarkClient as LarkClient, ensure_shared_index 
 
 
 MISSING_VALUES = {"", "-", "--", "/", "N/A", "n/a", "null", "None"}
+FACT_PROVIDER_VERSION = "1.1.0"
+_UNIT_SUFFIX = re.compile(r"^(.*?)(%|pp)\s*$", re.IGNORECASE)
 
 
-def _parse_number(value: Any) -> float | None:
+def parse_source_number(value: Any, expected_unit: Any) -> float | None:
+    """Parse a source cell according to its declared metric unit."""
     text = display_text(value).replace(",", "")
     if text in MISSING_VALUES:
         return None
-    if text.endswith("%"):
-        text = text[:-1].strip()
+    declared_unit = str(expected_unit or "").strip().lower()
+    suffix_match = _UNIT_SUFFIX.fullmatch(text.strip())
+    if suffix_match is not None:
+        text, suffix = suffix_match.groups()
+        suffix = suffix.lower()
+        if suffix != declared_unit:
+            raise SkillError(
+                "numeric_unit_mismatch",
+                f"源单元格数值后缀 {suffix!r} 与指标声明单位 {expected_unit!r} 不一致：{value}",
+            )
+        text = text.strip()
     try:
         number = float(text)
     except (TypeError, ValueError) as exc:
@@ -582,8 +595,8 @@ def fetch_facts_from_index(
     for cell in cells:
         demand = cell["demand"]
         raw = raw_values[(cell["sheet"]["sheet_id"], cell["row"], cell["col"])]
-        value = _parse_number(raw)
         metadata = index["metrics"][cell["metric"]]
+        value = parse_source_number(raw, metadata.get("unit", demand.get("unit")))
         fact_identity = {
             "source_id": (request.get("source_binding") or {}).get(
                 "source_id", request.get("source_id", "competitor_macro_sheet")

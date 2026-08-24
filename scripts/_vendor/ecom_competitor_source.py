@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from time_rollup import normalize_period as _normalize_period
+
 
 DEFAULT_SOURCE_URL = (
     "https://bytedance.larkoffice.com/wiki/"
@@ -337,30 +339,7 @@ def column_number(letter: str) -> int:
 
 
 def normalize_period(value: Any) -> tuple[str, str] | None:
-    text = normalize_text(value)
-    patterns = [
-        ("month", r"(20\d{2})(?:年|[-/.])?(1[0-2]|0?[1-9])月?"),
-        ("week", r"(20\d{2})(?:年)?(?:第|[-/]?w)([0-5]?\d)周?"),
-        ("quarter", r"(20\d{2})(?:年)?(?:第?([1-4])季度|[-/]?q([1-4]))"),
-        ("year", r"(20\d{2})年?"),
-    ]
-    for granularity, pattern in patterns:
-        match = re.fullmatch(pattern, text, flags=re.IGNORECASE)
-        if not match:
-            continue
-        year = int(match.group(1))
-        if granularity == "month":
-            return granularity, f"{year:04d}-{int(match.group(2)):02d}"
-        if granularity == "week":
-            week = int(match.group(2))
-            if 1 <= week <= 53:
-                return granularity, f"{year:04d}-W{week:02d}"
-            return None
-        if granularity == "quarter":
-            quarter = int(match.group(2) or match.group(3))
-            return granularity, f"{year:04d}-Q{quarter}"
-        return granularity, f"{year:04d}"
-    return None
+    return _normalize_period(value)
 
 
 def previous_year_period(period: str) -> str:

@@ -315,10 +315,11 @@ def project_scene_facts(payload: dict[str, Any], task_id: str | None = None) -> 
         if str(binding["fact_id"]) not in fact_ids:
             raise ValueError(f"binding references unknown fact_id: {binding['fact_id']}")
         binding_id = binding.get("binding_id")
-        if binding_id is not None:
-            if str(binding_id) in binding_ids:
-                raise ValueError(f"scene_facts/2.0 contains duplicate binding_id: {binding_id}")
-            binding_ids.add(str(binding_id))
+        if not isinstance(binding_id, str) or not binding_id:
+            raise ValueError("scene_facts/2.0 binding requires a non-empty binding_id")
+        if binding_id in binding_ids:
+            raise ValueError(f"scene_facts/2.0 contains duplicate binding_id: {binding_id}")
+        binding_ids.add(binding_id)
         if task_id is not None and binding.get("task_id") != task_id:
             continue
         by_fact.setdefault(str(binding["fact_id"]), []).append(binding)
@@ -326,7 +327,12 @@ def project_scene_facts(payload: dict[str, Any], task_id: str | None = None) -> 
     for fact in facts:
         for binding in by_fact.get(str(fact["fact_id"]), []):
             row = deepcopy(fact)
+            physical_fact_id = str(fact["fact_id"])
+            binding_id = str(binding["binding_id"])
             row.update({
+                "fact_id": stable_id("fact", [physical_fact_id, binding_id]),
+                "physical_fact_id": physical_fact_id,
+                "binding_id": binding_id,
                 "fact_slot_id": binding.get("fact_slot_id"),
                 "period_role": binding.get("period_role"),
                 "view_id": binding.get("view_id"),

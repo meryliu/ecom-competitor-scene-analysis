@@ -63,7 +63,9 @@ python3 scripts/execution_runner.py \
 
 ```json
 {
-  "fact_id": "稳定且唯一的事实ID",
+  "fact_id": "稳定且唯一的逻辑事实ID",
+  "physical_fact_id": "Provider物理事实ID",
+  "binding_id": "消费绑定ID",
   "metric": "运行时指标标签",
   "view_id": "分析视角ID",
   "period": "实际时期值",
@@ -83,7 +85,7 @@ python3 scripts/execution_runner.py \
 }
 ```
 
-`execution_runtime.periods` 是唯一时期角色映射。`period_role` 可根据 `period` 补充；两者同时存在时必须一致。编译计划产生的事实必须携带事实槽位的 `view_id`，该字段同时参与事实 ID、索引和选择器匹配。`dimensions` 可以包含任意动态字段；旧事实将维度保存在顶层字段时，可用通用 `execution_runtime.dimension_fields` 数组迁移。
+`execution_runtime.periods` 是唯一时期角色映射。`period_role` 可根据 `period` 补充；两者同时存在时必须一致。Provider 投影事实必须满足 `fact_id=stable_id(physical_fact_id,binding_id)`；同一物理事实绑定到不同视角时具有不同逻辑 ID。编译计划产生的事实必须携带事实槽位的 `view_id`，该字段参与索引和选择器匹配。`dimensions` 可以包含任意动态字段；旧事实将维度保存在顶层字段时，可用通用 `execution_runtime.dimension_fields` 数组迁移。
 
 执行器保留源端 `missing` 为 `raw_missing`，并按固定优先级重算标准状态：
 
@@ -149,7 +151,9 @@ python3 scripts/execution_runner.py \
 - `fact_artifact`：确认并索引已落盘的标准事实。
 - `model_owned`：保留给业务判断或结论组织，不由执行器改写。
 
-输入适配复用 `handler=derived`，并通过 `materialize_as` 声明目标事实。节点成功后，执行器在下一 DAG 波次前把结果注入运行时 FactStore；它只在运行时供下游复用，不写回 Provider 原始 facts。`materialize_as.validation` 支持 `facts_present`、`unit_consistent`、`metric_additive` 和 `unit_scale_verified`；其中可聚合性必须来自输入事实的飞书元信息。`unit_scale_verified` 仅用于 Prepare 已证明的用户公式目标回退，必须携带输入指标实际单位、目标单位和有限非零 `scale_factor`；执行器先核验运行时事实单位，再对表达式结果应用换算，不自行推断单位。
+输入适配复用 `handler=derived`，并通过 `materialize_as` 声明目标事实。节点成功后，执行器在下一 DAG 波次前把结果注入运行时 FactStore；它只在运行时供下游复用，不写回 Provider 原始 facts。中间事实的 `source_ref` 同时保存 `input_fact_ids` 和向上游递归收集的 `input_physical_fact_ids`，前者用于逻辑执行复现，后者用于物理来源审计。`materialize_as.validation` 支持 `facts_present`、`unit_consistent`、`metric_additive` 和 `unit_scale_verified`；其中可聚合性必须来自输入事实的飞书元信息。`unit_scale_verified` 仅用于 Prepare 已证明的用户公式目标回退，必须携带输入指标实际单位、目标单位和有限非零 `scale_factor`；执行器先核验运行时事实单位，再对表达式结果应用换算，不自行推断单位。
+
+周上卷继续使用白名单 `multiply` 与 `sum` 表达式：每个周事实乘以 Prepare 计算的 `overlap_days/7` 后求和。执行器不重新推导周边界或选择上卷路径，只校验输入事实、单位、additive 标记和 source revision；周覆盖证明保存在 `materialize_as.rollup` 中。
 
 归因节点进入执行器前，校验器必须确认 `target_ref.target_semantics` 属于权威算子契约的 `supported_target_semantics`。能力不匹配的节点使用 `status=blocked` 和 `execution.mode=blocked`，不进入执行器；执行器保留其终态，并继续调度无依赖关系的支持节点。禁止在 binding 中改变目标或在执行器内补算不受支持的目标。
 
@@ -257,11 +261,11 @@ python3 scripts/execution_runner.py \
 
 ## 输出
 
-执行器 `1.8.1` 支持 `inline` 和 `reference` 两种存储。CLI 默认 `auto`：标准事实超过 1000 行或存在父分组扇出时选择 `reference`，否则选择 `inline`；可显式传入 `--storage-mode`。引用模式的主文件是 `execution_manifest/2.0`，至少包含：
+执行器 `1.9.0` 支持 `inline` 和 `reference` 两种存储。CLI 默认 `auto`：标准事实超过 1000 行或存在父分组扇出时选择 `reference`，否则选择 `inline`；可显式传入 `--storage-mode`。引用模式的主文件是 `execution_manifest/2.0`，至少包含：
 
 ```json
 {
-  "executor": {"name": "scene-analysis-lightweight-executor", "version": "1.8.1"},
+  "executor": {"name": "scene-analysis-lightweight-executor", "version": "1.9.0"},
   "storage": {"mode": "reference", "schema_version": "2.0", "artifact_root": "execution-result.json.artifacts"},
   "plan_hash": "sha256",
   "facts_hash": "sha256",

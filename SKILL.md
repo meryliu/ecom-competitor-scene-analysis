@@ -27,7 +27,7 @@ description: WHEN 用户需要基于竞品飞书宏观表格做竞品事实查�
 
 1. 读取统一分析请求契约，从 Query 生成精简 `analysis_ir/1.0`；同一轮多个独立问题生成一个 `analysis_bundle/1.0`。
 2. 只声明用户要求的业务指标、时期、范围、派生和归因目标。不要为标准指标组合补写基础指标，不要为年/季/月粒度降级手写 `input_adaptations` 或计算 AST；统一 runner 根据源表能力生成这些执行细节。
-3. 统一 runner 在编译前按需求生成有界候选。每个需求分别保留核心指标语义和注册派生意图；不要用完整 Query 中的“同比、增速、涨幅”等词改写其他指标或子句。候选先按“核心+派生、核心+注册派生、核心事实、仅派生词 fallback”分层，再在层内按核心、派生和限定语义评分；核心语义层级不得被词面相似度或执行成本覆盖。Resolve 只做轻量结构能力判断：不可聚合指标必须支持目标粒度；可聚合指标支持目标粒度或按 [references/resolution-policy-registry.json](references/resolution-policy-registry.json) 的粒度边从更细粒度上卷即可。维度只在需求明确要求 `dimension_refs/group_dimensions` 拆解且指标元信息明确不支持时否决；没有拆解要求、元信息未知或映射歧义时延后到 Prepare。注册组合按相同原则递归检查叶子。结构不可执行候选不进入自动选择或澄清。Prepare 再校验实际事实块、时期、维度和值域覆盖并生成 `direct_fact`、`aggregate_fact` 等适配；Compile 只消费解析结果，不重新猜语义。源侧预计算派生通过需求级 binding 承接，不能替换同一逻辑指标的水平事实，也不能再次执行同一派生算子。
+3. 统一 runner 在编译前按需求生成有界候选。每个需求分别保留核心指标语义和注册派生意图；不要用完整 Query 中的“同比、增速、涨幅”等词改写其他指标或子句。候选先按“核心+派生、核心+注册派生、核心事实、仅派生词 fallback”分层，再在层内按核心、派生和限定语义评分；核心语义层级不得被词面相似度或执行成本覆盖。Resolve 只做轻量结构能力判断：不可聚合指标必须支持目标粒度；可聚合指标支持目标粒度或按 [references/resolution-policy-registry.json](references/resolution-policy-registry.json) 的粒度边从更细粒度上卷即可。指标可聚合性是时间聚合和维度聚合的共同前置条件，`supported_grains` 只表示源表支持的粒度。维度只在需求明确要求 `dimension_refs/group_dimensions` 拆解且指标元信息明确不支持时否决；没有拆解要求、元信息未知或映射歧义时延后到 Prepare。注册组合按相同原则递归检查叶子。结构不可执行候选不进入自动选择或澄清。Prepare 再校验实际事实块、时期、维度和值域覆盖并生成 `direct_fact`、`aggregate_fact` 等适配；直接事实优先，月/季/年按最近完整粒度选择上卷路径。周标签按源配置声明的 ISO 8601 周历解释，周上卷按 `overlap_days/7` 加权；Compile 只消费解析结果，不重新猜语义。源侧预计算派生通过需求级 binding 承接，不能替换同一逻辑指标的水平事实，也不能再次执行同一派生算子。
 4. 只运行一次统一入口：
 
 ```bash

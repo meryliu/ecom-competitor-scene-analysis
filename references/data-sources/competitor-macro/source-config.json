@@ -4,6 +4,14 @@
   "source_id": "competitor_macro_sheet",
   "source_url": "https://bytedance.larkoffice.com/wiki/TrBAw0rDXiBrcUkJlbgcjsyYnkg?sheet=ESXBdZ&table=tbl5Ny6EgnsBwEBK&view=vew6r3PPJm",
   "allow_stale_by_default": false,
+  "period_semantics": {
+    "week": {
+      "label_format": "YYYY-Www",
+      "calendar": "iso8601",
+      "week_start": "monday",
+      "week_end": "sunday"
+    }
+  },
   "sheet_roles": {
     "metric_metadata": {"allowed_names": ["指标元信息"]},
     "dimension_metadata": {"allowed_names": ["维度元信息"]},

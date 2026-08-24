@@ -30,6 +30,15 @@ def load_source_config(path: Path, *, source_url: str | None = None) -> dict[str
     missing = [key for key in required if not value.get(key)]
     if missing:
         raise ValueError(f"data source config is missing: {missing}")
+    period_semantics = value.get("period_semantics") or {}
+    week_semantics = period_semantics.get("week") if isinstance(period_semantics, dict) else None
+    if week_semantics is not None and week_semantics != {
+        "label_format": "YYYY-Www",
+        "calendar": "iso8601",
+        "week_start": "monday",
+        "week_end": "sunday",
+    }:
+        raise ValueError("unsupported week period semantics")
     effective = deepcopy(value)
     if source_url is not None:
         effective["source_url"] = source_url
@@ -38,6 +47,7 @@ def load_source_config(path: Path, *, source_url: str | None = None) -> dict[str
         for key in (
             "schema_version", "provider_id", "source_id", "source_url",
             "sheet_roles", "allow_stale_by_default",
+            "period_semantics",
         )
     })
     return effective

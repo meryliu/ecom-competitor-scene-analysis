@@ -21,6 +21,7 @@ from business_intent_policy import (
     load_business_intent_policy,
 )
 from source_capability import evaluate_structural_grain_capability
+from time_rollup import normalize_period as _normalize_time_period
 
 
 POLICY_SCHEMA = "resolution_policy/2.0"
@@ -195,7 +196,12 @@ def validate_resolution_policy(policy: dict[str, Any]) -> None:
                 f"candidate_evaluation.{field} 必须是 0 到 1 的数值",
             )
     grain_rollup = policy.get("grain_rollup") or {}
-    if not isinstance(grain_rollup, dict) or set(grain_rollup) - {"allowed_edges"}:
+    if not isinstance(grain_rollup, dict) or set(grain_rollup) - {
+        "allowed_edges",
+        "aggregation_prerequisites",
+        "priority",
+        "week_weight_rule",
+    }:
         raise ResolutionPolicyError(
             "INVALID_RESOLUTION_POLICY_FIELD", "grain_rollup 包含未允许字段"
         )
@@ -210,6 +216,32 @@ def validate_resolution_policy(policy: dict[str, Any]) -> None:
     ):
         raise ResolutionPolicyError(
             "INVALID_RESOLUTION_POLICY", "grain_rollup.allowed_edges 必须是合法粒度边数组"
+        )
+    prerequisites = grain_rollup.get("aggregation_prerequisites")
+    if prerequisites is not None and prerequisites != ["metric_additive"]:
+        raise ResolutionPolicyError(
+            "INVALID_RESOLUTION_POLICY", "grain_rollup.aggregation_prerequisites 仅支持 metric_additive"
+        )
+    priority = grain_rollup.get("priority")
+    if priority is not None:
+        if not isinstance(priority, dict) or any(
+            key not in {"month", "quarter", "year"}
+            or not isinstance(value, list)
+            or not value
+            or any(item not in allowed_grains for item in value)
+            for key, value in priority.items()
+        ):
+            raise ResolutionPolicyError(
+                "INVALID_RESOLUTION_POLICY", "grain_rollup.priority 配置非法"
+            )
+    week_weight_rule = grain_rollup.get("week_weight_rule")
+    if week_weight_rule is not None and week_weight_rule != {
+        "calendar": "source.period_semantics.week",
+        "formula": "overlap_days/7",
+        "inclusive_bounds": True,
+    }:
+        raise ResolutionPolicyError(
+            "INVALID_RESOLUTION_POLICY", "grain_rollup.week_weight_rule 配置非法"
         )
     rules = policy.get("rules")
     if not isinstance(rules, dict):
@@ -641,27 +673,7 @@ def _query_metric_resolution(
 
 
 def _normalize_period(value: Any) -> tuple[str, str] | None:
-    text = re.sub(r"\s+", "", str(value or "")).lower()
-    patterns = (
-        ("month", r"(20\d{2})(?:年|[-/.])?(1[0-2]|0?[1-9])月?"),
-        ("week", r"(20\d{2})(?:年)?(?:第|[-/]?w)([0-5]?\d)周?"),
-        ("quarter", r"(20\d{2})(?:年)?(?:第?([1-4])季度|[-/]?q([1-4]))"),
-        ("year", r"(20\d{2})年?"),
-    )
-    for grain, pattern in patterns:
-        match = re.fullmatch(pattern, text, flags=re.IGNORECASE)
-        if not match:
-            continue
-        year = int(match.group(1))
-        if grain == "month":
-            return grain, f"{year:04d}-{int(match.group(2)):02d}"
-        if grain == "week":
-            week = int(match.group(2))
-            return (grain, f"{year:04d}-W{week:02d}") if 1 <= week <= 53 else None
-        if grain == "quarter":
-            return grain, f"{year:04d}-Q{int(match.group(2) or match.group(3))}"
-        return grain, f"{year:04d}"
-    return None
+    return _normalize_time_period(value)
 
 
 def _candidate_dimension(

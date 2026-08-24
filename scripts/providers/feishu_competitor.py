@@ -6,7 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from competitor_fact_provider import fetch_facts_from_index
+from competitor_fact_provider import FACT_PROVIDER_VERSION, fetch_facts_from_index
 from business_intent_policy import (
     DEFAULT_POLICY_PATH as DEFAULT_BUSINESS_INTENT_POLICY,
     business_intent_policy_hash,
@@ -99,6 +99,7 @@ class FeishuCompetitorGateway(DataGateway):
                 self.business_intent_policy
             ),
             "resolution_engine_version": ENGINE_VERSION,
+            "fact_provider_version": FACT_PROVIDER_VERSION,
         }
         metric_catalogue = resolved_index.get("metrics") or {}
         dimension_catalogue = resolved_index.get("dimensions") or {}

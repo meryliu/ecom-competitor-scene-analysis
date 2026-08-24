@@ -1,6 +1,6 @@
 {
   "schema_version": "resolution_policy/2.0",
-  "policy_version": "2.1.0",
+  "policy_version": "2.2.0",
   "limits": {
     "max_candidates_per_case": 3
   },
@@ -33,6 +33,17 @@
     "allow_unique_capability_selection": true
   },
   "grain_rollup": {
+    "aggregation_prerequisites": ["metric_additive"],
+    "priority": {
+      "month": ["month", "week"],
+      "quarter": ["quarter", "month", "week"],
+      "year": ["year", "quarter", "month", "week"]
+    },
+    "week_weight_rule": {
+      "calendar": "source.period_semantics.week",
+      "formula": "overlap_days/7",
+      "inclusive_bounds": true
+    },
     "allowed_edges": [
       ["day", "week"],
       ["week", "month"],

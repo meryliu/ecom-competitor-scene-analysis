@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from providers.feishu_competitor import FeishuCompetitorGateway  # noqa: E402
+from competitor_fact_provider import FACT_PROVIDER_VERSION  # noqa: E402
 
 
 class FeishuGatewayTests(unittest.TestCase):
@@ -53,6 +54,10 @@ class FeishuGatewayTests(unittest.TestCase):
         self.assertIs(fetch_mock.call_args.args[1], index)
         self.assertEqual(result["schema_version"], "scene_facts/2.0")
         self.assertEqual(capability["metric_bindings"]["支付成交GMV"], "支付GMV")
+        self.assertEqual(
+            capability["source"]["fact_provider_version"],
+            FACT_PROVIDER_VERSION,
+        )
         serialized = str(capability)
         for physical in ("spreadsheet_token", "sheet_id", "rows", "physical-sheet"):
             self.assertNotIn(physical, serialized)

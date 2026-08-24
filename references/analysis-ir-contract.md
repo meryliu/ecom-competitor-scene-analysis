@@ -111,6 +111,8 @@
 
 适配可用于时间或维度上卷、范围聚合及其他确定性输入形态转换。聚合时必须使用 `metric_additive`，其值只从 Provider 返回的飞书指标元信息校验。指标组合继续使用 `metric_compositions`，业务派生继续使用 `derived_requirements`，不要在适配层复制定义。
 
+源数据只有周标签时，周标签按源配置中的 ISO 8601 语义解释（周一至周日）。Prepare 生成周上卷适配时可在 `input_adaptations.rollup` 保存 `calendar`、`target_period` 和逐周 `components`；每个组件包含 `period`、`overlap_days` 和 `weight=overlap_days/7`。直接事实优先，且不得混合月份/季度组件与周组件。
+
 ### 事实观察
 
 ```json

@@ -85,6 +85,8 @@ Provider 输出的根对象为：
 
 `value=null` 时必须保持 `missing=true`；不能用 0 或模型估算替代。Provider 只返回基础指标，结算率、同比、占比和归因都由本 Skill 的确定性执行器完成。执行器可以重算缺失标记，但不得抹掉 `raw_missing`。
 
+根对象 `facts[].fact_id` 标识物理事实。按 binding 投影后的执行输入改用 `fact_id=stable_id(physical_fact_id,binding_id)`，并同时保留 `physical_fact_id` 与 `binding_id`。物理去重、消费绑定和逻辑执行身份分别由 Provider、Fact Contract 和 Executor 负责，禁止在 Intent Resolution 或 Executor 中读取源坐标后重新映射。
+
 ## 组合与通用派生
 
 组合指标使用 [metric-composition-registry.json](metric-composition-registry.json)，例如结算率固定为同周期、同范围、同维度的 `结算GMV / 支付GMV`。维度域整体计算时先依据飞书元信息聚合可加的基础输入，再执行同一组合公式；Skill 不重复维护原子指标聚合性。`selected_set_share` 的分母通过 `domain_ref` 取得当前 revision 的明确成员，不自动解释为全市场份额。

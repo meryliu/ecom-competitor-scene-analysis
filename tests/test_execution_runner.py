@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from compile_plan import compile_and_validate  # noqa: E402
+from fact_contract import project_scene_facts  # noqa: E402
 from execution_runner import (  # noqa: E402
     EventLog,
     ExecutionError,
@@ -43,6 +44,63 @@ def fact(slot_id: str, value: float = 1.0) -> dict:
 
 
 class NormalizeFactsTests(unittest.TestCase):
+    def test_one_physical_fact_can_feed_distinct_logical_views(self) -> None:
+        payload = {
+            "schema_version": "scene_facts/2.0",
+            "facts": [{
+                "fact_id": "physical_1",
+                "metric": "邮政快递揽收量",
+                "period": "2026-W33",
+                "dimensions": {},
+                "value": 37.51,
+                "unit": "亿件",
+                "definition": "邮政快递揽收量",
+                "missing": False,
+            }],
+            "bindings": [
+                {"binding_id": "binding_overall", "fact_id": "physical_1", "task_id": "q", "fact_slot_id": "overall", "period_role": "analysis", "view_id": "overall"},
+                {"binding_id": "binding_share", "fact_id": "physical_1", "task_id": "q", "fact_slot_id": "share_denominator", "period_role": "analysis", "view_id": "douyin_share"},
+            ],
+        }
+        projected = project_scene_facts(payload, "q")
+        normalized = normalize_facts(projected, {"analysis": "2026-W33"})
+        self.assertEqual(len(normalized), 2)
+        self.assertEqual({row["view_id"] for row in normalized}, {"overall", "douyin_share"})
+        self.assertEqual({row["physical_fact_id"] for row in normalized}, {"physical_1"})
+
+    def test_iso_week_rollup_expression_applies_overlap_weights(self) -> None:
+        rows = []
+        for role, value in (("w05", 1000.0), ("w06", 1000.0), ("w09", 1000.0)):
+            rows.append({
+                "fact_id": role,
+                "metric": "支付GMV",
+                "period_role": role,
+                "period": role,
+                "view_id": "platform",
+                "dimensions": {"平台": "京东"},
+                "value": value,
+                "unit": "亿元",
+                "additive": True,
+                "missing": False,
+                "source_ref": {"revision": 1},
+            })
+        expression = {
+            "op": "sum",
+            "args": [
+                {"op": "multiply", "args": [
+                    {"fact": {"metric": "支付GMV", "period_role": "w05"}},
+                    {"literal": 2 / 7},
+                ]},
+                {"fact": {"metric": "支付GMV", "period_role": "w06"}},
+                {"op": "multiply", "args": [
+                    {"fact": {"metric": "支付GMV", "period_role": "w09"}},
+                    {"literal": 5 / 7},
+                ]},
+            ],
+        }
+        value = evaluate_expression(expression, FactStore(rows), {})
+        self.assertAlmostEqual(value, 2000.0)
+
     def test_ratio_percentage_difference_is_percentage_points(self) -> None:
         rows = []
         for role, period, value in (
@@ -80,6 +138,7 @@ class NormalizeFactsTests(unittest.TestCase):
         ):
             rows.append({
                 "fact_id": metric,
+                "physical_fact_id": f"physical_{metric}",
                 "metric": metric,
                 "period_role": "analysis",
                 "period": "2026-06",
@@ -115,6 +174,10 @@ class NormalizeFactsTests(unittest.TestCase):
             "formula", execution, 48292.0 * 15.5 * 52.0, FactStore(rows)
         )
         self.assertAlmostEqual(materialized[0]["value"], 3892.3352)
+        self.assertEqual(
+            materialized[0]["source_ref"]["input_physical_fact_ids"],
+            ["physical_价格", "physical_规模", "physical_频次"],
+        )
 
     def test_formula_materialization_rejects_runtime_unit_drift(self) -> None:
         row = {

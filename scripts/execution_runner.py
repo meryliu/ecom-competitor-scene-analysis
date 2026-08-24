@@ -20,7 +20,7 @@ from typing import Any, Callable, Iterable
 from fact_contract import SCENE_FACTS_V2, project_scene_facts
 
 EXECUTOR_NAME = "scene-analysis-lightweight-executor"
-EXECUTOR_VERSION = "1.8.1"
+EXECUTOR_VERSION = "1.9.0"
 STORAGE_SCHEMA_VERSION = "2.0"
 RUNNABLE_HANDLERS = {"fact_artifact", "derived", "attribution"}
 PERIOD_VALUE_FIELDS = {
@@ -1280,6 +1280,16 @@ def materialize_intermediate_facts(
         if not math.isfinite(parsed_value):
             raise ExecutionError("materialized fact value must be finite")
         input_fact_ids = sorted({str(row.get("fact_id")) for row in input_rows})
+        input_physical_fact_ids = sorted({
+            str(physical_fact_id)
+            for row in input_rows
+            for physical_fact_id in (
+                [row.get("physical_fact_id")]
+                if row.get("physical_fact_id")
+                else (row.get("source_ref") or {}).get("input_physical_fact_ids") or []
+            )
+            if physical_fact_id
+        })
         identity = {
             "node_id": node_id,
             "metric": target["metric"],
@@ -1309,8 +1319,14 @@ def materialize_intermediate_facts(
                 "type": "input_adaptation",
                 "node_id": node_id,
                 "input_fact_ids": input_fact_ids,
+                "input_physical_fact_ids": input_physical_fact_ids,
                 "revisions": sorted(revisions),
                 "rule_source": target.get("rule_source"),
+                **(
+                    {"rollup": deepcopy(target.get("rollup"))}
+                    if target.get("rollup") is not None
+                    else {}
+                ),
             },
             "coverage": "full",
             "intermediate": True,

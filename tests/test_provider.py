@@ -51,8 +51,21 @@ def sample_index() -> dict:
 
 class ProviderTests(unittest.TestCase):
     def test_percentage_display_value_keeps_declared_unit_magnitude(self) -> None:
-        self.assertEqual(provider._parse_number("28.1%"), 28.1)
-        self.assertEqual(provider._parse_number("1,234.5"), 1234.5)
+        self.assertEqual(provider.parse_source_number("28.1%", "%"), 28.1)
+        self.assertEqual(provider.parse_source_number("28.1", "%"), 28.1)
+        self.assertEqual(provider.parse_source_number("1,234.5", "亿元"), 1234.5)
+
+    def test_percentage_point_display_value_keeps_declared_unit_magnitude(self) -> None:
+        self.assertEqual(provider.parse_source_number("+2.3pp", "pp"), 2.3)
+        self.assertEqual(provider.parse_source_number("-0.8PP", "pp"), -0.8)
+        self.assertEqual(provider.parse_source_number("2.3", "pp"), 2.3)
+
+    def test_numeric_suffix_must_match_declared_unit(self) -> None:
+        for value, unit in (("2.3pp", "%"), ("28.1%", "pp"), ("2.3pp", "亿元")):
+            with self.subTest(value=value, unit=unit):
+                with self.assertRaises(provider.SkillError) as raised:
+                    provider.parse_source_number(value, unit)
+                self.assertEqual(raised.exception.code, "numeric_unit_mismatch")
 
     def test_scalar_dimension_value_is_confirmed_by_source_metadata(self) -> None:
         resolution = provider._resolve_dimension_from_value(
@@ -197,6 +210,35 @@ class ProviderTests(unittest.TestCase):
             payload = provider.fetch_facts(request)
         self.assertEqual(payload["facts"][0]["value"], 28.1)
         self.assertEqual(payload["facts"][0]["unit"], "%")
+
+    def test_provider_emits_percentage_points_in_declared_unit_magnitude(self) -> None:
+        index = sample_index()
+        index["metrics"]["支付GMV"]["unit"] = "pp"
+        request = {
+            "request_id": "r1",
+            "fact_slots": [{
+                "fact_slot_id": "slot1",
+                "metric_ref": "share_yoy_change",
+                "metric": "支付GMV",
+                "period": "2026-05",
+                "period_role": "analysis",
+                "view_id": "overall",
+                "dimension_refs": ["平台"],
+                "selector_dimensions": {"平台": ["京东"]},
+            }],
+        }
+        with patch.object(
+            provider,
+            "ensure_shared_index",
+            return_value=(index, "hit", Path("/tmp/index.json")),
+        ), patch.object(
+            provider,
+            "_read_cells",
+            return_value={("sheet", 5, 2): "+2.3pp"},
+        ), patch.object(provider.LarkClient, "revision", return_value=7):
+            payload = provider.fetch_facts(request)
+        self.assertEqual(payload["facts"][0]["value"], 2.3)
+        self.assertEqual(payload["facts"][0]["unit"], "pp")
 
     def test_overlapping_consumers_share_physical_facts(self) -> None:
         index = sample_index()
