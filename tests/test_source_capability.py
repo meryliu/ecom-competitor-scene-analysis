@@ -1,0 +1,47 @@
+from __future__ import annotations
+
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+from source_capability import (  # noqa: E402
+    can_rollup_grain,
+    evaluate_structural_grain_capability,
+)
+
+
+class SourceCapabilityTests(unittest.TestCase):
+    def test_registered_grain_graph_includes_week_to_quarter(self) -> None:
+        self.assertTrue(can_rollup_grain("week", "month"))
+        self.assertTrue(can_rollup_grain("week", "quarter"))
+        self.assertTrue(can_rollup_grain("week", "year"))
+        self.assertFalse(can_rollup_grain("quarter", "month"))
+
+    def test_non_additive_metric_requires_exact_grain(self) -> None:
+        metadata = {
+            "supported_grains": ["month"],
+            "aggregation_mode": "non_additive",
+        }
+        result = evaluate_structural_grain_capability(metadata, "quarter")
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_additive_metric_accepts_registered_finer_grain(self) -> None:
+        metadata = {
+            "supported_grains": ["week"],
+            "aggregation_mode": "additive",
+        }
+        result = evaluate_structural_grain_capability(metadata, "quarter")
+        self.assertEqual(result["status"], "available")
+        self.assertEqual(result["path"], "aggregate_fact")
+        self.assertEqual(result["source_grain"], "week")
+
+    def test_unknown_grain_metadata_is_not_declared_executable(self) -> None:
+        result = evaluate_structural_grain_capability({}, "month")
+        self.assertEqual(result["status"], "unknown")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1317,7 +1317,50 @@ class Compiler:
                 )
             fact_slot_ids: list[str] = []
             result_dependencies: set[str] = set()
-            if definition_status == "registered":
+            if requirement.get("fulfillment_mode") == "source_derived_fact":
+                derived_metric_id = require_nonempty_string(
+                    requirement.get("derived_metric_id"), f"{requirement_id}.derived_metric_id"
+                )
+                if not isinstance(definitions.get(derived_metric_id), dict):
+                    raise CompileError(f"unregistered derived_metric_id: {derived_metric_id}")
+                source_metric_ref = require_nonempty_string(
+                    requirement.get("source_metric_ref"), f"{requirement_id}.source_metric_ref"
+                )
+                source_metric = self.metric(source_metric_ref)
+                source_role = require_nonempty_string(
+                    requirement.get("source_period_role"), f"{requirement_id}.source_period_role"
+                )
+                dimensions = requirement.get("dimensions") or {}
+                slot_id = self.add_fact_slot(
+                    requirement_id,
+                    source_metric_ref,
+                    source_role,
+                    view_id=requirement.get("view_id"),
+                    dimension_refs=self._fact_dimension_refs(
+                        dimensions, requirement.get("dimension_refs", [])
+                    ),
+                    selector_dimensions=dimensions,
+                )
+                fact_slot_ids.append(slot_id)
+                expression = self._bind_fact_domain(
+                    self._fact_selector(
+                        source_metric["name"],
+                        view_id=requirement.get("view_id"),
+                        dimensions=self._expression_dimensions(dimensions),
+                    ) | {"period_role": source_role},
+                    dimensions,
+                    requirement.get("dimension_refs", []),
+                )
+                intermediate_expressions = {}
+                unit = source_metric["unit"]
+                definition_source = "source_metric_metadata"
+                definition_version = "source_precomputed/1.0"
+                definition_status = "source_precomputed"
+                inference_basis = None
+                kind = "source_precomputed_derived"
+                quality_gate = ["facts_present", "unit_consistent"]
+                period_roles = [source_role]
+            elif definition_status == "registered":
                 derived_metric_id = require_nonempty_string(
                     requirement.get("derived_metric_id"), f"{requirement_id}.derived_metric_id"
                 )

@@ -169,6 +169,63 @@ def _apply_business_intent_selection(ir: dict[str, Any], index: dict[str, Any]) 
         metric["business_intent_candidate_id"] = selected.get("candidate_id")
 
 
+def _apply_requirement_bindings(ir: dict[str, Any], index: dict[str, Any]) -> None:
+    """Materialize requirement-scoped source bindings without changing the core metric."""
+    bindings = index.get("requirement_bindings") or {}
+    if not bindings:
+        return
+    metrics = _metric_map(ir)
+    requirements = {
+        str(item.get("requirement_id")): item
+        for item in ir.get("derived_requirements") or []
+        if isinstance(item, dict) and item.get("requirement_id")
+    }
+    source_catalogue = index.get("metrics") or {}
+    for requirement_id, binding in bindings.items():
+        if not isinstance(binding, dict) or binding.get("mode") != "source_derived_fact":
+            continue
+        requirement = requirements.get(str(requirement_id))
+        if requirement is None:
+            continue
+        output_metric_ref = str(requirement.get("metric_ref") or "")
+        output_metric = metrics.get(output_metric_ref)
+        source_metric = str(binding.get("source_metric") or "")
+        metadata = source_catalogue.get(source_metric) or {}
+        if output_metric is None or not source_metric or not metadata:
+            continue
+        source_metric_ref = f"__source_derived_{_stable_suffix((requirement_id, source_metric))}"
+        logical_source_name = f"{output_metric.get('name')}::{requirement.get('derived_metric_id')}"
+        source_object = metadata.get("metric_object")
+        if source_object not in {"volume", "ratio"}:
+            source_object = "ratio" if str(metadata.get("unit") or "").lower() in {
+                "%", "rate", "ratio", "share", "pp"
+            } else "volume"
+        source_declaration = {
+            "metric_id": source_metric_ref,
+            "name": logical_source_name,
+            "metric_object": source_object,
+            "unit": metadata.get("unit") or "待元信息解析",
+            "definition": metadata.get("notes") or "source precomputed derived metric",
+            "source_metric_name": source_metric,
+            "source_metric_object": source_object,
+            "source_dimension_bindings": deepcopy(
+                (index.get("metric_dimension_bindings") or {}).get(source_metric) or {}
+            ),
+            "aggregation": metadata.get("aggregation"),
+            "additive": metadata.get("additive"),
+            "generated_from": "requirement_binding",
+        }
+        ir["analysis_task"].setdefault("metrics", []).append(source_declaration)
+        metrics[source_metric_ref] = source_declaration
+        index.setdefault("metric_bindings", {})[logical_source_name] = source_metric
+        requirement["fulfillment_mode"] = "source_derived_fact"
+        requirement["source_metric_ref"] = source_metric_ref
+        requirement["source_period_role"] = str(
+            binding.get("source_period_role") or "analysis"
+        )
+        requirement["source_binding_candidate_id"] = binding.get("candidate_id")
+
+
 def _bind_declared_metric_metadata(ir: dict[str, Any], index: dict[str, Any]) -> None:
     """Resolve source-backed metadata once before compilation and adaptation."""
     metrics = (ir.get("analysis_task") or {}).get("metrics") or []
@@ -469,6 +526,13 @@ def _requirement_roles(
     for requirement in ir.get("derived_requirements") or []:
         if str(requirement.get("requirement_id")) in blocked:
             continue
+        if requirement.get("fulfillment_mode") == "source_derived_fact":
+            consumers.append({
+                **requirement,
+                "metric_ref": requirement.get("source_metric_ref"),
+                "role": requirement.get("source_period_role", "analysis"),
+            })
+            continue
         definition = (derived_registry.get("definitions") or {}).get(
             requirement.get("derived_metric_id")
         ) or {}
@@ -753,6 +817,7 @@ def prepare_analysis_ir(
     except SelectorContextError as exc:
         raise PreparationError("SELECTOR_CONTEXT_INVALID", str(exc)) from exc
     _apply_business_intent_selection(prepared, index)
+    _apply_requirement_bindings(prepared, index)
     _bind_declared_metric_metadata(prepared, index)
     task = prepared.get("analysis_task") or {}
     metrics = _metric_map(prepared)

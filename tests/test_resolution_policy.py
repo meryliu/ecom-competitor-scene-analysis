@@ -324,7 +324,7 @@ class ResolutionPolicyTests(unittest.TestCase):
         self.assertEqual(stale["resolution_cases"][0]["case_id"], case["case_id"])
         self.assertEqual(stale["resolution_cases"][0]["patch_status"], "stale_patch")
 
-    def test_intent_planning_selects_only_executable_metric_candidate(self) -> None:
+    def test_query_wide_modifier_does_not_rescue_structurally_infeasible_fact(self) -> None:
         index = {
             "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
             "metrics": {
@@ -369,14 +369,12 @@ class ResolutionPolicyTests(unittest.TestCase):
         }
         result = resolve_request_overlay(index, request, self.policy)
         task = result["task_resolutions"]["q"]
-        self.assertEqual(task["metric_bindings"]["线上社零"], "实物商品网上零售额同比增速")
-        self.assertEqual(task["resolution_cases"], [])
-        selected = task["intent_resolutions"]["retail"]["selected_candidate"]
-        self.assertEqual(selected["status"], "viable")
-        self.assertEqual(selected["path"], "direct_fact")
-        self.assertEqual(selected["metric_object"], "ratio")
+        self.assertNotIn("线上社零", task["metric_bindings"])
+        case = task["resolution_cases"][0]
+        self.assertEqual(case["action"], "block")
+        self.assertEqual(case["candidates"], [])
 
-    def test_intent_planning_confirms_when_distinct_candidates_are_executable(self) -> None:
+    def test_query_wide_modifier_does_not_create_fact_candidate_ambiguity(self) -> None:
         index = {
             "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
             "metrics": {
@@ -398,12 +396,9 @@ class ResolutionPolicyTests(unittest.TestCase):
             }],
         }]}
         result = resolve_request_overlay(index, request, self.policy)
-        case = result["task_resolutions"]["q"]["resolution_cases"][0]
-        self.assertEqual(case["kind"], "interpretation")
-        self.assertEqual(case["action"], "confirm")
         self.assertEqual(
-            {item["metric"] for item in case["candidates"] if item["status"] == "viable"},
-            {"业务规模", "业务同比增速"},
+            result["task_resolutions"]["q"]["metric_bindings"]["业务"],
+            "业务规模",
         )
 
     def test_intent_candidate_respects_registered_operation_object_capability(self) -> None:
@@ -436,11 +431,9 @@ class ResolutionPolicyTests(unittest.TestCase):
             item for item in result["resolution_decisions"]
             if item.get("kind") == "interpretation"
         )["candidates"]
-        ratio = next(item for item in candidates if item.get("metric") == "业务同比增速")
-        self.assertEqual(ratio["status"], "infeasible")
-        self.assertIn("operation_metric_object_unsupported", ratio["conflicts"])
+        self.assertEqual([item["metric"] for item in candidates], ["业务规模"])
 
-    def test_intent_candidate_uses_unique_capability_evidence_for_fragmented_alias(self) -> None:
+    def test_derived_only_alias_does_not_replace_core_fact(self) -> None:
         index = {
             "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
             "metrics": {
@@ -471,11 +464,353 @@ class ResolutionPolicyTests(unittest.TestCase):
         }]}
         result = resolve_request_overlay(index, request, self.policy)
         task = result["task_resolutions"]["q"]
-        self.assertEqual(task["metric_bindings"]["线上社零"], "实物商品网上零售额同比增速")
-        selected = task["intent_resolutions"]["m"]["selected_candidate"]
-        self.assertIn("semantic_equivalence", selected["evidence"])
-        self.assertEqual(selected["confidence_detail"]["semantic"], "equivalent")
-        self.assertEqual(selected["confidence_detail"]["fact_capability"], "pass")
+        self.assertNotIn("线上社零", task["metric_bindings"])
+        self.assertEqual(task["resolution_cases"][0]["candidates"], [])
+
+    def test_core_online_rate_outranks_derived_word_overlap(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "线上化率": {
+                    "unit": "%", "metric_object": "ratio",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                    "aggregation_mode": "non_additive",
+                },
+                "社会消费品零售总额:商品零售增速": {
+                    "aliases": ["社零商品同比增速", "社零商品同比"],
+                    "unit": "%", "metric_object": "ratio",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                    "aggregation_mode": "non_additive",
+                },
+            },
+            "dimensions": {},
+            "sheets": {},
+        }
+        request = {"metrics": ["社零商品线上化率"], "contexts": [{
+            "task_id": "q",
+            "query": "26年7月，社零商品线上化率水平？线上化率同比变化如何？",
+            "periods": ["2025-07", "2026-07"],
+            "dimensions": [],
+            "metrics": [{
+                "metric_ref": "online_rate",
+                "name": "社零商品线上化率",
+                "metric_object": "ratio",
+                "metric_object_provenance": "model_inferred",
+                "unit": "待元信息解析",
+                "consumers": [
+                    {"requirement_type": "fact_observations"},
+                    {
+                        "requirement_type": "derived_requirements",
+                        "derived_metric_id": "yoy_growth",
+                        "allowed_metric_objects": ["ratio"],
+                    },
+                ],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertEqual(task["metric_bindings"]["社零商品线上化率"], "线上化率")
+        self.assertEqual(task["requirement_bindings"], {})
+        selected = task["intent_resolutions"]["online_rate"]["selected_candidate"]
+        self.assertEqual(selected["intent_id"], "declared_metric")
+        self.assertEqual(selected["confidence_detail"]["core"], 1.0)
+
+    def test_core_and_derived_source_metric_binds_only_derived_requirement(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "线上化率": {
+                    "unit": "%", "metric_object": "ratio",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                    "aggregation_mode": "non_additive",
+                },
+                "线上化率同比增速": {
+                    "unit": "%", "metric_object": "ratio",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                    "aggregation_mode": "non_additive",
+                },
+            },
+            "dimensions": {}, "sheets": {},
+        }
+        request = {"metrics": ["线上化率"], "contexts": [{
+            "task_id": "q", "query": "线上化率水平和同比", "periods": ["2025-07", "2026-07"],
+            "metrics": [{
+                "metric_ref": "rate", "name": "线上化率", "metric_object": "ratio",
+                "unit": "待元信息解析", "consumers": [
+                    {"requirement_id": "level", "requirement_type": "fact_observations"},
+                    {
+                        "requirement_id": "yoy", "requirement_type": "derived_requirements",
+                        "derived_metric_id": "yoy_growth", "period_roles": ["analysis", "analysis_last_year"],
+                        "allowed_metric_objects": ["ratio"],
+                    },
+                ],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertEqual(task["metric_bindings"]["线上化率"], "线上化率")
+        self.assertEqual(task["requirement_bindings"]["yoy"]["source_metric"], "线上化率同比增速")
+        self.assertEqual(task["requirement_bindings"]["yoy"]["mode"], "source_derived_fact")
+
+    def test_equal_strength_core_candidates_require_confirmation(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                name: {
+                    "aliases": ["线上化率"], "unit": "%", "metric_object": "ratio",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                    "aggregation_mode": "non_additive",
+                }
+                for name in ("商品线上化率", "服务线上化率")
+            },
+            "dimensions": {}, "sheets": {},
+        }
+        request = {"metrics": ["线上化率"], "contexts": [{
+            "task_id": "q", "query": "7月线上化率", "periods": ["2026-07"],
+            "metrics": [{
+                "metric_ref": "rate", "name": "线上化率", "metric_object": "ratio",
+                "unit": "待元信息解析",
+                "consumers": [{"requirement_type": "fact_observations"}],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertNotIn("线上化率", task["metric_bindings"])
+        case = task["resolution_cases"][0]
+        self.assertEqual(case["action"], "confirm")
+        self.assertEqual(
+            {item["metric"] for item in case["candidates"]},
+            {"商品线上化率", "服务线上化率"},
+        )
+
+    def test_equal_strength_source_derived_candidates_do_not_bind_requirement(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "线上化率": {
+                    "unit": "%", "metric_object": "ratio",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                    "aggregation_mode": "non_additive",
+                },
+                **{
+                    name: {
+                        "aliases": ["线上化率同比增速"], "unit": "%",
+                        "metric_object": "ratio", "supported_grains": ["month"],
+                        "dimensions": ["无"], "aggregation_mode": "non_additive",
+                    }
+                    for name in ("商品线上化率同比增速", "服务线上化率同比增速")
+                },
+            },
+            "dimensions": {}, "sheets": {},
+        }
+        request = {"metrics": ["线上化率"], "contexts": [{
+            "task_id": "q", "query": "线上化率水平和同比", "periods": ["2025-07", "2026-07"],
+            "metrics": [{
+                "metric_ref": "rate", "name": "线上化率", "metric_object": "ratio",
+                "unit": "待元信息解析", "consumers": [
+                    {"requirement_id": "level", "requirement_type": "fact_observations"},
+                    {
+                        "requirement_id": "yoy", "requirement_type": "derived_requirements",
+                        "derived_metric_id": "yoy_growth",
+                        "period_roles": ["analysis", "analysis_last_year"],
+                        "allowed_metric_objects": ["ratio"],
+                    },
+                ],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertEqual(task["metric_bindings"]["线上化率"], "线上化率")
+        self.assertNotIn("yoy", task["requirement_bindings"])
+
+    def test_additive_finer_grain_is_structurally_viable_without_period_expansion(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {"支付GMV": {
+                "unit": "亿元", "metric_object": "volume",
+                "supported_grains": ["month"], "dimensions": ["无"],
+                "aggregation_mode": "additive",
+            }},
+            "dimensions": {},
+            "sheets": {},
+        }
+        request = {"metrics": ["支付GMV"], "contexts": [{
+            "task_id": "q", "query": "季度支付GMV", "periods": ["2026-Q2"],
+            "metrics": [{
+                "metric_ref": "gmv", "name": "支付GMV", "metric_object": "volume",
+                "unit": "待元信息解析",
+                "consumers": [{"requirement_type": "fact_observations"}],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        selected = result["task_resolutions"]["q"]["intent_resolutions"]["gmv"]["selected_candidate"]
+        self.assertEqual(selected["path"], "aggregate_fact")
+        self.assertEqual(selected["capability"]["grains"][0]["source_grain"], "month")
+
+    def test_no_breakdown_does_not_reject_dimensioned_metric(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {"支付GMV": {
+                "unit": "亿元", "metric_object": "volume",
+                "supported_grains": ["month"], "dimensions": ["TOP6平台"],
+                "aggregation_mode": "additive",
+            }},
+            "dimensions": {"TOP6平台": {"aliases": ["平台"], "values": []}},
+            "sheets": {},
+        }
+        request = {"metrics": ["支付GMV"], "contexts": [{
+            "task_id": "q", "query": "7月支付GMV", "periods": ["2026-07"],
+            "dimensions": ["平台"],
+            "metrics": [{
+                "metric_ref": "gmv", "name": "支付GMV", "metric_object": "volume",
+                "unit": "待元信息解析", "required_breakdown_dimensions": [],
+                "consumers": [{
+                    "requirement_type": "fact_observations",
+                    "dimensions": ["平台"], "breakdown_dimensions": [],
+                }],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        selected = result["task_resolutions"]["q"]["intent_resolutions"]["gmv"]["selected_candidate"]
+        self.assertEqual(selected["metric"], "支付GMV")
+        self.assertEqual(selected["capability"]["dimension"]["status"], "deferred")
+        self.assertEqual(
+            selected["capability"]["dimension"]["reason"], "no_breakdown_requested"
+        )
+
+    def test_explicit_unsupported_breakdown_rejects_metric_candidate(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {"线上化率": {
+                "unit": "%", "metric_object": "ratio",
+                "supported_grains": ["month"], "dimensions": ["无"],
+                "aggregation_mode": "non_additive",
+            }},
+            "dimensions": {
+                "平台": {"aliases": [], "values": []},
+                "无": {"aliases": [], "values": []},
+            },
+            "sheets": {},
+        }
+        request = {"metrics": ["线上化率"], "contexts": [{
+            "task_id": "q", "query": "分平台线上化率", "periods": ["2026-07"],
+            "metrics": [{
+                "metric_ref": "rate", "name": "线上化率", "metric_object": "ratio",
+                "unit": "待元信息解析", "required_breakdown_dimensions": ["平台"],
+                "consumers": [{
+                    "requirement_type": "fact_observations",
+                    "breakdown_dimensions": ["平台"],
+                }],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertNotIn("线上化率", task["metric_bindings"])
+        self.assertEqual(task["resolution_cases"][0]["candidates"], [])
+
+    def test_registered_composition_is_structurally_viable_from_additive_inputs(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                name: {
+                    "unit": "亿元", "metric_object": "volume",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                    "aggregation_mode": "additive",
+                }
+                for name in ("结算GMV", "支付GMV")
+            },
+            "dimensions": {},
+            "sheets": {},
+        }
+        consumers = [{
+            "requirement_id": "settlement_rate",
+            "requirement_type": "metric_compositions",
+            "periods": ["2026-Q2"],
+        }]
+        request = {
+            "metrics": ["结算率", "结算GMV", "支付GMV"],
+            "composition_registry_hash": "registry",
+            "contexts": [{
+                "task_id": "q", "query": "季度结算率", "periods": ["2026-Q2"],
+                "metrics": [{
+                    "metric_ref": "rate", "name": "结算率", "metric_object": "ratio",
+                    "unit": "待元信息解析", "consumers": consumers,
+                }],
+                "composition_intents": [{
+                    "metric_ref": "rate", "requested_metric": "结算率",
+                    "composition_id": "competitor_settlement_rate",
+                    "inputs": [
+                        {"role": "numerator", "metric": "结算GMV"},
+                        {"role": "denominator", "metric": "支付GMV"},
+                    ],
+                    "consumers": consumers,
+                }],
+            }],
+        }
+        result = resolve_request_overlay(index, request, self.policy)
+        composition = result["task_resolutions"]["q"]["composition_resolutions"][0]
+        self.assertEqual(composition["fallback_status"], "ready")
+        for status in composition["input_statuses"].values():
+            self.assertEqual(status["status"], "bound")
+            self.assertEqual(status["structural_capability"][0]["path"], "aggregate_fact")
+
+    def test_registered_composition_rejects_explicitly_unsupported_leaf_breakdown(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "结算GMV": {
+                    "unit": "亿元", "metric_object": "volume",
+                    "supported_grains": ["month"], "dimensions": ["TOP6平台"],
+                    "aggregation_mode": "additive",
+                },
+                "支付GMV": {
+                    "unit": "亿元", "metric_object": "volume",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                    "aggregation_mode": "additive",
+                },
+            },
+            "dimensions": {
+                "TOP6平台": {"aliases": ["平台"], "values": []},
+                "无": {"aliases": [], "values": []},
+            },
+            "sheets": {},
+        }
+        consumers = [{
+            "requirement_id": "settlement_rate",
+            "requirement_type": "metric_compositions",
+            "periods": ["2026-07"],
+            "breakdown_dimensions": ["平台"],
+        }]
+        request = {
+            "metrics": ["结算率", "结算GMV", "支付GMV"],
+            "composition_registry_hash": "registry",
+            "contexts": [{
+                "task_id": "q", "query": "分平台结算率", "periods": ["2026-07"],
+                "metrics": [{
+                    "metric_ref": "rate", "name": "结算率", "metric_object": "ratio",
+                    "unit": "待元信息解析", "consumers": consumers,
+                }],
+                "composition_intents": [{
+                    "metric_ref": "rate", "requested_metric": "结算率",
+                    "composition_id": "competitor_settlement_rate",
+                    "inputs": [
+                        {"role": "numerator", "metric": "结算GMV"},
+                        {"role": "denominator", "metric": "支付GMV"},
+                    ],
+                    "consumers": consumers,
+                }],
+            }],
+        }
+        result = resolve_request_overlay(index, request, self.policy)
+        composition = result["task_resolutions"]["q"]["composition_resolutions"][0]
+        self.assertEqual(composition["fallback_status"], "blocked")
+        self.assertEqual(
+            composition["input_statuses"]["denominator"]["status"], "not_executable"
+        )
+        self.assertEqual(
+            composition["input_statuses"]["denominator"]["dimension_capability"]["reason"],
+            "metadata_dimension_unsupported",
+        )
 
 
 if __name__ == "__main__":

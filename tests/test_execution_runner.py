@@ -16,6 +16,7 @@ from execution_runner import (  # noqa: E402
     compute_run_status,
     execute_attribution,
     execute_plan,
+    evaluate_expression,
     materialize_intermediate_facts,
     normalize_facts,
 )
@@ -42,6 +43,34 @@ def fact(slot_id: str, value: float = 1.0) -> dict:
 
 
 class NormalizeFactsTests(unittest.TestCase):
+    def test_ratio_percentage_difference_is_percentage_points(self) -> None:
+        rows = []
+        for role, period, value in (
+            ("analysis", "2026-07", 28.1),
+            ("analysis_last_year", "2025-07", 27.5),
+        ):
+            rows.append({
+                "fact_id": role,
+                "metric": "社零商品线上化率",
+                "period_role": role,
+                "period": period,
+                "view_id": "overall",
+                "dimensions": {},
+                "value": value,
+                "unit": "%",
+                "missing": False,
+                "source_ref": {"revision": 1},
+            })
+        expression = {
+            "op": "subtract",
+            "args": [
+                {"fact": {"metric": "社零商品线上化率", "period_role": "analysis"}},
+                {"fact": {"metric": "社零商品线上化率", "period_role": "analysis_last_year"}},
+            ],
+        }
+        value = evaluate_expression(expression, FactStore(rows), {})
+        self.assertAlmostEqual(value, 0.6)
+
     def test_formula_materialization_applies_verified_unit_scale(self) -> None:
         rows = []
         for metric, value, unit in (

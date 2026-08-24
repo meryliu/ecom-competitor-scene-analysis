@@ -26,14 +26,17 @@ class BusinessIntentPolicyTests(unittest.TestCase):
         with self.assertRaises(BusinessIntentPolicyError):
             validate_business_intent_policy(invalid)
 
-    def test_growth_hypothesis_is_declarative_and_bounded(self) -> None:
+    def test_registered_derived_consumer_generates_bounded_growth_hypothesis(self) -> None:
         hypotheses = generate_metric_hypotheses(
             {"query": "线上社零表现怎么样，涨幅较上月如何"},
             {
                 "name": "线上社零",
                 "metric_object": "volume",
                 "metric_object_provenance": "model_inferred",
-                "consumers": [{"requirement_type": "fact_observations"}],
+                "consumers": [{
+                    "requirement_type": "derived_requirements",
+                    "derived_metric_id": "yoy_growth",
+                }],
             },
             self.policy,
         )
@@ -42,7 +45,7 @@ class BusinessIntentPolicyTests(unittest.TestCase):
         self.assertEqual(growth["metric_object"], "ratio")
         self.assertIn("线上社零同比增速", growth["requested_terms"])
 
-    def test_yoy_shorthand_also_generates_growth_hypothesis(self) -> None:
+    def test_query_wide_yoy_does_not_rewrite_unrelated_fact_consumer(self) -> None:
         hypotheses = generate_metric_hypotheses(
             {"query": "线上社零同比是多少"},
             {
@@ -53,10 +56,23 @@ class BusinessIntentPolicyTests(unittest.TestCase):
             },
             self.policy,
         )
-        self.assertIn(
-            "growth_ratio_metric",
-            [item["intent_id"] for item in hypotheses],
+        self.assertEqual([item["intent_id"] for item in hypotheses], ["declared_metric"])
+
+    def test_requirement_fragment_can_trigger_legacy_fact_intent(self) -> None:
+        hypotheses = generate_metric_hypotheses(
+            {"query": "指标A水平，指标B同比是多少"},
+            {
+                "name": "指标B",
+                "metric_object": "volume",
+                "metric_object_provenance": "model_inferred",
+                "consumers": [{
+                    "requirement_type": "fact_observations",
+                    "semantic_text": "指标B同比是多少",
+                }],
+            },
+            self.policy,
         )
+        self.assertIn("growth_ratio_metric", [item["intent_id"] for item in hypotheses])
 
     def test_attribution_consumer_does_not_expand_alternative_intents(self) -> None:
         hypotheses = generate_metric_hypotheses(

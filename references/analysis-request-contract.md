@@ -73,6 +73,8 @@
 
 用户明确给出归因公式时，公式因子按原顺序完整声明为 `factors`，每项使用稳定 `factor_id` 和 `kind=metric|literal|derived`；公式关系写入只引用 `factor_id` 的 `formula` AST。显式常量不是可省略的校准项：使用 `values_by_period_role` 声明各时期角色值，即使各期相同、最终贡献为 0，也必须参与执行并保留在结果中。派生子表达式使用 `expressions_by_period_role`。`decomposition` 可写 `formula`，由编译器结合场景、目标对象、目标语义、公式形态和因子角色解析已有归因算子；不能把公式形态直接替代场景判断。
 
+同一指标同时要求水平和同比时只声明一个核心指标，例如 `线上化率`；水平写入 `fact_observations`，同比写入引用同一 `metric_ref` 的 `derived_requirements`。不要额外声明“线上化率同比变化”等来源式指标名。Resolve 可以将源侧预计算同比仅绑定到派生 requirement，不会替换水平事实。
+
 标准年、季、月粒度降级不由模型创建 `input_adaptations`。runner 先检查目标粒度直接事实；缺失且指标可聚合时，按最近细粒度和完整覆盖规则自动生成适配。只有用户明确给出非标准输入转换时才在 IR 中声明适配。
 
 存在多个合理指标、分母、范围或公式时写入 blocking clarification；不要用推测公式兜底。

@@ -80,6 +80,41 @@ class CompilePlanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "metric_object conflicts"):
             self.compile(ir)
 
+    def test_source_precomputed_derived_compiles_as_passthrough_fact(self) -> None:
+        ir = base_ir()
+        ir["analysis_task"]["metrics"].append({
+            "metric_id": "rate_yoy_source",
+            "name": "竞品结算率::yoy_growth",
+            "source_metric_name": "竞品结算率同比增速",
+            "metric_object": "ratio",
+            "unit": "%",
+        })
+        ir["canonical_fact_selectors"] = [{
+            "metric_ref": "rate_yoy_source",
+            "period_role": "analysis",
+            "period": "2026-05",
+            "grain": "month",
+            "selector_dimensions": {},
+            "source_metric_name": "竞品结算率同比增速",
+            "capability_path": "direct_fact",
+        }]
+        ir["derived_requirements"] = [{
+            "requirement_id": "rate_yoy",
+            "metric_ref": "rate",
+            "metric_object": "ratio",
+            "derived_metric_id": "yoy_growth",
+            "definition_status": "registered",
+            "fulfillment_mode": "source_derived_fact",
+            "source_metric_ref": "rate_yoy_source",
+            "source_period_role": "analysis",
+            "view_id": "platform_view",
+        }]
+        plan, report = self.compile(ir)
+        self.assertTrue(report["valid"], report)
+        node = next(item for item in plan["nodes"] if item["type"] == "derived_metric")
+        self.assertEqual(node["execution"]["definition_status"], "source_precomputed")
+        self.assertEqual(plan["fetch_requests"][0]["fact_demands"][0]["source_metric_name"], "竞品结算率同比增速")
+
     def test_composition_metric_object_must_match_registry(self) -> None:
         ir = base_ir()
         ir["analysis_task"]["metrics"][2]["metric_object"] = "volume"

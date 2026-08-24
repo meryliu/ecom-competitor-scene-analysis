@@ -123,6 +123,11 @@ class FeishuCompetitorGateway(DataGateway):
                 for value in (task_resolution.get("metric_bindings") or {}).values()
                 if value
             )
+            resolved_metrics.update(
+                str(item.get("source_metric"))
+                for item in (task_resolution.get("requirement_bindings") or {}).values()
+                if isinstance(item, dict) and item.get("source_metric")
+            )
         resolved_dimensions = set(dimension_bindings.values())
         for bindings in (resolution.get("metric_dimension_bindings") or {}).values():
             if isinstance(bindings, dict):

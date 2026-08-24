@@ -24,6 +24,7 @@ ALLOWED_RULE_FIELDS = {
     "metric_object",
     "skip_if_metric_contains_any",
     "allowed_object_provenance",
+    "derived_metric_ids",
 }
 ALLOWED_TRIGGER_FIELDS = {"mode", "any", "all"}
 ALLOWED_PROVENANCE = {
@@ -146,6 +147,14 @@ def validate_business_intent_policy(policy: dict[str, Any]) -> None:
                 "INVALID_BUSINESS_INTENT_POLICY",
                 f"{intent_id}.skip_if_metric_contains_any 非法",
             )
+        derived_metric_ids = rule.get("derived_metric_ids") or []
+        if not isinstance(derived_metric_ids, list) or not all(
+            isinstance(value, str) and value for value in derived_metric_ids
+        ):
+            raise BusinessIntentPolicyError(
+                "INVALID_BUSINESS_INTENT_POLICY",
+                f"{intent_id}.derived_metric_ids 非法",
+            )
 
 
 def load_business_intent_policy(path: Path | None = None) -> dict[str, Any]:
@@ -155,14 +164,35 @@ def load_business_intent_policy(path: Path | None = None) -> dict[str, Any]:
     return policy
 
 
-def _triggered(rule: dict[str, Any], query: str) -> bool:
+def _triggered(
+    rule: dict[str, Any], query: str, consumers: list[dict[str, Any]]
+) -> bool:
     triggers = rule.get("triggers") or {}
     if triggers.get("mode") == "always":
         return True
+    derived_metric_ids = set(str(value) for value in rule.get("derived_metric_ids") or [])
+    consumer_derived_ids = {
+        str(item.get("derived_metric_id"))
+        for item in consumers
+        if isinstance(item, dict) and item.get("derived_metric_id")
+    }
+    if derived_metric_ids and consumer_derived_ids & derived_metric_ids:
+        return True
+    consumer_texts = [
+        str(item.get("semantic_text") or item.get("query_fragment") or "")
+        for item in consumers
+        if isinstance(item, dict)
+        and (item.get("semantic_text") or item.get("query_fragment"))
+    ]
+    # Structured consumers are requirement-scoped. Falling back to the full Query
+    # here would leak a modifier from one clause or metric into every other metric.
+    trigger_text = " ".join(consumer_texts) if consumers else query
+    if not trigger_text:
+        return False
     any_tokens = triggers.get("any") or []
     all_tokens = triggers.get("all") or []
-    return (not any_tokens or any(token in query for token in any_tokens)) and all(
-        token in query for token in all_tokens
+    return (not any_tokens or any(token in trigger_text for token in any_tokens)) and all(
+        token in trigger_text for token in all_tokens
     )
 
 
@@ -173,6 +203,9 @@ def generate_metric_hypotheses(
     validate_business_intent_policy(policy)
     query = str(context.get("query") or "")
     metric_name = str(metric.get("name") or "")
+    consumers = [
+        item for item in metric.get("consumers") or [] if isinstance(item, dict)
+    ]
     object_provenance = str(metric.get("metric_object_provenance") or "model_inferred")
     consumer_types = {
         str(item.get("requirement_type"))
@@ -189,7 +222,7 @@ def generate_metric_hypotheses(
             continue
         if object_provenance not in set(rule.get("allowed_object_provenance") or []):
             continue
-        if not _triggered(rule, query):
+        if not _triggered(rule, query, consumers):
             continue
         if any(token in metric_name for token in rule.get("skip_if_metric_contains_any") or []):
             continue

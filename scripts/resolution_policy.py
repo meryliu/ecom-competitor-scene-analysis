@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import difflib
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -19,10 +20,11 @@ from business_intent_policy import (
     generate_metric_hypotheses,
     load_business_intent_policy,
 )
+from source_capability import evaluate_structural_grain_capability
 
 
 POLICY_SCHEMA = "resolution_policy/2.0"
-ENGINE_VERSION = "2.3.0"
+ENGINE_VERSION = "2.5.0"
 DEFAULT_POLICY_PATH = (
     Path(__file__).resolve().parents[1]
     / "references"
@@ -53,6 +55,7 @@ ALLOWED_POLICY_KEYS = {
     "rules",
     "semantic_normalization",
     "candidate_evaluation",
+    "grain_rollup",
 }
 ALLOWED_RULE_KEYS = {"hard_gates", "strong_evidence", "auto", "confirm"}
 ALLOWED_AUTO_KEYS = {
@@ -191,6 +194,23 @@ def validate_resolution_policy(policy: dict[str, Any]) -> None:
                 "INVALID_RESOLUTION_POLICY",
                 f"candidate_evaluation.{field} 必须是 0 到 1 的数值",
             )
+    grain_rollup = policy.get("grain_rollup") or {}
+    if not isinstance(grain_rollup, dict) or set(grain_rollup) - {"allowed_edges"}:
+        raise ResolutionPolicyError(
+            "INVALID_RESOLUTION_POLICY_FIELD", "grain_rollup 包含未允许字段"
+        )
+    edges = grain_rollup.get("allowed_edges") or []
+    allowed_grains = {"day", "week", "month", "quarter", "year"}
+    if not isinstance(edges, list) or any(
+        not isinstance(edge, list)
+        or len(edge) != 2
+        or any(not isinstance(grain, str) or grain not in allowed_grains for grain in edge)
+        or edge[0] == edge[1]
+        for edge in edges
+    ):
+        raise ResolutionPolicyError(
+            "INVALID_RESOLUTION_POLICY", "grain_rollup.allowed_edges 必须是合法粒度边数组"
+        )
     rules = policy.get("rules")
     if not isinstance(rules, dict):
         raise ResolutionPolicyError("INVALID_RESOLUTION_POLICY", "rules 必须是对象")
@@ -244,6 +264,67 @@ def _unit_compatible(expected: Any, actual: Any) -> bool:
     expected_text = str(expected or "").strip().lower()
     actual_text = str(actual or "").strip().lower()
     return expected_text in UNRESOLVED_UNITS or not expected_text or expected_text == actual_text
+
+
+def _containment_score(requested: Any, candidate: Any) -> float:
+    requested_text = normalize_match_text(requested)
+    candidate_text = normalize_match_text(candidate)
+    if not requested_text or not candidate_text:
+        return 0.0
+    if requested_text == candidate_text:
+        return 1.0
+    if len(candidate_text) >= 4 and requested_text.endswith(candidate_text):
+        return 1.0
+    if len(requested_text) >= 4 and candidate_text.endswith(requested_text):
+        return 1.0
+    if candidate_text in requested_text or requested_text in candidate_text:
+        shorter = min(len(requested_text), len(candidate_text))
+        longer = max(len(requested_text), len(candidate_text))
+        return min(0.9, 0.5 + 0.5 * shorter / longer)
+    return difflib.SequenceMatcher(None, requested_text, candidate_text).ratio()
+
+
+def _derived_tokens(policy: dict[str, Any]) -> list[str]:
+    semantic = policy.get("semantic_normalization") or {}
+    return sorted(
+        {
+            normalize_match_text(token)
+            for group in ("comparison_terms", "measure_terms")
+            for tokens in (semantic.get(group) or {}).values()
+            for token in tokens
+            if normalize_match_text(token)
+        },
+        key=len,
+        reverse=True,
+    )
+
+
+def _strip_derived_tokens(value: Any, policy: dict[str, Any]) -> str:
+    text = normalize_match_text(value)
+    for token in _derived_tokens(policy):
+        text = text.replace(token, "")
+    return text
+
+
+def _core_semantic_score(
+    requested_core: Any, candidate_name: str, metadata: dict[str, Any], policy: dict[str, Any]
+) -> float:
+    requested = _strip_derived_tokens(requested_core, policy)
+    candidate_texts = [candidate_name, *(metadata.get("aliases") or [])]
+    return max(
+        (_containment_score(requested, _strip_derived_tokens(value, policy)) for value in candidate_texts),
+        default=0.0,
+    )
+
+
+def _derived_semantic_score(
+    intent_id: Any, candidate_name: str, metadata: dict[str, Any], policy: dict[str, Any]
+) -> float:
+    if str(intent_id) == "declared_metric":
+        return 0.0
+    texts = [candidate_name, *(metadata.get("aliases") or [])]
+    tokens = _derived_tokens(policy)
+    return 1.0 if any(token in normalize_match_text(text) for text in texts for token in tokens) else 0.0
 
 
 def _semantic_signature(
@@ -460,6 +541,12 @@ def _query_metric_resolution(
             str(expected_object) if expected_object else None,
             policy,
         )
+        containment_score = max(
+            _containment_score(name, str(raw.get("matched_text") or candidate_name)),
+            _containment_score(name, candidate_name),
+        )
+        lexical_score = float(raw.get("confidence") or 0.0)
+        confidence = max(lexical_score, containment_score)
         protected_conflicts = [
             conflict
             for conflict in raw_conflicts
@@ -472,8 +559,9 @@ def _query_metric_resolution(
             soft_conflicts.extend(protected_conflicts)
         candidate = {
             "name": candidate_name,
-            "confidence": float(raw.get("confidence") or 0.0),
-            "lexical_score": float(raw.get("confidence") or 0.0),
+            "confidence": confidence,
+            "lexical_score": lexical_score,
+            "core_containment_score": containment_score,
             "evidence": [
                 str(raw.get("match_method") or match.get("match_method") or "name_similarity")
             ],
@@ -492,11 +580,14 @@ def _query_metric_resolution(
             and actual_object == "ratio"
         )
         provenance = str(requested.get("provenance") or "model_inferred")
+        if containment_score >= 0.95:
+            candidate["evidence"].append("core_term_containment")
         candidate["evidence"] += (["query_semantic_match"] if semantic_hint else [])
         candidate["strong"] = (
             str(candidate.get("match_method")) in {"standard_name", "metadata_alias", "builtin_alias"}
             or provenance in {"user_explicit", "user_formula", "registered_definition", "source_metadata"}
             or semantic_hint
+            or containment_score >= 0.95
         )
         if semantic["status"] == "unknown" and not semantic_hint:
             candidate["strong"] = False
@@ -576,19 +667,23 @@ def _normalize_period(value: Any) -> tuple[str, str] | None:
 def _candidate_dimension(
     context: dict[str, Any], metric: str, index: dict[str, Any]
 ) -> tuple[str | None, dict[str, Any] | None]:
-    requested = [str(value) for value in context.get("dimensions") or []]
+    requested = [
+        str(value)
+        for value in (
+            context.get("breakdown_dimensions")
+            if "breakdown_dimensions" in context
+            else context.get("dimensions") or []
+        )
+    ]
     metadata = (index.get("metrics") or {}).get(metric) or {}
     supported = {str(value) for value in metadata.get("dimensions") or []}
     if not requested:
-        if supported and "无" not in supported:
-            return None, {
-                "status": "unavailable",
-                "reason": "metadata_dimension_unsupported",
-                "requested_dimension": "无",
-                "supported_dimensions": sorted(supported),
-            }
-        return "无", None
+        return None, None
+    if not supported:
+        return None, None
     resolved: set[str] = set()
+    ambiguous: set[str] = set()
+    unsupported: set[str] = set()
     for logical in requested:
         exact = resolve_catalogue_name(
             logical, index.get("dimensions") or {}, "dimension", strict=False
@@ -604,108 +699,27 @@ def _candidate_dimension(
         }
         if len(viable) == 1:
             resolved.update(viable)
-    if len(resolved) != 1:
+        elif len(viable) > 1:
+            ambiguous.add(logical)
+        else:
+            unsupported.add(logical)
+    if unsupported:
         return None, {
-            "status": "blocked",
-            "reason": "dimension_ambiguous",
-            "requested_dimensions": requested,
+            "status": "unavailable",
+            "reason": "metadata_dimension_unsupported",
+            "requested_dimensions": sorted(unsupported),
             "supported_dimensions": sorted(supported),
         }
+    if ambiguous:
+        return None, None
+    if len(resolved) != 1:
+        return None, {
+            "status": "unavailable",
+            "reason": "metadata_dimension_combination_unsupported",
+            "requested_dimensions": requested,
+            "resolved_dimensions": sorted(resolved),
+        }
     return next(iter(resolved)), None
-
-
-def _child_period_candidates(period: str) -> list[list[str]]:
-    parsed = _normalize_period(period)
-    if parsed is None:
-        return []
-    grain, canonical = parsed
-    year = int(canonical[:4])
-    if grain == "quarter":
-        quarter = int(canonical[-1])
-        start = (quarter - 1) * 3 + 1
-        return [[f"{year:04d}-{month:02d}" for month in range(start, start + 3)]]
-    if grain == "year":
-        return [
-            [f"{year:04d}-Q{quarter}" for quarter in range(1, 5)],
-            [f"{year:04d}-{month:02d}" for month in range(1, 13)],
-        ]
-    return []
-
-
-def _direct_intent_capability(
-    index: dict[str, Any], metric: str, period: str, dimension: str
-) -> dict[str, Any]:
-    parsed = _normalize_period(period)
-    if parsed is None:
-        return {"status": "blocked", "reason": "invalid_period", "period": period}
-    grain, canonical = parsed
-    metadata = (index.get("metrics") or {}).get(metric) or {}
-    supported_grains = metadata.get("supported_grains")
-    if "supported_grains" in metadata and not supported_grains:
-        return {"status": "unavailable", "reason": "metadata_grain_unknown", "grain": grain}
-    if supported_grains is not None and grain not in supported_grains:
-        return {
-            "status": "unavailable",
-            "reason": "metadata_grain_unsupported",
-            "grain": grain,
-            "supported_grains": list(supported_grains),
-        }
-    sheet = (index.get("sheets") or {}).get(grain) or {}
-    if canonical not in (sheet.get("periods") or {}):
-        return {
-            "status": "unavailable",
-            "reason": "period_unavailable",
-            "grain": grain,
-            "period": canonical,
-        }
-    block = (sheet.get("blocks") or {}).get(metric) or {}
-    if not block:
-        return {"status": "unavailable", "reason": "metric_block_unavailable", "grain": grain}
-    if block.get("dimension") != dimension:
-        return {
-            "status": "blocked",
-            "reason": "metadata_fact_dimension_conflict",
-            "expected_dimension": dimension,
-            "fact_dimension": block.get("dimension"),
-        }
-    return {
-        "status": "available",
-        "path": "direct_fact",
-        "grain": grain,
-        "period": canonical,
-        "dimension": dimension,
-    }
-
-
-def _intent_period_capability(
-    index: dict[str, Any], metric: str, period: str, dimension: str
-) -> dict[str, Any]:
-    direct = _direct_intent_capability(index, metric, period, dimension)
-    if direct.get("status") == "available":
-        return direct
-    metadata = (index.get("metrics") or {}).get(metric) or {}
-    if (
-        metadata.get("aggregation_mode") not in (None, "additive")
-        and metadata.get("additive") is not True
-    ) or (
-        metadata.get("aggregation_mode") is None and metadata.get("additive") is not True
-    ):
-        return direct
-    for children in _child_period_candidates(period):
-        checks = [
-            _direct_intent_capability(index, metric, child, dimension) for child in children
-        ]
-        if all(item.get("status") == "available" for item in checks):
-            parsed = _normalize_period(period)
-            return {
-                "status": "available",
-                "path": "aggregate_fact",
-                "grain": parsed[0] if parsed else None,
-                "period": parsed[1] if parsed else period,
-                "dimension": dimension,
-                "source_periods": children,
-            }
-    return direct
 
 
 def _intent_candidate_packet(candidate: dict[str, Any]) -> dict[str, Any]:
@@ -719,6 +733,8 @@ def _intent_candidate_packet(candidate: dict[str, Any]) -> dict[str, Any]:
             "metric_object",
             "requested_terms",
             "confidence",
+            "semantic_tier",
+            "requires_confirmation",
             "confidence_detail",
             "semantic_status",
             "soft_conflicts",
@@ -746,20 +762,78 @@ def _resolve_business_intent(
     planning_context["periods"] = list(
         metric.get("required_periods") or context.get("periods") or []
     )
-    planning_context["dimensions"] = list(
-        metric.get("required_dimensions")
-        if "required_dimensions" in metric
+    planning_context["breakdown_dimensions"] = list(
+        metric.get("required_breakdown_dimensions")
+        if "required_breakdown_dimensions" in metric
+        else context.get("breakdown_dimensions")
+        if "breakdown_dimensions" in context
         else context.get("dimensions") or []
     )
     if not planning_context.get("periods"):
         return None
     hypotheses = generate_metric_hypotheses(planning_context, metric, business_policy)
-    if len(hypotheses) <= 1:
+    if not hypotheses:
         return None
     candidates: list[dict[str, Any]] = []
+    rejected_candidates: list[dict[str, Any]] = []
+    evaluation = resolution_policy.get("candidate_evaluation") or {}
+    core_floor = float(evaluation.get("lexical_recall_floor", 0.78))
+    rollup_edges = (resolution_policy.get("grain_rollup") or {}).get("allowed_edges") or []
+    target_grains = {
+        parsed[0]
+        for period in planning_context.get("periods") or []
+        if (parsed := _normalize_period(period)) is not None
+    }
+    consumers = [item for item in metric.get("consumers") or [] if isinstance(item, dict)]
+    has_registered_derived = any(
+        item.get("requirement_type") == "derived_requirements" for item in consumers
+    )
+    has_alternative_intent = any(
+        item.get("intent_id") != "declared_metric" for item in hypotheses
+    )
+    allowed_object_sets = [
+        set(str(value) for value in consumer.get("allowed_metric_objects") or [])
+        for consumer in consumers
+        if consumer.get("allowed_metric_objects")
+    ]
+    candidate_margin = float(evaluation.get("minimum_candidate_margin", 0.1))
+
+    def competitive_band(evaluated: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        deduplicated: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for item in evaluated:
+            key = (
+                item.get("intent_id"),
+                item.get("metric"),
+                item.get("metric_object"),
+                item.get("status"),
+                item.get("path") or item.get("path_hint"),
+            )
+            previous = deduplicated.get(key)
+            if previous is None or (
+                -int(item.get("semantic_tier") or 0),
+                float(item.get("confidence") or 0.0),
+            ) > (
+                -int(previous.get("semantic_tier") or 0),
+                float(previous.get("confidence") or 0.0),
+            ):
+                deduplicated[key] = item
+        if not deduplicated:
+            return []
+        best_tier = min(int(item.get("semantic_tier") or 0) for item in deduplicated.values())
+        same_tier = [
+            item
+            for item in deduplicated.values()
+            if int(item.get("semantic_tier") or 0) == best_tier
+        ]
+        top_confidence = max(float(item.get("confidence") or 0.0) for item in same_tier)
+        return [
+            item
+            for item in same_tier
+            if top_confidence - float(item.get("confidence") or 0.0) <= candidate_margin
+        ]
+
     for hypothesis in hypotheses:
-        best: dict[str, Any] | None = None
-        mapping_failures: list[dict[str, Any]] = []
+        evaluated_candidates: list[dict[str, Any]] = []
         for requested_term in hypothesis.get("requested_terms") or []:
             requested = {
                 **metric,
@@ -773,135 +847,136 @@ def _resolve_business_intent(
                 str(planning_context.get("query") or ""),
                 resolution_policy,
             )
-            binding = resolution.get("binding")
-            if not binding:
-                mapping_failures.append({
-                    "requested_term": requested_term,
-                    "status": resolution.get("status"),
-                    "candidates": [
-                        {
-                            "metric": item.get("name"),
-                            "confidence": item.get("confidence"),
-                            "semantic_status": item.get("semantic_status"),
-                            "conflicts": list(item.get("conflicts") or []),
-                            "soft_conflicts": list(item.get("soft_conflicts") or []),
-                        }
-                        for item in (resolution.get("candidates") or [])[:3]
-                    ],
-                })
-                continue
-            dimension, dimension_failure = _candidate_dimension(
-                planning_context, str(binding), index
-            )
-            period_checks: list[dict[str, Any]] = []
-            if dimension_failure is None and dimension is not None:
-                period_checks = [
-                    _intent_period_capability(index, str(binding), str(period), dimension)
-                    for period in planning_context.get("periods") or []
-                ]
-            viable = bool(period_checks) and all(
-                item.get("status") == "available" for item in period_checks
-            )
-            paths = {str(item.get("path")) for item in period_checks if item.get("path")}
-            path = (
-                "direct_fact"
-                if paths == {"direct_fact"}
-                else "aggregate_fact"
-                if paths and paths.issubset({"direct_fact", "aggregate_fact"})
-                else None
-            )
-            parsed_grains = {
-                parsed[0]
-                for period in planning_context.get("periods") or []
-                if (parsed := _normalize_period(period)) is not None
-            }
-            selected_resolution_candidate = next(
-                (
-                    item
-                    for item in resolution.get("candidates") or []
-                    if str(item.get("name") or "") == str(binding)
-                ),
-                {},
-            )
-            candidate = {
-                "intent_id": hypothesis.get("intent_id"),
-                "status": "viable" if viable else "infeasible",
-                "metric": str(binding),
-                "metric_object": hypothesis.get("metric_object"),
-                "requested_terms": list(hypothesis.get("requested_terms") or []),
-                "confidence": max(
-                    [float(item.get("confidence") or 0.0) for item in resolution.get("candidates") or []]
-                    or [0.0]
-                ),
-                "confidence_detail": {
-                    "lexical": float(selected_resolution_candidate.get("lexical_score") or 0.0),
-                    "semantic": selected_resolution_candidate.get("semantic_status", "unknown"),
-                    "metadata": "pass" if dimension_failure is None else "fail",
-                    "fact_capability": "pass" if viable else "fail",
-                },
-                "semantic_status": selected_resolution_candidate.get("semantic_status", "unknown"),
-                "soft_conflicts": list(selected_resolution_candidate.get("soft_conflicts") or []),
-                "path": path,
-                "grain": next(iter(parsed_grains)) if len(parsed_grains) == 1 else None,
-                "dimension": dimension,
-                "periods": list(planning_context.get("periods") or []),
-                "capability": {
-                    "dimension": dimension_failure or {"status": "available", "dimension": dimension},
-                    "periods": period_checks,
-                },
-                "evidence": list(hypothesis.get("evidence") or [])
-                + ["source_metadata_evaluated"]
-                + (["semantic_equivalence"] if selected_resolution_candidate.get("semantic_status") == "equivalent" else []),
-                "conflicts": [] if viable else sorted({
-                    str(item.get("reason"))
-                    for item in ([dimension_failure] if dimension_failure else []) + period_checks
-                    if isinstance(item, dict) and item.get("status") != "available" and item.get("reason")
-                }),
-                "object_override_allowed": bool(hypothesis.get("object_override_allowed")),
-                "priority": int(hypothesis.get("priority") or 0),
-            }
-            allowed_object_sets = [
-                set(str(value) for value in consumer.get("allowed_metric_objects") or [])
-                for consumer in metric.get("consumers") or []
-                if isinstance(consumer, dict) and consumer.get("allowed_metric_objects")
-            ]
-            if allowed_object_sets and any(
-                candidate.get("metric_object") not in allowed
-                for allowed in allowed_object_sets
-            ):
-                candidate["status"] = "infeasible"
-                candidate["path"] = None
-                candidate["conflicts"] = sorted(
-                    set(candidate.get("conflicts") or []) | {"operation_metric_object_unsupported"}
+            for recalled in resolution.get("candidates") or []:
+                binding = str(recalled.get("name") or "")
+                if not binding:
+                    continue
+                metadata = (index.get("metrics") or {}).get(binding) or {}
+                dimension, dimension_failure = _candidate_dimension(
+                    planning_context, binding, index
                 )
-                candidate["capability"]["operation"] = {
-                    "status": "unavailable",
-                    "reason": "operation_metric_object_unsupported",
-                    "allowed_metric_objects": sorted(set.intersection(*allowed_object_sets)),
+                requested_breakdowns = list(
+                    planning_context.get("breakdown_dimensions") or []
+                )
+                grain_checks = [
+                    evaluate_structural_grain_capability(metadata, grain, rollup_edges)
+                    for grain in sorted(target_grains)
+                ]
+                structural_available = bool(grain_checks) and all(
+                    item.get("status") == "available" for item in grain_checks
+                )
+                paths = {str(item.get("path")) for item in grain_checks if item.get("path")}
+                path = (
+                    "direct_fact"
+                    if paths == {"direct_fact"}
+                    else "aggregate_fact"
+                    if paths and paths.issubset({"direct_fact", "aggregate_fact"})
+                    else None
+                )
+                core_score = _core_semantic_score(
+                    metric.get("name"), binding, metadata, resolution_policy
+                )
+                derived_score = _derived_semantic_score(
+                    hypothesis.get("intent_id"), binding, metadata, resolution_policy
+                )
+                lexical_score = float(recalled.get("lexical_score") or 0.0)
+                confidence = round(
+                    0.70 * core_score + 0.20 * derived_score + 0.10 * lexical_score,
+                    6,
+                )
+                intent_id = str(hypothesis.get("intent_id") or "")
+                if core_score >= core_floor:
+                    if intent_id != "declared_metric":
+                        semantic_tier = 0 if derived_score > 0 else 3
+                    elif has_alternative_intent:
+                        semantic_tier = 1
+                    else:
+                        semantic_tier = 0
+                    requires_confirmation = semantic_tier == 3
+                elif derived_score > 0:
+                    semantic_tier = 2
+                    requires_confirmation = True
+                else:
+                    semantic_tier = 3
+                    requires_confirmation = True
+                conflicts = {
+                    str(item.get("reason"))
+                    for item in ([dimension_failure] if dimension_failure else []) + grain_checks
+                    if isinstance(item, dict)
+                    and item.get("status") != "available"
+                    and item.get("reason")
                 }
-            if best is None or (
-                candidate["status"] == "viable",
-                candidate["confidence"],
-            ) > (
-                best["status"] == "viable",
-                best["confidence"],
-            ):
-                best = candidate
-        if best is None:
-            best = {
-                "intent_id": hypothesis.get("intent_id"),
-                "status": "infeasible",
-                "metric_object": hypothesis.get("metric_object"),
-                "requested_terms": list(hypothesis.get("requested_terms") or []),
-                "periods": list(planning_context.get("periods") or []),
-                "capability": {"metric": {"status": "unavailable", "attempts": mapping_failures}},
-                "evidence": list(hypothesis.get("evidence") or []),
-                "conflicts": ["metric_unresolved"],
-                "object_override_allowed": bool(hypothesis.get("object_override_allowed")),
-                "priority": int(hypothesis.get("priority") or 0),
-                "confidence": 0.0,
-            }
-        candidates.append(best)
+                conflicts.update(str(value) for value in recalled.get("conflicts") or [])
+                # A source-side derived metric cannot replace a shared logical metric
+                # until the downstream contract binds it to one requirement only.
+                if intent_id != "declared_metric" and has_registered_derived:
+                    conflicts.add("requirement_level_binding_required")
+                if allowed_object_sets and intent_id == "declared_metric" and any(
+                    hypothesis.get("metric_object") not in allowed
+                    for allowed in allowed_object_sets
+                ):
+                    conflicts.add("operation_metric_object_unsupported")
+                viable = (
+                    dimension_failure is None
+                    and structural_available
+                    and semantic_tier <= 2
+                    and not conflicts
+                )
+                candidate = {
+                    "intent_id": intent_id,
+                    "status": "viable" if viable else "infeasible",
+                    "metric": binding,
+                    "metric_object": hypothesis.get("metric_object"),
+                    "requested_terms": list(hypothesis.get("requested_terms") or []),
+                    "confidence": confidence,
+                    "semantic_tier": semantic_tier,
+                    "requires_confirmation": requires_confirmation,
+                    "confidence_detail": {
+                        "core": round(core_score, 6),
+                        "derived": round(derived_score, 6),
+                        "lexical": lexical_score,
+                        "semantic": recalled.get("semantic_status", "unknown"),
+                        "metadata": "pass" if dimension_failure is None else "fail",
+                        "structural_capability": "pass" if structural_available else "fail",
+                    },
+                    "semantic_status": recalled.get("semantic_status", "unknown"),
+                    "soft_conflicts": list(recalled.get("soft_conflicts") or []),
+                    "path": path if viable else None,
+                    "path_hint": path,
+                    "grain": next(iter(target_grains)) if len(target_grains) == 1 else None,
+                    "dimension": dimension,
+                    "periods": list(planning_context.get("periods") or []),
+                    "capability": {
+                        "dimension": dimension_failure
+                        or (
+                            {"status": "available", "dimension": dimension}
+                            if dimension is not None
+                            else {
+                                "status": "deferred",
+                                "reason": (
+                                    "dimension_binding_ambiguous"
+                                    if requested_breakdowns
+                                    else "no_breakdown_requested"
+                                ),
+                                "requested_dimensions": requested_breakdowns,
+                            }
+                        ),
+                        "grains": grain_checks,
+                    },
+                    "evidence": list(hypothesis.get("evidence") or [])
+                    + ["core_semantics_scored", "structural_grain_evaluated"]
+                    + (["derived_semantics_match"] if derived_score > 0 else []),
+                    "conflicts": sorted(conflicts),
+                    "object_override_allowed": bool(hypothesis.get("object_override_allowed")),
+                    "priority": int(hypothesis.get("priority") or 0),
+                }
+                evaluated_candidates.append(candidate)
+        candidates.extend(competitive_band([
+            item for item in evaluated_candidates if item.get("status") == "viable"
+        ]))
+        rejected_candidates.extend(competitive_band([
+            item for item in evaluated_candidates if item.get("status") != "viable"
+        ]))
 
     identity_base = {
         "task_id": context.get("task_id"),
@@ -911,7 +986,7 @@ def _resolve_business_intent(
         "periods": planning_context.get("periods") or [],
         "dimensions": planning_context.get("dimensions") or [],
     }
-    for candidate in candidates:
+    for candidate in [*candidates, *rejected_candidates]:
         candidate["candidate_id"] = stable_id("intent_candidate", {
             **identity_base,
             "intent_id": candidate.get("intent_id"),
@@ -929,17 +1004,21 @@ def _resolve_business_intent(
         )
         previous = deduplicated.get(key)
         if previous is None or (
-            int(candidate.get("priority") or 0), float(candidate.get("confidence") or 0.0)
+            -int(candidate.get("semantic_tier") or 0),
+            int(candidate.get("priority") or 0),
+            float(candidate.get("confidence") or 0.0),
         ) > (
-            int(previous.get("priority") or 0), float(previous.get("confidence") or 0.0)
+            -int(previous.get("semantic_tier") or 0),
+            int(previous.get("priority") or 0),
+            float(previous.get("confidence") or 0.0),
         ):
             deduplicated[key] = candidate
     bounded = sorted(
         deduplicated.values(),
         key=lambda item: (
-            item.get("status") != "viable",
-            -int(item.get("priority") or 0),
+            int(item.get("semantic_tier") or 0),
             -float(item.get("confidence") or 0.0),
+            -int(item.get("priority") or 0),
             str(item.get("candidate_id")),
         ),
     )[: int(business_policy.get("limits", {}).get("max_candidates_per_case", 3))]
@@ -947,8 +1026,55 @@ def _resolve_business_intent(
         "expanded": True,
         "identity": identity_base,
         "candidates": bounded,
-        "viable_candidates": [item for item in bounded if item.get("status") == "viable"],
+        "viable_candidates": bounded,
+        "rejected_candidates": rejected_candidates,
     }
+
+
+def _source_derived_requirement_bindings(
+    intent_resolution: dict[str, Any],
+    metric: dict[str, Any],
+    business_policy: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    intent_by_derived_id: dict[str, set[str]] = {}
+    for rule in business_policy.get("rules") or []:
+        intent_id = str(rule.get("intent_id") or "")
+        for derived_id in rule.get("derived_metric_ids") or []:
+            intent_by_derived_id.setdefault(str(derived_id), set()).add(intent_id)
+    rejected = intent_resolution.get("rejected_candidates") or []
+    bindings: dict[str, dict[str, Any]] = {}
+    for consumer in metric.get("consumers") or []:
+        if not isinstance(consumer, dict) or consumer.get("requirement_type") != "derived_requirements":
+            continue
+        requirement_id = str(consumer.get("requirement_id") or "")
+        derived_metric_id = str(consumer.get("derived_metric_id") or "")
+        if not requirement_id or not derived_metric_id:
+            continue
+        allowed_intents = intent_by_derived_id.get(derived_metric_id) or set()
+        candidates = [
+            item
+            for item in rejected
+            if str(item.get("intent_id") or "") in allowed_intents
+            and int(item.get("semantic_tier", 99)) == 0
+            and set(item.get("conflicts") or []) == {"requirement_level_binding_required"}
+            and item.get("path_hint") in {"direct_fact", "aggregate_fact"}
+        ]
+        if len(candidates) != 1:
+            continue
+        selected = candidates[0]
+        bindings[requirement_id] = {
+            "mode": "source_derived_fact",
+            "derived_metric_id": derived_metric_id,
+            "source_metric": selected.get("metric"),
+            "source_metric_object": selected.get("metric_object"),
+            "candidate_id": selected.get("candidate_id"),
+            "intent_id": selected.get("intent_id"),
+            "path_hint": selected.get("path_hint"),
+            "source_period_role": next(
+                iter(consumer.get("period_roles") or ["analysis"]), "analysis"
+            ),
+        }
+    return bindings
 
 
 def _joint_block_candidates(
@@ -1164,6 +1290,7 @@ def resolve_request_overlay(
         }
         task_resolution = {
             "metric_bindings": {},
+            "requirement_bindings": {},
             "metric_statuses": {},
             "intent_resolutions": {},
             "composition_resolutions": [],
@@ -1196,6 +1323,29 @@ def resolve_request_overlay(
                     require_engine_version=True,
                 )
                 viable_candidates = intent_resolution["viable_candidates"]
+                requirement_bindings = _source_derived_requirement_bindings(
+                    intent_resolution, metric, intent_policy
+                )
+                task_resolution["requirement_bindings"].update(requirement_bindings)
+                consumer_requirement_ids = {
+                    str(item.get("requirement_id") or "")
+                    for item in metric.get("consumers") or []
+                    if isinstance(item, dict) and item.get("requirement_id")
+                }
+                requirement_only_resolution = (
+                    bool(consumer_requirement_ids)
+                    and consumer_requirement_ids == set(requirement_bindings)
+                )
+                best_tier = min(
+                    (int(item.get("semantic_tier") or 0) for item in viable_candidates),
+                    default=None,
+                )
+                auto_candidates = [
+                    item
+                    for item in viable_candidates
+                    if int(item.get("semantic_tier") or 0) == best_tier
+                    and not item.get("requires_confirmation")
+                ]
                 selected_intent = next(
                     (
                         item
@@ -1204,11 +1354,11 @@ def resolve_request_overlay(
                     ),
                     None,
                 )
-                if selected_intent is None and len(viable_candidates) == 1:
-                    selected_intent = viable_candidates[0]
+                if selected_intent is None and len(auto_candidates) == 1:
+                    selected_intent = auto_candidates[0]
                 intent_action = (
                     "auto"
-                    if selected_intent is not None
+                    if selected_intent is not None or requirement_only_resolution
                     else "confirm"
                     if viable_candidates
                     else "block"
@@ -1242,6 +1392,8 @@ def resolve_request_overlay(
                     "status": (
                         "selected"
                         if selected_intent
+                        else "requirement_selected"
+                        if requirement_only_resolution
                         else "ambiguous"
                         if viable_candidates
                         else "infeasible"
@@ -1253,13 +1405,21 @@ def resolve_request_overlay(
                     ),
                     "case_id": intent_case_id,
                     "business_intent_policy_hash": intent_policy_hash,
+                    "requirement_bindings": deepcopy(requirement_bindings),
                 }
-                if selected_intent is None:
+                if selected_intent is None and not requirement_only_resolution:
                     cases.append(intent_case)
                     task_resolution["resolution_cases"].append(intent_case)
                     task_resolution["metric_statuses"][metric_ref] = {
                         "requested_metric": requested_name,
                         "status": "ambiguous" if viable_candidates else "not_executable",
+                        "binding": None,
+                    }
+                    continue
+                if selected_intent is None:
+                    task_resolution["metric_statuses"][metric_ref] = {
+                        "requested_metric": requested_name,
+                        "status": "requirement_bound",
                         "binding": None,
                     }
                     continue
@@ -1354,6 +1514,20 @@ def resolve_request_overlay(
         for intent in intents:
             metric_ref = str(intent.get("metric_ref") or "")
             composition_id = str(intent.get("composition_id") or "")
+            composition_target_grains = {
+                parsed[0]
+                for consumer in intent.get("consumers") or []
+                if isinstance(consumer, dict)
+                for period in consumer.get("periods") or []
+                if (parsed := _normalize_period(period)) is not None
+            }
+            composition_breakdown_dimensions = {
+                str(dimension)
+                for consumer in intent.get("consumers") or []
+                if isinstance(consumer, dict)
+                for dimension in consumer.get("breakdown_dimensions") or []
+            }
+            rollup_edges = (policy.get("grain_rollup") or {}).get("allowed_edges") or []
             input_bindings: dict[str, str] = {}
             input_statuses: dict[str, dict[str, Any]] = {}
             deferred_cases: list[dict[str, Any]] = []
@@ -1423,7 +1597,52 @@ def resolve_request_overlay(
                         ),
                         None,
                     )
+                structural_checks: list[dict[str, Any]] = []
+                dimension_capability: dict[str, Any] = {
+                    "status": "deferred",
+                    "reason": "no_breakdown_requested",
+                    "requested_dimensions": [],
+                }
+                if selected is not None and composition_target_grains:
+                    metadata = (overlay.get("metrics") or {}).get(
+                        str(selected.get("metric") or "")
+                    ) or {}
+                    structural_checks = [
+                        evaluate_structural_grain_capability(
+                            metadata, grain, rollup_edges
+                        )
+                        for grain in sorted(composition_target_grains)
+                    ]
+                    if any(item.get("status") == "unavailable" for item in structural_checks):
+                        selected = None
+                        input_candidates = []
+                if selected is not None and composition_breakdown_dimensions:
+                    dimension, dimension_failure = _candidate_dimension(
+                        {"breakdown_dimensions": sorted(composition_breakdown_dimensions)},
+                        str(selected.get("metric") or ""),
+                        overlay,
+                    )
+                    dimension_capability = dimension_failure or (
+                        {"status": "available", "dimension": dimension}
+                        if dimension is not None
+                        else {
+                            "status": "deferred",
+                            "reason": "dimension_binding_ambiguous",
+                            "requested_dimensions": sorted(
+                                composition_breakdown_dimensions
+                            ),
+                        }
+                    )
+                    if dimension_failure is not None:
+                        selected = None
+                        input_candidates = []
                 input_status = "bound" if selected else str(resolution.get("status") or "not_found")
+                if structural_checks and any(
+                    item.get("status") == "unavailable" for item in structural_checks
+                ):
+                    input_status = "not_executable"
+                if dimension_capability.get("status") == "unavailable":
+                    input_status = "not_executable"
                 if selected:
                     binding = str(selected["metric"])
                     input_bindings[role] = binding
@@ -1434,6 +1653,8 @@ def resolve_request_overlay(
                     "requested_metric": requested_name,
                     "status": input_status,
                     "binding": str(selected["metric"]) if selected else None,
+                    "structural_capability": structural_checks,
+                    "dimension_capability": dimension_capability,
                 }
                 if not selected:
                     deferred_cases.append({
@@ -1508,8 +1729,14 @@ def resolve_request_overlay(
     for context in contexts:
         logical_dimensions = [str(value) for value in context.get("dimensions") or []]
         task_id = str(context.get("task_id") or "default")
-        task_binding = (task_resolutions.get(task_id) or {}).get("metric_bindings") or {}
-        for source_metric in sorted(set(task_binding.values())):
+        task_resolution = task_resolutions.get(task_id) or {}
+        task_binding = task_resolution.get("metric_bindings") or {}
+        requirement_source_metrics = {
+            str(item.get("source_metric"))
+            for item in (task_resolution.get("requirement_bindings") or {}).values()
+            if isinstance(item, dict) and item.get("source_metric")
+        }
+        for source_metric in sorted(set(task_binding.values()) | requirement_source_metrics):
             declared = {
                 str(value)
                 for value in (overlay.get("metrics", {}).get(source_metric) or {}).get("dimensions") or []

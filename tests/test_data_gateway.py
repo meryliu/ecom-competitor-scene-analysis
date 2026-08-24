@@ -59,6 +59,36 @@ class DataGatewayContractTests(unittest.TestCase):
         self.assertEqual(metric["consumers"][0]["requirement_type"], "fact_observations")
         self.assertEqual(metric["required_periods"], ["2026-07"])
 
+    def test_resolve_request_separates_selectors_from_breakdown_dimensions(self) -> None:
+        tasks = [("q", {
+            "analysis_task": {
+                "metrics": [
+                    {"metric_id": "selected", "name": "筛选指标"},
+                    {"metric_id": "grouped", "name": "拆解指标"},
+                ],
+                "periods": {"analysis": "2026-07"},
+            },
+            "fact_observations": [
+                {
+                    "requirement_id": "selected_fact", "metric_ref": "selected",
+                    "period_roles": ["analysis"], "dimensions": {"平台": "京东"},
+                    "dimension_refs": [],
+                },
+                {
+                    "requirement_id": "grouped_fact", "metric_ref": "grouped",
+                    "period_roles": ["analysis"], "dimensions": {},
+                    "dimension_refs": ["平台"],
+                },
+            ],
+        })]
+        request = build_resolve_request(tasks, {"definitions": {}})
+        metrics = {
+            item["metric_ref"]: item for item in request["contexts"][0]["metrics"]
+        }
+        self.assertEqual(metrics["selected"]["required_dimensions"], ["平台"])
+        self.assertEqual(metrics["selected"]["required_breakdown_dimensions"], [])
+        self.assertEqual(metrics["grouped"]["required_breakdown_dimensions"], ["平台"])
+
     def test_resolve_request_uses_registered_derived_roles_and_object_capability(self) -> None:
         tasks = [("q", {
             "analysis_task": {

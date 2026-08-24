@@ -1,6 +1,6 @@
 {
   "schema_version": "resolution_policy/2.0",
-  "policy_version": "2.0.0",
+  "policy_version": "2.1.0",
   "limits": {
     "max_candidates_per_case": 3
   },
@@ -31,6 +31,17 @@
     "lexical_recall_floor": 0.78,
     "minimum_candidate_margin": 0.1,
     "allow_unique_capability_selection": true
+  },
+  "grain_rollup": {
+    "allowed_edges": [
+      ["day", "week"],
+      ["week", "month"],
+      ["week", "quarter"],
+      ["month", "quarter"],
+      ["week", "year"],
+      ["month", "year"],
+      ["quarter", "year"]
+    ]
   },
   "rules": {
     "fact_block_joint_resolution": {

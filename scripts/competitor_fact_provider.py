@@ -43,8 +43,7 @@ def _parse_number(value: Any) -> float | None:
     text = display_text(value).replace(",", "")
     if text in MISSING_VALUES:
         return None
-    percentage = text.endswith("%")
-    if percentage:
+    if text.endswith("%"):
         text = text[:-1].strip()
     try:
         number = float(text)
@@ -52,7 +51,7 @@ def _parse_number(value: Any) -> float | None:
         raise SkillError("invalid_numeric_value", f"源单元格不是数值：{value}") from exc
     if not math.isfinite(number):
         raise SkillError("invalid_numeric_value", f"源单元格不是有限数值：{value}")
-    return number / 100 if percentage else number
+    return number
 
 
 def _source_metric(slot: dict[str, Any], index: dict[str, Any]) -> str:

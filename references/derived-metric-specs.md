@@ -81,7 +81,7 @@ definition_version: "<registry-version>"
 - **输入事实**：Query 要求看同比的一个当前周期值和其去年同期值；多个时期只有在 Query 要求各自同比时才分别实例化。若 Query 指定维度，则对要求覆盖的每个 `view_id × group` 分别实例化。
 - **量级指标公式**：`yoy_rate = analysis_value / analysis_last_year_value - 1`
 - **比例指标公式**：`yoy_rate = analysis_value - analysis_last_year_value`
-- **展示单位**：量级指标按百分比展示；比例指标按百分点（pp）展示。场景内部比例统一为小数，展示时乘以 100。
+- **数值与展示单位**：源事实遵循声明单位数值契约，例如 `28.1%` 记为 `value=28.1, unit=%`；比例指标做差后按百分点输出，例如 `28.1 - 27.5 = 0.6pp`。量级指标的比值派生仍使用 `rate` / `rate_delta` 小数，集合占比使用 `share` 小数，展示为百分比时才乘以 100。`unit_scale` 中 `%` / `pp` 的 `1e-2` 只用于公式单位代数，不表示源事实按基础比例存储。
 - **输出**：`analysis_yoy` 或 `comparison_yoy`、原始输入、公式、单位、`view_id`/分组标签和解释标签。
 - **最小校验**：当前值和去年同期值存在；量级指标去年同期值不为 0；单位和口径一致。
 

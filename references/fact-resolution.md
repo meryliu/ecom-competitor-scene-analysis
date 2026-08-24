@@ -5,7 +5,7 @@
 ## 映射发生位置
 
 1. Gateway resolve 对复合 Query 按 `business-intent-policy-registry.json` 生成有限原始假设；策略只提供语义模板，不提供标准名称映射。
-2. 同一次 resolve 使用当前全部指标与维度元信息、实际事实块和时期覆盖，把假设筛成 `viable|infeasible` 候选；唯一可执行候选自动选择，多个口径不同的可执行候选一次澄清。
+2. 同一次 resolve 将核心指标语义与派生语义分开评分，并用指标元信息做轻量结构粒度判断。结构不可执行候选只留在诊断拒绝信息，不进入自动选择或澄清；实际事实块与时期覆盖由 prepare 校验。
 3. 源索引构建保留未决物理指标块；请求级 resolver 联合评估“物理块、指标、维度、行域”，不得先独立确定指标再猜维度。业务意图选定后不再重新猜业务语义。
 4. prepare/compile 保留逻辑指标和维度，同时生成按指标隔离的 `source_metric_name`、`source_dimension_refs`、`source_selector_dimensions`、`source_dimension_domains` 与 `dimension_projection`。
 5. Provider 用物理字段定位事实，并用实时枚举确认维度值、物理维度全域或命名集合。`TOP6平台` 直接走物理维度全域，不经过逻辑集合注册表。
@@ -34,7 +34,7 @@ Query 仅提供维度值时，模型可以给出维度名候选，但最终绑�
 
 决策注册表不是名称映射枚举。它只能使用实现白名单中的 hard gates、strong evidence、阈值和候选上限；模型推断本身不能单独触发自动绑定。
 
-业务意图注册表同样不得登记标准指标或维度映射，只能维护语义触发词、指标对象、名称模板、优先级和候选上限。规则与 source revision、schema hash、resolution policy hash 一同进入审计指纹；策略变更后旧确认补丁失效。普通事实和派生可参与意图展开，归因目标、用户公式和注册组合叶子不允许被自动改写指标对象。
+业务意图注册表同样不得登记标准指标或维度映射，只能维护需求级派生触发、指标对象、名称模板、优先级和候选上限。完整 Query 只在没有结构化 consumer 的兼容路径使用；有 consumer 时仅使用其 `derived_metric_id` 或局部语义片段。规则与 source revision、schema hash、resolution policy hash 一同进入审计指纹；策略变更后旧确认补丁失效。普通事实和派生可参与意图展开，归因目标、用户公式和注册组合叶子不允许被自动改写指标对象。
 
 ## 实时性
 

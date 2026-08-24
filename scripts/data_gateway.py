@@ -145,6 +145,11 @@ def build_resolve_request(
                 } | {
                     str(value) for value in (requirement.get("dimension_refs") or [])
                 }
+                breakdown_dimensions = {
+                    str(value) for value in (requirement.get("dimension_refs") or [])
+                } | {
+                    str(value) for value in (requirement.get("group_dimensions") or [])
+                }
                 consumers_by_metric.setdefault(str(requirement["metric_ref"]), []).append({
                     "requirement_id": str(requirement.get(id_field) or ""),
                     "requirement_type": collection,
@@ -154,7 +159,10 @@ def build_resolve_request(
                         str(task_periods[role]) for role in period_roles if role in task_periods
                     ],
                     "dimensions": sorted(requirement_dimensions),
+                    "breakdown_dimensions": sorted(breakdown_dimensions),
                     "derived_metric_id": requirement.get("derived_metric_id"),
+                    "semantic_text": requirement.get("semantic_text"),
+                    "query_fragment": requirement.get("query_fragment"),
                     "allowed_metric_objects": list(
                         (
                             derived_definitions.get(str(requirement.get("derived_metric_id")))
@@ -186,6 +194,11 @@ def build_resolve_request(
                         str(dimension)
                         for consumer in consumers_by_metric.get(metric_ref) or []
                         for dimension in consumer.get("dimensions") or []
+                    }),
+                    "required_breakdown_dimensions": sorted({
+                        str(dimension)
+                        for consumer in consumers_by_metric.get(metric_ref) or []
+                        for dimension in consumer.get("breakdown_dimensions") or []
                     }),
                     "provenance": metric.get("name_source") or (
                         "user_explicit" if name_token and name_token in query_token else "model_inferred"

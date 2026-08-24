@@ -10,6 +10,17 @@ from typing import Any
 from data_gateway import RESOLVED_CAPABILITIES_V1
 
 
+DEFAULT_GRAIN_ROLLUP_EDGES = (
+    ("day", "week"),
+    ("week", "month"),
+    ("week", "quarter"),
+    ("month", "quarter"),
+    ("week", "year"),
+    ("month", "year"),
+    ("quarter", "year"),
+)
+
+
 def normalize_match_text(value: Any) -> str:
     text = unicodedata.normalize("NFKC", str(value or "")).lower()
     text = re.sub(r"\s+", "", text).strip()
@@ -40,6 +51,81 @@ def normalize_period(value: Any) -> tuple[str, str] | None:
     return None
 
 
+def can_rollup_grain(
+    source_grain: str,
+    target_grain: str,
+    edges: list[list[str]] | tuple[tuple[str, str], ...] | None = None,
+) -> bool:
+    """Return whether a registered directed grain path reaches the target."""
+    if source_grain == target_grain:
+        return True
+    adjacency: dict[str, set[str]] = {}
+    for edge in edges or DEFAULT_GRAIN_ROLLUP_EDGES:
+        if len(edge) != 2:
+            continue
+        adjacency.setdefault(str(edge[0]), set()).add(str(edge[1]))
+    pending = list(adjacency.get(source_grain, set()))
+    visited = {source_grain}
+    while pending:
+        grain = pending.pop()
+        if grain == target_grain:
+            return True
+        if grain in visited:
+            continue
+        visited.add(grain)
+        pending.extend(adjacency.get(grain, set()) - visited)
+    return False
+
+
+def evaluate_structural_grain_capability(
+    metadata: dict[str, Any],
+    target_grain: str,
+    edges: list[list[str]] | tuple[tuple[str, str], ...] | None = None,
+) -> dict[str, Any]:
+    """Evaluate grain reachability without inspecting periods, blocks, or values."""
+    supported = [str(value) for value in metadata.get("supported_grains") or []]
+    if not supported:
+        return {
+            "status": "unknown",
+            "reason": "metadata_grain_unknown",
+            "target_grain": target_grain,
+        }
+    if target_grain in supported:
+        return {
+            "status": "available",
+            "path": "direct_fact",
+            "source_grain": target_grain,
+            "target_grain": target_grain,
+        }
+    additive = (
+        metadata.get("aggregation_mode") == "additive"
+        or metadata.get("additive") is True
+    )
+    if additive:
+        source_grain = next(
+            (
+                grain
+                for grain in supported
+                if can_rollup_grain(grain, target_grain, edges)
+            ),
+            None,
+        )
+        if source_grain is not None:
+            return {
+                "status": "available",
+                "path": "aggregate_fact",
+                "source_grain": source_grain,
+                "target_grain": target_grain,
+            }
+    return {
+        "status": "unavailable",
+        "reason": "metadata_grain_unsupported",
+        "target_grain": target_grain,
+        "supported_grains": supported,
+        "aggregation_mode": metadata.get("aggregation_mode") or "unknown",
+    }
+
+
 def validate_capabilities(value: dict[str, Any]) -> dict[str, Any]:
     if value.get("schema_version") != RESOLVED_CAPABILITIES_V1:
         raise ValueError("unsupported resolved capabilities")
@@ -59,6 +145,7 @@ def project_task_capabilities(
     metric_bindings = dict(task.get("metric_bindings") or {})
     projected["metric_bindings"] = metric_bindings
     projected["metric_statuses"] = deepcopy(task.get("metric_statuses") or {})
+    projected["requirement_bindings"] = deepcopy(task.get("requirement_bindings") or {})
     projected["intent_resolutions"] = deepcopy(task.get("intent_resolutions") or {})
     projected["composition_resolutions"] = deepcopy(
         task.get("composition_resolutions") or []
@@ -76,6 +163,11 @@ def project_task_capabilities(
             for value in (composition.get("input_bindings") or {}).values()
             if value
         )
+    resolved_metrics.update(
+        str(item.get("source_metric"))
+        for item in projected["requirement_bindings"].values()
+        if isinstance(item, dict) and item.get("source_metric")
+    )
     projected["metrics"] = {
         name: deepcopy(metadata)
         for name, metadata in (capabilities.get("metrics") or {}).items()

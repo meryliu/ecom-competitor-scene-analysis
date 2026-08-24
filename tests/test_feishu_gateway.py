@@ -106,7 +106,7 @@ class FeishuGatewayTests(unittest.TestCase):
         for physical in ("spreadsheet_token", "sheet_id", "header_row", "rows", "physical-sheet"):
             self.assertNotIn(physical, serialized)
 
-    def test_business_intent_candidates_share_one_resolve_and_bind_executable_path(self) -> None:
+    def test_structural_candidate_filter_uses_one_resolve(self) -> None:
         config = {
             "provider_id": "feishu_competitor",
             "source_id": "competitor_macro_sheet",
@@ -159,5 +159,6 @@ class FeishuGatewayTests(unittest.TestCase):
             capability = FeishuCompetitorGateway(config).resolve(request)
         self.assertEqual(resolve_mock.call_count, 1)
         task = capability["task_resolutions"]["q"]
-        self.assertEqual(task["metric_bindings"]["线上社零"], "实物商品网上零售额同比增速")
+        self.assertNotIn("线上社零", task["metric_bindings"])
+        self.assertEqual(task["resolution_cases"][0]["candidates"], [])
         self.assertIn("business_intent_policy_hash", capability["source"])

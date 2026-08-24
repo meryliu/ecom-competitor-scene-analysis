@@ -728,6 +728,55 @@ class PrepareAnalysisTests(unittest.TestCase):
         self.assertEqual(metric["metric_object_source"], "business_intent_policy")
         self.assertEqual(ir["derived_requirements"][0]["metric_object"], "ratio")
 
+    def test_requirement_binding_materializes_source_precomputed_derived(self) -> None:
+        ir = base_ir("结算率", metric_object="ratio")
+        ir["analysis_task"]["periods"] = {"analysis": "2026-05"}
+        ir["derived_requirements"] = [{
+            "requirement_id": "rate_yoy",
+            "metric_ref": "target",
+            "metric_object": "ratio",
+            "derived_metric_id": "yoy_growth",
+            "definition_status": "registered",
+            "view_id": "v",
+            "dimensions": {"平台": "京东"},
+            "dimension_refs": [],
+        }]
+        capabilities = source_index(direct_rate=True)
+        capabilities["metrics"]["结算率同比增速"] = {
+            "unit": "%", "metric_object": "ratio", "additive": False,
+            "dimensions": ["平台"], "supported_grains": ["month"],
+        }
+        capabilities["availability"]["month"]["metrics"]["结算率同比增速"] = {
+            "dimension": "平台"
+        }
+        capabilities["requirement_bindings"] = {
+            "rate_yoy": {
+                "mode": "source_derived_fact",
+                "derived_metric_id": "yoy_growth",
+                "source_metric": "结算率同比增速",
+                "source_period_role": "analysis",
+                "candidate_id": "candidate_yoy",
+            }
+        }
+        prepared, _ = prepare_analysis_ir(
+            ir, capabilities, self.compositions, self.derived
+        )
+        requirement = prepared["derived_requirements"][0]
+        self.assertEqual(requirement["fulfillment_mode"], "source_derived_fact")
+        selector = next(
+            item for item in prepared["canonical_fact_selectors"]
+            if item["metric_ref"] == requirement["source_metric_ref"]
+        )
+        self.assertEqual(selector["source_metric_name"], "结算率同比增速")
+        plan, report = compile_and_validate(
+            prepared,
+            ROOT / "references" / "derived-metric-registry.json",
+            ROOT / "references" / "metric-composition-registry.json",
+        )
+        self.assertTrue(report["valid"], report)
+        node = next(item for item in plan["nodes"] if item["type"] == "derived_metric")
+        self.assertEqual(node["execution"]["definition_status"], "source_precomputed")
+
 
 if __name__ == "__main__":
     unittest.main()

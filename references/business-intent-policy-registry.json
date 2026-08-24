@@ -1,6 +1,6 @@
 {
   "schema_version": "business_intent_policy/1.0",
-  "policy_version": "1.0.0",
+  "policy_version": "1.1.0",
   "limits": {
     "max_hypotheses_per_metric": 3,
     "max_candidates_per_case": 3
@@ -26,6 +26,7 @@
       "triggers": {
         "any": ["同比", "增速", "增长率", "涨幅"]
       },
+      "derived_metric_ids": ["yoy_growth"],
       "metric_term_templates": ["{metric}同比增速", "{metric}增速"],
       "metric_object": "ratio",
       "skip_if_metric_contains_any": ["同比", "增速", "增长率", "涨幅"],
