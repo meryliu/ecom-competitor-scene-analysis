@@ -176,6 +176,7 @@ def compact_task_answer(answer: dict[str, Any]) -> dict[str, Any]:
             "execution_profile",
             "task_id",
             "source_revision",
+            "answer_basis",
             "quality",
             "scope_and_assumptions",
         )

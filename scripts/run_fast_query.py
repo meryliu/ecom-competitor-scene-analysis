@@ -399,6 +399,396 @@ def validate_scene_facts(payload: Any, plan: dict[str, Any], request_id: str) ->
     return rows
 
 
+ANSWER_BASIS_SCHEMA_VERSION = "answer_basis/1.0"
+ANSWER_BASIS_MAX_FILTER_VALUES = 20
+
+
+def _answer_requirement_refs(manifest: dict[str, Any]) -> list[str] | None:
+    analysis_ir = manifest.get("analysis_ir")
+    if not isinstance(analysis_ir, dict):
+        return None
+    output_requirements = analysis_ir.get("output_requirements")
+    if not isinstance(output_requirements, list) or not output_requirements:
+        return None
+    refs: list[str] = []
+    for requirement in output_requirements:
+        if not isinstance(requirement, dict):
+            continue
+        for ref in requirement.get("source_requirement_refs") or []:
+            if isinstance(ref, str) and ref and ref not in refs:
+                refs.append(ref)
+    return refs or None
+
+
+def _answer_selection(
+    manifest: dict[str, Any],
+) -> tuple[list[str] | None, set[str] | None, set[str] | None]:
+    requirement_refs = _answer_requirement_refs(manifest)
+    if requirement_refs is None:
+        return None, None, None
+    selected_requirements = set(requirement_refs)
+    compilations = [
+        item for item in manifest.get("requirement_compilation") or []
+        if isinstance(item, dict)
+    ]
+    selected_nodes: set[str] = set()
+    selected_slots: set[str] = set()
+    for item in compilations:
+        if item.get("requirement_id") not in selected_requirements:
+            continue
+        selected_nodes.update(
+            str(node_id) for node_id in item.get("node_ids") or [] if node_id
+        )
+        selected_slots.update(
+            str(slot_id) for slot_id in item.get("fact_slot_ids") or [] if slot_id
+        )
+
+    nodes_by_id = {
+        str(node.get("node_id")): node
+        for node in manifest.get("nodes") or []
+        if isinstance(node, dict) and node.get("node_id")
+    }
+    pending = list(selected_nodes)
+    while pending:
+        node_id = pending.pop()
+        node = nodes_by_id.get(node_id) or {}
+        for dependency in node.get("depends_on") or []:
+            dependency_id = str(dependency)
+            dependency_node = nodes_by_id.get(dependency_id) or {}
+            handler = (dependency_node.get("execution") or {}).get("handler")
+            if handler in {"derived", "attribution"} and dependency_id not in selected_nodes:
+                selected_nodes.add(dependency_id)
+                pending.append(dependency_id)
+
+    for item in compilations:
+        if selected_nodes.intersection(str(value) for value in item.get("node_ids") or []):
+            selected_slots.update(
+                str(slot_id) for slot_id in item.get("fact_slot_ids") or [] if slot_id
+            )
+    return requirement_refs, selected_nodes, selected_slots
+
+
+def _answer_facts(
+    manifest: dict[str, Any], selected_slots: set[str] | None
+) -> list[dict[str, Any]]:
+    facts = [
+        row for row in manifest.get("normalized_facts") or []
+        if isinstance(row, dict)
+    ]
+    if selected_slots is None:
+        return facts
+    return [row for row in facts if str(row.get("fact_slot_id")) in selected_slots]
+
+
+def _metric_basis(
+    manifest: dict[str, Any],
+    facts: list[dict[str, Any]],
+    requirement_refs: list[str] | None,
+) -> list[dict[str, Any]]:
+    logical_names = {
+        str(item.get("metric_id")): item.get("name")
+        for item in (manifest.get("analysis_task") or {}).get("metrics") or []
+        if isinstance(item, dict) and item.get("metric_id")
+    }
+    requirement_rank = {
+        requirement_id: index
+        for index, requirement_id in enumerate(requirement_refs or [])
+    }
+    metrics: dict[str, tuple[int, dict[str, Any]]] = {}
+    for row in facts:
+        source_name = row.get("source_metric_name") or row.get("metric")
+        if not isinstance(source_name, str) or not source_name:
+            continue
+        row_rank = min(
+            (
+                requirement_rank[ref]
+                for ref in row.get("requirement_refs") or []
+                if ref in requirement_rank
+            ),
+            default=len(requirement_rank),
+        )
+        item = {
+            "metric": logical_names.get(str(row.get("metric_ref"))) or row.get("metric"),
+            "source_metric_name": source_name,
+            "unit": row.get("unit"),
+            "definition": row.get("definition"),
+        }
+        current = metrics.get(source_name)
+        if current is None:
+            metrics[source_name] = (row_rank, item)
+            continue
+        current_rank, current_item = current
+        for key in ("metric", "unit", "definition"):
+            if current_item.get(key) in {None, ""} and item.get(key) not in {None, ""}:
+                current_item[key] = item[key]
+        metrics[source_name] = (min(current_rank, row_rank), current_item)
+    return [
+        item
+        for _, item in sorted(
+            metrics.values(),
+            key=lambda ranked: (ranked[0], str(ranked[1].get("source_metric_name"))),
+        )
+    ]
+
+
+def _compact_filter_values(value: Any) -> tuple[list[Any], int]:
+    values = value if isinstance(value, list) else [value]
+    compact = [item for item in values if isinstance(item, (str, int, float, bool))]
+    return compact[:ANSWER_BASIS_MAX_FILTER_VALUES], len(compact)
+
+
+def _dimension_basis(
+    manifest: dict[str, Any],
+    facts: list[dict[str, Any]],
+    requirement_refs: list[str] | None,
+) -> list[dict[str, Any]]:
+    selectors = (manifest.get("analysis_task") or {}).get("selector_dimensions") or {}
+    dimensions: list[dict[str, Any]] = []
+    if isinstance(selectors, dict):
+        for dimension, raw_values in sorted(selectors.items(), key=lambda item: str(item[0])):
+            values, value_count = _compact_filter_values(raw_values)
+            item: dict[str, Any] = {
+                "dimension": str(dimension),
+                "usage": "filter",
+                "values": values,
+            }
+            if value_count > len(values):
+                item.update(value_count=value_count, values_truncated=True)
+            dimensions.append(item)
+
+    selected_requirements = set(requirement_refs or [])
+    breakdowns: set[str] = set()
+    analysis_ir = manifest.get("analysis_ir") or {}
+    if isinstance(analysis_ir, dict):
+        for tree in analysis_ir.get("dimension_trees") or []:
+            if not isinstance(tree, dict):
+                continue
+            for level in tree.get("levels") or []:
+                if isinstance(level, dict) and level.get("dimension_ref"):
+                    breakdowns.add(str(level["dimension_ref"]))
+        collections = (
+            "fact_observations",
+            "metric_compositions",
+            "derived_requirements",
+            "custom_calculations",
+            "attribution_targets",
+        )
+        for collection in collections:
+            for requirement in analysis_ir.get(collection) or []:
+                if not isinstance(requirement, dict):
+                    continue
+                requirement_id = requirement.get("requirement_id", requirement.get("target_id"))
+                if selected_requirements and requirement_id not in selected_requirements:
+                    continue
+                for dimension in requirement.get("group_dimensions") or []:
+                    if dimension:
+                        breakdowns.add(str(dimension))
+                for dimension in requirement.get("dimension_refs") or []:
+                    if dimension and str(dimension) not in selectors:
+                        breakdowns.add(str(dimension))
+    for row in facts:
+        row_dimensions = row.get("dimensions") or {}
+        if not isinstance(row_dimensions, dict):
+            continue
+        breakdowns.update(str(key) for key in row_dimensions if str(key) not in selectors)
+    dimensions.extend(
+        {"dimension": dimension, "usage": "breakdown"}
+        for dimension in sorted(breakdowns)
+    )
+    return dimensions
+
+
+def _number_label(value: int | float) -> str:
+    numeric = float(value)
+    return str(int(numeric)) if numeric.is_integer() else format(numeric, ".12g")
+
+
+def _expression_label(expression: Any, parent_precedence: int = 0) -> str | None:
+    if not isinstance(expression, dict):
+        return None
+    if "literal" in expression:
+        value = expression["literal"]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return _number_label(value)
+    if "fact" in expression:
+        fact = expression["fact"]
+        if not isinstance(fact, dict):
+            return None
+        metric = fact.get("metric") or "事实值"
+        role_labels = {
+            "analysis": "分析期",
+            "analysis_last_year": "上年同期",
+            "comparison": "对比期",
+            "comparison_last_year": "对比期上年同期",
+        }
+        role = role_labels.get(str(fact.get("period_role")))
+        return f"{metric}[{role}]" if role else str(metric)
+    if "result" in expression:
+        return "前序计算结果"
+    operation = expression.get("op")
+    args = expression.get("args")
+    if operation not in {"sum", "add", "subtract", "multiply", "divide"}:
+        return None
+    if not isinstance(args, list) or not args:
+        return None
+    precedence = 1 if operation in {"sum", "add", "subtract"} else 2
+    labels = [
+        _expression_label(
+            arg,
+            precedence + (1 if operation in {"subtract", "divide"} and index > 0 else 0),
+        )
+        for index, arg in enumerate(args)
+    ]
+    if any(label is None for label in labels):
+        return None
+    symbols = {
+        "sum": " + ",
+        "add": " + ",
+        "subtract": " - ",
+        "multiply": " × ",
+        "divide": " / ",
+    }
+    if operation in {"subtract", "divide"} and len(labels) != 2:
+        return None
+    rendered = symbols[operation].join(str(label) for label in labels)
+    return f"({rendered})" if precedence < parent_precedence else rendered
+
+
+def _rollup_formula(rollup: dict[str, Any]) -> tuple[str, str] | None:
+    if rollup.get("calendar") != "iso8601":
+        return None
+    target_period = str(rollup.get("target_period") or "")
+    if len(target_period) == 7 and target_period[4] == "-":
+        target = "月"
+    elif "-Q" in target_period:
+        target = "季度"
+    elif len(target_period) == 4 and target_period.isdigit():
+        target = "年"
+    else:
+        return None
+    name = f"周上卷{target}"
+    return name, f"{name} = Σ(周值 × 当周落入目标{target}的天数 / 7)"
+
+
+def _calculation_name(result: dict[str, Any], formula: Any) -> str:
+    metric = result.get("metric")
+    roles: set[str] = set()
+
+    def collect_roles(expression: Any) -> None:
+        if not isinstance(expression, dict):
+            return
+        fact = expression.get("fact")
+        if isinstance(fact, dict) and fact.get("period_role"):
+            roles.add(str(fact["period_role"]))
+        for arg in expression.get("args") or []:
+            collect_roles(arg)
+
+    collect_roles(formula)
+    prefix = f"{metric}" if isinstance(metric, str) and metric else ""
+    if {"analysis_last_year", "comparison_last_year"}.issubset(roles):
+        return f"{prefix}同比增速变化" or "同比增速变化"
+    if "analysis_last_year" in roles:
+        return f"{prefix}同比增速" or "同比增速"
+    if "comparison" in roles:
+        return f"{prefix}期间变化" or "期间变化"
+    if result.get("definition_status") == "custom":
+        return f"{prefix}自定义计算" or "自定义计算"
+    return f"{prefix}派生计算" or "派生计算"
+
+
+def _calculation_basis(
+    manifest: dict[str, Any], selected_nodes: set[str] | None
+) -> list[dict[str, Any]]:
+    rollups_by_node: dict[str, dict[str, Any]] = {}
+    analysis_ir = manifest.get("analysis_ir") or {}
+    adaptations = analysis_ir.get("input_adaptations") if isinstance(analysis_ir, dict) else []
+    adaptation_by_requirement = {
+        str(item.get("requirement_id")): item.get("rollup")
+        for item in adaptations or []
+        if isinstance(item, dict) and isinstance(item.get("rollup"), dict)
+    }
+    for compilation in manifest.get("requirement_compilation") or []:
+        if not isinstance(compilation, dict):
+            continue
+        rollup = adaptation_by_requirement.get(str(compilation.get("requirement_id")))
+        if rollup is None:
+            continue
+        for node_id in compilation.get("node_ids") or []:
+            rollups_by_node[str(node_id)] = rollup
+
+    calculations: list[dict[str, Any]] = []
+    seen_formulas: set[str] = set()
+    seen_unknown: set[str] = set()
+    for result in manifest.get("derived_results") or []:
+        if not isinstance(result, dict):
+            continue
+        node_id = str(result.get("node_id"))
+        if selected_nodes is not None and node_id not in selected_nodes:
+            continue
+        if result.get("status") not in {"success", "partial_success"}:
+            continue
+        rollup = _rollup_formula(rollups_by_node[node_id]) if node_id in rollups_by_node else None
+        if rollup is not None:
+            name, formula = rollup
+        else:
+            raw_formula = result.get("formula")
+            name = _calculation_name(result, raw_formula)
+            formula = _expression_label(raw_formula)
+        if formula is not None:
+            if formula in seen_formulas:
+                continue
+            seen_formulas.add(formula)
+        elif name in seen_unknown:
+            continue
+        else:
+            seen_unknown.add(name)
+        calculations.append({"name": name, "formula": formula})
+    return calculations
+
+
+def _attribution_basis(
+    manifest: dict[str, Any], selected_nodes: set[str] | None
+) -> list[dict[str, Any]]:
+    descriptions = {
+        str(contract.get("operator")): contract.get("description")
+        for contract in (manifest.get("analysis_task") or {}).get("operator_contracts") or []
+        if isinstance(contract, dict) and contract.get("operator")
+    }
+    attribution: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in manifest.get("attribution_results") or []:
+        if not isinstance(item, dict):
+            continue
+        if selected_nodes is not None and str(item.get("node_id")) not in selected_nodes:
+            continue
+        if item.get("status") not in {"success", "partial_success"}:
+            continue
+        result = item.get("result") or {}
+        operator = result.get("operator") if isinstance(result, dict) else None
+        if not isinstance(operator, str) or not operator or operator in seen:
+            continue
+        seen.add(operator)
+        basis = {"operator": operator}
+        description = descriptions.get(operator)
+        if isinstance(description, str) and description:
+            basis["description"] = description
+        attribution.append(basis)
+    return attribution
+
+
+def build_answer_basis(manifest: dict[str, Any]) -> dict[str, Any]:
+    requirement_refs, selected_nodes, selected_slots = _answer_selection(manifest)
+    facts = _answer_facts(manifest, selected_slots)
+    return {
+        "schema_version": ANSWER_BASIS_SCHEMA_VERSION,
+        "metrics": _metric_basis(manifest, facts, requirement_refs),
+        "dimensions": _dimension_basis(manifest, facts, requirement_refs),
+        "calculations": _calculation_basis(manifest, selected_nodes),
+        "attribution": _attribution_basis(manifest, selected_nodes),
+    }
+
+
 def answer_payload(manifest: dict[str, Any], profile: str) -> dict[str, Any]:
     facts = manifest.get("normalized_facts") if isinstance(manifest.get("normalized_facts"), list) else []
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -424,6 +814,7 @@ def answer_payload(manifest: dict[str, Any], profile: str) -> dict[str, Any]:
         ],
         "derived_results": manifest.get("derived_results", []),
         "attribution_results": manifest.get("attribution_results", []),
+        "answer_basis": build_answer_basis(manifest),
         "model_completion": manifest.get("model_completion"),
         "quality": {
             "logical_facts": len(facts),

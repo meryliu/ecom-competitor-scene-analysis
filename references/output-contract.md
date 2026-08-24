@@ -140,6 +140,36 @@
 
 统一 runner 的顶层 `answer-payload.json` 是正常分析唯一读取入口，只保留业务事实、派生值、归因摘要与明细、口径和质量状态。公式 AST、输入选择器、内部哈希、引擎身份和路由保留在 `tasks/<task>/` 诊断产物中。自动粒度适配的源周期事实不重复进入顶层视图，物化后的目标周期结果保留。
 
+每个成功或部分成功任务同时包含轻量结论依据 `answer_basis/1.0`：
+
+```json
+{
+  "answer_basis": {
+    "schema_version": "answer_basis/1.0",
+    "metrics": [
+      {
+        "metric": "逻辑指标名",
+        "source_metric_name": "实际源指标名",
+        "unit": "源单位",
+        "definition": "源指标口径定义"
+      }
+    ],
+    "dimensions": [
+      {"dimension": "平台", "usage": "filter", "values": ["抖音"]},
+      {"dimension": "类目", "usage": "breakdown"}
+    ],
+    "calculations": [
+      {"name": "周上卷月", "formula": "周上卷月 = Σ(周值 × 当周落入目标月的天数 / 7)"}
+    ],
+    "attribution": [
+      {"operator": "算子名称", "description": "算子契约已有简介"}
+    ]
+  }
+}
+```
+
+该字段只由答案组装阶段使用当前任务已有的事实、公式和算子契约生成，不触发额外取数或注册表读取，也不改变任务状态。`metrics` 按实际源指标去重且只保留一份源口径定义；筛选值最多保留 20 个，超出时附 `value_count` 与 `values_truncated=true`；拆解维度不复制完整成员枚举。`calculations` 只把受支持的白名单 AST 转成可读关键公式，无法安全格式化时保留名称并令 `formula=null`；周上卷折叠为一条权重规则，不展开各周。归因简介缺失时只保留算子名。顶层不得携带公式 AST、哈希、内部 ID、全量维度枚举或源坐标。
+
 ## 状态
 
 - 计划：`ready_for_resolution`、`ready_for_confirmation`、`ready_for_fetch`、`blocked`。
