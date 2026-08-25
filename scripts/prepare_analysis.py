@@ -177,17 +177,32 @@ def _apply_requirement_bindings(ir: dict[str, Any], index: dict[str, Any]) -> No
     if not bindings:
         return
     metrics = _metric_map(ir)
-    requirements = {
-        str(item.get("requirement_id")): item
-        for item in ir.get("derived_requirements") or []
-        if isinstance(item, dict) and item.get("requirement_id")
-    }
+    requirements: dict[str, dict[str, Any]] = {}
+    for collection, id_field in (
+        ("fact_observations", "requirement_id"),
+        ("metric_compositions", "requirement_id"),
+        ("derived_requirements", "requirement_id"),
+        ("attribution_targets", "target_id"),
+    ):
+        for item in ir.get(collection) or []:
+            if isinstance(item, dict) and item.get(id_field):
+                requirements[str(item[id_field])] = item
     source_catalogue = index.get("metrics") or {}
+    materialized_source_refs: dict[tuple[str, str, str, str], str] = {}
     for requirement_id, binding in bindings.items():
-        if not isinstance(binding, dict) or binding.get("mode") != "source_derived_fact":
+        if not isinstance(binding, dict):
             continue
         requirement = requirements.get(str(requirement_id))
         if requirement is None:
+            continue
+        mode = str(binding.get("mode") or "")
+        if mode not in {
+            "source_derived_fact",
+            "source_scoped_fact",
+            "member_selector",
+            "additive_member_sum",
+            "same_metric_total_minus_members",
+        }:
             continue
         output_metric_ref = str(requirement.get("metric_ref") or "")
         output_metric = metrics.get(output_metric_ref)
@@ -195,37 +210,84 @@ def _apply_requirement_bindings(ir: dict[str, Any], index: dict[str, Any]) -> No
         metadata = source_catalogue.get(source_metric) or {}
         if output_metric is None or not source_metric or not metadata:
             continue
-        source_metric_ref = f"__source_derived_{_stable_suffix((requirement_id, source_metric))}"
-        logical_source_name = f"{output_metric.get('name')}::{requirement.get('derived_metric_id')}"
+        materialization_key = (
+            output_metric_ref,
+            source_metric,
+            mode,
+            str(binding.get("constraints_fingerprint") or requirement_id),
+        )
+        source_metric_ref = materialized_source_refs.get(materialization_key)
+        if source_metric_ref is None:
+            source_metric_ref = f"__source_requirement_{_stable_suffix(materialization_key)}"
+            materialized_source_refs[materialization_key] = source_metric_ref
+        logical_source_name = (
+            source_metric
+            if mode != "source_derived_fact"
+            else f"{output_metric.get('name')}::{requirement.get('derived_metric_id')}"
+        )
         source_object = metadata.get("metric_object")
         if source_object not in {"volume", "ratio"}:
             source_object = "ratio" if str(metadata.get("unit") or "").lower() in {
                 "%", "rate", "ratio", "share", "pp"
             } else "volume"
-        source_declaration = {
-            "metric_id": source_metric_ref,
-            "name": logical_source_name,
-            "metric_object": source_object,
-            "unit": metadata.get("unit") or "待元信息解析",
-            "definition": metadata.get("notes") or "source precomputed derived metric",
-            "source_metric_name": source_metric,
-            "source_metric_object": source_object,
-            "source_dimension_bindings": deepcopy(
-                (index.get("metric_dimension_bindings") or {}).get(source_metric) or {}
-            ),
-            "aggregation": metadata.get("aggregation"),
-            "additive": metadata.get("additive"),
-            "generated_from": "requirement_binding",
-        }
-        ir["analysis_task"].setdefault("metrics", []).append(source_declaration)
-        metrics[source_metric_ref] = source_declaration
+        if source_metric_ref not in metrics:
+            source_declaration = {
+                "metric_id": source_metric_ref,
+                "name": logical_source_name,
+                "metric_object": source_object,
+                "unit": metadata.get("unit") or "待元信息解析",
+                "definition": metadata.get("notes") or "source precomputed derived metric",
+                "source_metric_name": source_metric,
+                "source_metric_object": source_object,
+                "source_dimension_bindings": deepcopy(
+                    (index.get("metric_dimension_bindings") or {}).get(source_metric) or {}
+                ),
+                "aggregation": metadata.get("aggregation"),
+                "additive": metadata.get("additive"),
+                "generated_from": "requirement_binding",
+                "logical_metric_ref": output_metric_ref,
+                "logical_metric_name": output_metric.get("name"),
+            }
+            ir["analysis_task"].setdefault("metrics", []).append(source_declaration)
+            metrics[source_metric_ref] = source_declaration
         index.setdefault("metric_bindings", {})[logical_source_name] = source_metric
-        requirement["fulfillment_mode"] = "source_derived_fact"
+        for constraint in binding.get("metric_constraints") or []:
+            if not isinstance(constraint, dict) or not constraint.get("source_dimension"):
+                continue
+            source_dimension = str(constraint["source_dimension"])
+            index.setdefault("dimension_bindings", {}).setdefault(
+                source_dimension, source_dimension
+            )
+            index.setdefault("metric_dimension_bindings", {}).setdefault(
+                source_metric, {}
+            ).setdefault(source_dimension, source_dimension)
+        requirement["fulfillment_mode"] = mode
         requirement["source_metric_ref"] = source_metric_ref
-        requirement["source_period_role"] = str(
-            binding.get("source_period_role") or "analysis"
-        )
+        requirement["constraint_binding"] = deepcopy(binding)
         requirement["source_binding_candidate_id"] = binding.get("candidate_id")
+        if mode == "source_derived_fact":
+            requirement["source_period_role"] = str(
+                binding.get("source_period_role") or "analysis"
+            )
+        elif mode in {"source_scoped_fact", "member_selector"}:
+            if mode == "member_selector":
+                dimensions = requirement.setdefault("dimensions", {})
+                for constraint in binding.get("metric_constraints") or []:
+                    values = list(constraint.get("values") or [])
+                    if constraint.get("operator") not in {"eq", "in"} or len(values) != 1:
+                        raise PreparationError(
+                            "CONSTRAINT_PATH_INVALID",
+                            "member_selector 仅支持单成员正向筛选",
+                            {"requirement_id": requirement_id},
+                        )
+                    dimension = str(constraint.get("source_dimension") or "")
+                    if dimension in dimensions and dimensions[dimension] != values[0]:
+                        raise PreparationError(
+                            "DIMENSION_CONFLICT",
+                            f"需求 {requirement_id} 的约束与已有维度冲突",
+                        )
+                    dimensions[dimension] = values[0]
+            requirement["metric_ref"] = source_metric_ref
 
 
 def _bind_declared_metric_metadata(ir: dict[str, Any], index: dict[str, Any]) -> None:
@@ -255,16 +317,30 @@ def _bind_declared_metric_metadata(ir: dict[str, Any], index: dict[str, Any]) ->
             )
         declared_object = metric.get("metric_object")
         if source_object and declared_object and declared_object != source_object:
-            raise PreparationError(
-                "METRIC_METADATA_CONFLICT",
-                f"指标 {metric.get('name')} 的声明对象与源表元信息冲突",
-                {
-                    "metric": metric.get("name"),
+            object_source = str(
+                metric.get("metric_object_source") or "model_inferred"
+            )
+            if object_source == "model_inferred":
+                metric.setdefault("metadata_corrections", []).append({
                     "field": "metric_object",
                     "declared": declared_object,
                     "source": source_object,
-                },
-            )
+                    "reason": "model_inferred_overridden_by_source_metadata",
+                })
+                metric["metric_object"] = source_object
+                metric["metric_object_source"] = "source_metric_metadata"
+            else:
+                raise PreparationError(
+                    "METRIC_METADATA_CONFLICT",
+                    f"指标 {metric.get('name')} 的声明对象与源表元信息冲突",
+                    {
+                        "metric": metric.get("name"),
+                        "field": "metric_object",
+                        "declared": declared_object,
+                        "source": source_object,
+                        "provenance": object_source,
+                    },
+                )
         if source_object:
             metric["source_metric_object"] = source_object
         source_unit = metadata.get("unit")
@@ -274,16 +350,28 @@ def _bind_declared_metric_metadata(ir: dict[str, Any], index: dict[str, Any]) ->
                 metric["unit"] = source_unit
                 metric["unit_source"] = "source_metric_metadata"
             elif str(declared_unit).strip() != str(source_unit).strip():
-                raise PreparationError(
-                    "METRIC_METADATA_CONFLICT",
-                    f"指标 {metric.get('name')} 的声明单位与源表元信息冲突",
-                    {
-                        "metric": metric.get("name"),
+                unit_source = str(metric.get("unit_source") or "user_explicit")
+                if unit_source == "model_inferred":
+                    metric.setdefault("metadata_corrections", []).append({
                         "field": "unit",
                         "declared": declared_unit,
                         "source": source_unit,
-                    },
-                )
+                        "reason": "model_inferred_overridden_by_source_metadata",
+                    })
+                    metric["unit"] = source_unit
+                    metric["unit_source"] = "source_metric_metadata"
+                else:
+                    raise PreparationError(
+                        "METRIC_METADATA_CONFLICT",
+                        f"指标 {metric.get('name')} 的声明单位与源表元信息冲突",
+                        {
+                            "metric": metric.get("name"),
+                            "field": "unit",
+                            "declared": declared_unit,
+                            "source": source_unit,
+                            "provenance": unit_source,
+                        },
+                    )
         source_definition = metadata.get("notes")
         if _is_unresolved_metadata(metric.get("definition")) and source_definition:
             metric["definition"] = source_definition
@@ -661,6 +749,155 @@ def _requirement_roles(
     return [item for item in consumers if item.get("metric_ref") in metrics]
 
 
+def _materialize_constraint_adaptations(
+    ir: dict[str, Any], index: dict[str, Any], derived_registry: dict[str, Any]
+) -> None:
+    """Turn proven same-metric member sets into safe requirement-local ASTs."""
+    periods = (ir.get("analysis_task") or {}).get("periods") or {}
+    adaptations = ir.setdefault("input_adaptations", [])
+
+    def fact(metric_ref: str, role: str, dimension: str, value: str) -> dict[str, Any]:
+        return {"fact": {
+            "metric_ref": metric_ref,
+            "period_role": role,
+            "dimensions": {dimension: value},
+        }}
+
+    def summed(args: list[dict[str, Any]]) -> dict[str, Any]:
+        return args[0] if len(args) == 1 else {"op": "sum", "args": args}
+
+    for collection in ("fact_observations", "derived_requirements"):
+        for requirement in ir.get(collection) or []:
+            if not isinstance(requirement, dict) or requirement.get("fulfillment_mode") not in {
+                "additive_member_sum", "same_metric_total_minus_members",
+            }:
+                continue
+            binding = requirement.get("constraint_binding") or {}
+            constraints = [
+                item for item in binding.get("metric_constraints") or []
+                if isinstance(item, dict)
+            ]
+            source_metric = str(binding.get("source_metric") or "")
+            source_metric_ref = str(requirement.get("source_metric_ref") or "")
+            metadata = (index.get("metrics") or {}).get(source_metric) or {}
+            if not metric_aggregation_eligibility(metadata)["allowed"]:
+                raise PreparationError(
+                    "CONSTRAINT_PATH_UNAVAILABLE",
+                    f"指标 {source_metric} 不可按维度成员聚合",
+                    {"reason": "metric_non_additive"},
+                )
+            source_dimensions = {
+                str(item.get("source_dimension") or "") for item in constraints
+            }
+            source_dimensions.discard("")
+            if len(source_dimensions) != 1:
+                raise PreparationError(
+                    "CONSTRAINT_PATH_UNAVAILABLE",
+                    "当前物理事实选择器不能联合多个源维度",
+                    {"source_dimensions": sorted(source_dimensions)},
+                )
+            source_dimension = next(iter(source_dimensions))
+            domain = list(
+                ((index.get("dimensions") or {}).get(source_dimension) or {}).get("values")
+                or []
+            )
+            if not domain:
+                raise PreparationError(
+                    "CONSTRAINT_PATH_UNAVAILABLE", f"维度 {source_dimension} 缺少可验证枚举"
+                )
+            by_token = {normalize_match_text(value): str(value) for value in domain}
+            selected_tokens = set(by_token)
+            excluded_tokens: set[str] = set()
+            has_positive_filter = False
+            for constraint in constraints:
+                tokens = {
+                    normalize_match_text(value) for value in constraint.get("values") or []
+                }
+                if not tokens.issubset(by_token):
+                    raise PreparationError(
+                        "CONSTRAINT_PATH_UNAVAILABLE",
+                        f"维度 {source_dimension} 不包含全部约束枚举",
+                    )
+                if constraint.get("operator") in {"eq", "in"}:
+                    selected_tokens &= tokens
+                    has_positive_filter = True
+                elif constraint.get("operator") == "exclude":
+                    selected_tokens -= tokens
+                    excluded_tokens |= tokens
+            if not selected_tokens:
+                raise PreparationError(
+                    "CONSTRAINT_PATH_UNAVAILABLE", "约束筛选后的维度成员为空"
+                )
+            roles = list(requirement.get("period_roles") or [])
+            if collection == "derived_requirements":
+                definition = (derived_registry.get("definitions") or {}).get(
+                    requirement.get("derived_metric_id")
+                ) or {}
+                roles = list(
+                    requirement.get("required_period_roles")
+                    or definition.get("required_period_roles") or []
+                )
+            for role in roles:
+                if role not in periods:
+                    continue
+                needed_tokens = (
+                    set(by_token)
+                    if requirement.get("fulfillment_mode")
+                    == "same_metric_total_minus_members" and not has_positive_filter
+                    else selected_tokens
+                )
+                unavailable = [
+                    by_token[token]
+                    for token in sorted(needed_tokens)
+                    if not _direct_available(
+                        index, source_metric, periods[role],
+                        {source_dimension: by_token[token]}, []
+                    )
+                ]
+                if unavailable:
+                    raise PreparationError(
+                        "CONSTRAINT_PATH_UNAVAILABLE",
+                        f"指标 {source_metric} 在 {periods[role]} 缺少成员事实",
+                        {"members": unavailable},
+                    )
+                if (
+                    requirement.get("fulfillment_mode")
+                    == "same_metric_total_minus_members"
+                    and excluded_tokens and not has_positive_filter
+                ):
+                    total = summed([
+                        fact(source_metric_ref, role, source_dimension, by_token[token])
+                        for token in sorted(by_token)
+                    ])
+                    excluded = summed([
+                        fact(source_metric_ref, role, source_dimension, by_token[token])
+                        for token in sorted(excluded_tokens)
+                    ])
+                    expression = {"op": "subtract", "args": [total, excluded]}
+                else:
+                    expression = summed([
+                        fact(source_metric_ref, role, source_dimension, by_token[token])
+                        for token in sorted(selected_tokens)
+                    ])
+                adaptations.append({
+                    "requirement_id": "constraint_adapt_" + _stable_suffix((
+                        requirement.get("requirement_id"), role,
+                        binding.get("constraints_fingerprint"),
+                    )),
+                    "metric_ref": requirement.get("metric_ref"),
+                    "target_period_role": role,
+                    "view_id": requirement.get("view_id"),
+                    "dimensions": deepcopy(requirement.get("dimensions") or {}),
+                    "dimension_refs": list(requirement.get("dimension_refs") or []),
+                    "expression": expression,
+                    "rule_source": "source_metric_metadata",
+                    "validation": ["facts_present", "unit_consistent", "metric_additive"],
+                    "criticality": requirement.get("criticality", "required"),
+                    "generated": True,
+                    "constraint_fulfillment": requirement.get("fulfillment_mode"),
+                })
+
+
 def _formula_fallback_expression(
     expression: Any,
     factors: dict[str, dict[str, Any]],
@@ -854,6 +1091,7 @@ def prepare_analysis_ir(
     _apply_business_intent_selection(prepared, index)
     _apply_requirement_bindings(prepared, index)
     _bind_declared_metric_metadata(prepared, index)
+    _materialize_constraint_adaptations(prepared, index, derived_registry)
     task = prepared.get("analysis_task") or {}
     metrics = _metric_map(prepared)
     periods = task.get("periods") or {}
@@ -1028,6 +1266,17 @@ def prepare_analysis_ir(
         )
         for item in prepared.get("input_adaptations") or []
     }
+    constraint_adaptation_paths = {
+        (
+            str(item.get("metric_ref")),
+            str(item.get("target_period_role")),
+            str(item.get("view_id")),
+            json.dumps(item.get("dimensions") or {}, ensure_ascii=False, sort_keys=True),
+            tuple(sorted(item.get("dimension_refs") or [])),
+        ): str(item.get("constraint_fulfillment"))
+        for item in prepared.get("input_adaptations") or []
+        if item.get("constraint_fulfillment")
+    }
     adaptations = list(prepared.get("input_adaptations") or [])
 
     # Composition inputs are leaf source consumers too.
@@ -1109,7 +1358,11 @@ def prepare_analysis_ir(
                 "selector_dimensions": deepcopy(dimensions),
                 "group_dimensions": list(consumer.get("group_dimensions") or []),
                 "direct": direct_capability,
-                "path": "direct_fact" if direct_capability.get("status") == "available" else None,
+                "path": (
+                    "direct_fact"
+                    if direct_capability.get("status") == "available"
+                    else constraint_adaptation_paths.get(identity)
+                ),
             }
             capability_plan.append(plan_item)
             if direct_capability.get("status") == "available":

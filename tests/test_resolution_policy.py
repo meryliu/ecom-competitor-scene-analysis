@@ -9,10 +9,14 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from resolution_policy import (  # noqa: E402
     ResolutionPolicyError,
+    _derived_semantic_score,
+    _grain_signature,
+    _strip_derived_tokens,
     load_resolution_policy,
     resolve_request_overlay,
     validate_resolution_policy,
 )
+from semantic_context_guard import extract_current_core_hint  # noqa: E402
 
 
 def ambiguous_platform_index() -> dict:
@@ -68,6 +72,372 @@ class ResolutionPolicyTests(unittest.TestCase):
         invalid["mappings"] = {"平台": "TOP6平台"}
         with self.assertRaises(ResolutionPolicyError):
             validate_resolution_policy(invalid)
+
+    def test_core_semantics_keep_measure_nouns_and_strip_grain_terms(self) -> None:
+        self.assertEqual(_strip_derived_tokens("MAC订单量", self.policy), "mac订单量")
+        self.assertEqual(_strip_derived_tokens("MAC订单价", self.policy), "mac订单价")
+        self.assertEqual(_strip_derived_tokens("支付GMV", self.policy), "支付gmv")
+        for label, grain in (
+            ("月度支付GMV", "month"),
+            ("周度支付GMV", "week"),
+            ("季度支付GMV", "quarter"),
+            ("年度支付GMV", "year"),
+        ):
+            self.assertEqual(_strip_derived_tokens(label, self.policy), "支付gmv")
+            self.assertEqual(_grain_signature(label, self.policy), grain)
+
+    def test_grain_terms_do_not_count_as_derived_semantics(self) -> None:
+        metadata = {"aliases": ["月度支付GMV"]}
+        self.assertEqual(
+            _derived_semantic_score("yoy_growth", "月度支付GMV", metadata, self.policy),
+            0.0,
+        )
+
+    @staticmethod
+    def _constraint_consumer(operator: str = "eq") -> dict:
+        return {
+            "requirement_id": "scoped",
+            "requirement_type": "fact_observations",
+            "periods": ["2026-06"],
+            "semantic_text": (
+                "剔除抖音全国业务量" if operator == "exclude" else "京东全国业务量"
+            ),
+            "metric_constraints": [{
+                "kind": "dimension_filter",
+                "operator": operator,
+                "values": ["抖音" if operator == "exclude" else "京东"],
+                "dimension_hint": "平台",
+                "provenance": "model_inferred",
+            }],
+        }
+
+    def test_metadata_conditioned_recall_surfaces_candidate_outside_lexical_top3(self) -> None:
+        metrics = {
+            name: {
+                "unit": "亿件", "metric_object": "volume",
+                "supported_grains": ["month"], "dimensions": ["无"],
+                "aggregation_mode": "additive",
+            }
+            for name in ("业务量甲", "业务量乙", "业务量丙")
+        }
+        metrics["全国业务量"] = {
+            "unit": "亿件", "metric_object": "volume",
+            "supported_grains": ["month"], "dimensions": ["平台"],
+            "aggregation_mode": "additive",
+        }
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": metrics,
+            "dimensions": {"平台": {"aliases": [], "values": ["京东", "抖音"]}},
+            "sheets": {},
+        }
+        consumer = self._constraint_consumer()
+        request = {"metrics": ["业务量"], "contexts": [{
+            "task_id": "q", "query": "京东业务量", "periods": ["2026-06"],
+            "dimensions": ["平台"],
+            "metrics": [{
+                "metric_ref": "m", "name": "业务量", "metric_object": "volume",
+                "unit": "待元信息解析", "consumers": [consumer],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        binding = result["task_resolutions"]["q"]["requirement_bindings"]["scoped"]
+        self.assertEqual(binding["source_metric"], "全国业务量")
+        self.assertEqual(binding["mode"], "member_selector")
+
+    def test_full_scoped_fact_outranks_dimension_fallback(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "全国业务量": {
+                    "unit": "亿件", "metric_object": "volume",
+                    "supported_grains": ["month"], "dimensions": ["平台"],
+                    "aggregation_mode": "additive",
+                },
+                "京东全国业务量": {
+                    "unit": "亿件", "metric_object": "volume",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                    "aggregation_mode": "additive",
+                },
+            },
+            "dimensions": {"平台": {"aliases": [], "values": ["京东", "抖音"]}},
+            "sheets": {},
+        }
+        consumer = self._constraint_consumer()
+        request = {"metrics": ["全国业务量"], "contexts": [{
+            "task_id": "q", "query": "京东全国业务量", "periods": ["2026-06"],
+            "dimensions": ["平台"], "metrics": [{
+                "metric_ref": "m", "name": "全国业务量", "metric_object": "volume",
+                "unit": "待元信息解析", "consumers": [consumer],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        binding = result["task_resolutions"]["q"]["requirement_bindings"]["scoped"]
+        self.assertEqual(binding["source_metric"], "京东全国业务量")
+        self.assertEqual(binding["mode"], "source_scoped_fact")
+
+    def test_full_scoped_alias_strips_constraint_terms_before_core_scoring(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "剔除抖音包裹后邮政行业快递业务量完成量": {
+                    "aliases": ["剔抖音大盘快递"],
+                    "unit": "亿件", "metric_object": "volume",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                    "aggregation_mode": "additive",
+                },
+                "邮政行业快递业务量完成量": {
+                    "aliases": ["大盘快递"],
+                    "unit": "亿件", "metric_object": "volume",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                    "aggregation_mode": "additive",
+                },
+            },
+            "dimensions": {"TOP6平台": {"aliases": [], "values": ["抖音", "京东"]}},
+            "sheets": {},
+        }
+        consumer = self._constraint_consumer("exclude")
+        consumer["semantic_text"] = "2026年7月剔除抖音的大盘快递量"
+        request = {"metrics": ["大盘快递量"], "contexts": [{
+            "task_id": "q", "query": consumer["semantic_text"], "periods": ["2026-07"],
+            "dimensions": ["平台"], "metrics": [{
+                "metric_ref": "m", "name": "大盘快递量", "metric_object": "volume",
+                "unit": "待元信息解析", "consumers": [consumer],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        binding = result["task_resolutions"]["q"]["requirement_bindings"]["scoped"]
+        self.assertEqual(
+            binding["source_metric"], "剔除抖音包裹后邮政行业快递业务量完成量"
+        )
+        self.assertEqual(binding["mode"], "source_scoped_fact")
+        candidate = result["resolution_decisions"][0]["candidates"][0]
+        self.assertEqual(candidate["confidence"], 0.9)
+        self.assertEqual(candidate["lexical_confidence"], 0.666667)
+        self.assertTrue(candidate["match_evidence"]["constraint"]["full_scope"])
+        self.assertEqual(
+            set(candidate["match_evidence"]["recall_channels"]),
+            {"full_phrase", "core_metric"},
+        )
+
+    def test_constrained_source_derived_binds_only_derived_requirement(self) -> None:
+        constraints = [{
+            "kind": "dimension_filter", "operator": "eq", "values": ["京东"],
+            "dimension_hint": "平台", "provenance": "user_explicit",
+        }]
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "京东闭环电商佣金收入": {
+                    "unit": "亿元", "metric_object": "volume",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                    "aggregation_mode": "additive",
+                },
+                "京东闭环电商佣金收入同比增速": {
+                    "unit": "%", "metric_object": "ratio",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                    "aggregation_mode": "non_additive",
+                },
+            },
+            "dimensions": {"平台": {"aliases": [], "values": ["京东", "抖音"]}},
+            "sheets": {},
+        }
+        request = {"metrics": ["闭环电商佣金收入"], "contexts": [{
+            "task_id": "q", "query": "京东闭环电商佣金收入及同比",
+            "periods": ["2025-07", "2026-07"], "dimensions": ["平台"],
+            "metrics": [{
+                "metric_ref": "commission", "name": "闭环电商佣金收入",
+                "metric_object": "volume", "metric_object_provenance": "model_inferred",
+                "unit": "待元信息解析", "consumers": [
+                    {
+                        "requirement_id": "level", "requirement_type": "fact_observations",
+                        "periods": ["2026-07"], "semantic_text": "京东闭环电商佣金收入",
+                        "metric_constraints": constraints,
+                    },
+                    {
+                        "requirement_id": "yoy", "requirement_type": "derived_requirements",
+                        "derived_metric_id": "yoy_growth", "period_roles": ["analysis"],
+                        "periods": ["2026-07"], "semantic_text": "京东闭环电商佣金收入同比",
+                        "metric_constraints": constraints,
+                    },
+                ],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        bindings = result["task_resolutions"]["q"]["requirement_bindings"]
+        self.assertEqual(bindings["level"]["source_metric"], "京东闭环电商佣金收入")
+        self.assertEqual(bindings["level"]["mode"], "source_scoped_fact")
+        self.assertEqual(
+            bindings["yoy"]["source_metric"], "京东闭环电商佣金收入同比增速"
+        )
+        self.assertEqual(bindings["yoy"]["mode"], "source_derived_fact")
+        yoy_case = next(
+            item for item in result["resolution_decisions"]
+            if item.get("requirement_id") == "yoy"
+        )
+        selected = next(
+            item for item in yoy_case["candidates"]
+            if item["candidate_id"] == yoy_case["selected_candidate_id"]
+        )
+        self.assertEqual(
+            selected["match_evidence"]["derived"]["status"],
+            "source_derived_exact",
+        )
+
+    def test_dimension_match_cannot_rescue_wrong_core_or_independent_subtraction(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "广告收入": {
+                    "unit": "亿元", "metric_object": "volume",
+                    "supported_grains": ["month"], "dimensions": ["平台"],
+                    "aggregation_mode": "additive",
+                },
+                "独立抖音佣金收入": {
+                    "unit": "亿元", "metric_object": "volume",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                    "aggregation_mode": "additive",
+                },
+            },
+            "dimensions": {"平台": {"aliases": [], "values": ["抖音", "京东"]}},
+            "sheets": {},
+        }
+        consumer = self._constraint_consumer("exclude")
+        consumer["semantic_text"] = "剔除抖音佣金收入"
+        request = {"metrics": ["佣金收入"], "contexts": [{
+            "task_id": "q", "query": "剔除抖音佣金收入", "periods": ["2026-06"],
+            "dimensions": ["平台"], "metrics": [{
+                "metric_ref": "m", "name": "佣金收入", "metric_object": "volume",
+                "unit": "待元信息解析", "consumers": [consumer],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        self.assertEqual(
+            result["task_resolutions"]["q"]["requirement_bindings"], {}
+        )
+        case = result["resolution_decisions"][0]
+        self.assertTrue(case["rejected_candidates"])
+        self.assertTrue(
+            any(
+                "constraint_dimension_unavailable" in item.get("conflicts", [])
+                for item in case["rejected_candidates"]
+            )
+        )
+
+    def test_context_guard_retries_only_core_failure_with_current_query_hint(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "剔除抖音包裹后邮政快递揽收量-同比增速": {
+                    "aliases": ["剔抖音快递增速"],
+                    "unit": "%", "metric_object": "ratio",
+                    "supported_grains": ["week"], "dimensions": ["无"],
+                    "aggregation_mode": "non_additive",
+                },
+            },
+            "dimensions": {"平台": {"aliases": [], "values": ["抖音", "京东"]}},
+            "sheets": {},
+        }
+        constraint = {
+            "kind": "dimension_filter", "operator": "exclude", "values": ["抖音"],
+            "dimension_hint": "平台", "provenance": "user_explicit",
+        }
+        consumer = {
+            "requirement_id": "yoy", "requirement_type": "derived_requirements",
+            "derived_metric_id": "yoy_growth", "periods": ["2026-W33"],
+            "semantic_text": "2026年第33周剔除抖音的大盘快递量同比增速",
+            "metric_constraints": [constraint],
+        }
+        request = {"metrics": ["大盘快递量"], "contexts": [{
+            "task_id": "q", "query": "最新一周剔除抖音快递同比增速多少？",
+            "periods": ["2026-W33"], "metrics": [{
+                "metric_ref": "m", "name": "大盘快递量", "metric_object": "volume",
+                "metric_object_provenance": "model_inferred",
+                "unit": "待元信息解析", "consumers": [consumer],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        binding = result["task_resolutions"]["q"]["requirement_bindings"]["yoy"]
+        self.assertEqual(
+            binding["source_metric"], "剔除抖音包裹后邮政快递揽收量-同比增速"
+        )
+        case = result["resolution_decisions"][0]
+        self.assertEqual(case["context_guard"]["mode"], "failure_fallback")
+        self.assertEqual(case["context_guard"]["core_hint"], "快递")
+
+    def test_context_hint_does_not_inherit_without_explicit_core(self) -> None:
+        hint = extract_current_core_hint(
+            "这个指标同比呢", "大盘快递量", self.policy,
+            [{"operator": "exclude", "values": ["抖音"]}],
+        )
+        self.assertEqual(hint["hint"], "")
+        self.assertTrue(hint["explicit_reference"])
+
+    def test_context_guard_does_not_retry_dimension_or_grain_conflicts(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {"错误指标": {
+                "aliases": ["错误快递"], "unit": "亿件", "metric_object": "volume",
+                "supported_grains": ["month"], "dimensions": ["无"],
+                "aggregation_mode": "additive",
+            }},
+            "dimensions": {"平台": {"aliases": [], "values": ["抖音"]}},
+            "sheets": {},
+        }
+        consumer = self._constraint_consumer("exclude")
+        consumer["semantic_text"] = "2026年第33周剔除抖音快递"
+        request = {"metrics": ["大盘快递量"], "contexts": [{
+            "task_id": "q", "query": "最新一周剔除抖音快递", "periods": ["2026-W33"],
+            "metrics": [{
+                "metric_ref": "m", "name": "大盘快递量", "metric_object": "volume",
+                "metric_object_provenance": "model_inferred",
+                "unit": "待元信息解析", "consumers": [consumer],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        self.assertEqual(
+            result["task_resolutions"]["q"]["requirement_bindings"], {}
+        )
+        self.assertNotIn("context_guard", result["resolution_decisions"][0])
+
+    def test_non_additive_exclude_is_not_auto_bound(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {"全国业务量": {
+                "unit": "%", "metric_object": "ratio", "supported_grains": ["month"],
+                "dimensions": ["平台"], "aggregation_mode": "non_additive",
+            }},
+            "dimensions": {"平台": {"aliases": [], "values": ["抖音", "京东"]}},
+            "sheets": {},
+        }
+        consumer = self._constraint_consumer("exclude")
+        request = {"metrics": ["全国业务量"], "contexts": [{
+            "task_id": "q", "query": "剔除抖音全国业务量", "periods": ["2026-06"],
+            "dimensions": ["平台"], "metrics": [{
+                "metric_ref": "m", "name": "全国业务量", "metric_object": "ratio",
+                "unit": "待元信息解析", "consumers": [consumer],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        self.assertEqual(result["task_resolutions"]["q"]["requirement_bindings"], {})
+
+    def test_model_inferred_unit_mismatch_is_soft_for_exact_metric(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {"支付GMV": {"unit": "亿元", "dimensions": ["平台"]}},
+            "dimensions": {"平台": {"values": ["京东"]}}, "sheets": {},
+        }
+        request = {"metrics": ["支付GMV"], "contexts": [{
+            "task_id": "q", "query": "支付GMV", "metrics": [{
+                "metric_ref": "m", "name": "支付GMV", "metric_object": "volume",
+                "unit": "万元", "unit_provenance": "model_inferred",
+                "provenance": "user_explicit",
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        self.assertEqual(
+            result["task_resolutions"]["q"]["metric_bindings"]["支付GMV"], "支付GMV"
+        )
 
     def test_joint_domain_evidence_auto_resolves_top6_without_enumerated_mapping(self) -> None:
         request = {

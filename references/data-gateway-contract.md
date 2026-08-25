@@ -11,7 +11,9 @@ facts = gateway.fetch(fetch_request)
 
 `resolve()` 接收语义指标名、维度名、时期及任务级语义上下文，返回 `resolved_capabilities/1.0`。能力对象包含 provider/source 身份与版本、名称 bindings、按指标隔离的维度 bindings、指标/维度业务元信息、联合可用性及必要的逻辑候选摘要。它禁止包含 token、sheet ID、行列、单元格范围或指标块坐标；完整候选坐标只留在 Provider 内部。
 
-能力对象可包含 `task_resolutions`、`requirement_bindings` 和 `task_metric_dimension_bindings`。它们是按 `task_id` 投影的权威解析结果，包含任务级核心指标绑定、需求级源侧派生绑定、指标状态、组合回退结果和确认 cases。候选在同一固定索引上完成名称、指标对象、明确拆解维度及结构粒度判断，不产生候选级远端调用；无拆解要求、维度元信息未知或维度映射歧义时不在候选层否决，实际事实块、时期覆盖、维度绑定和适配由 prepare 校验。根级 `metric_bindings` 仅表示所有任务结论一致的兼容核心绑定；源侧预计算派生只写入对应 `requirement_id`，不得覆盖共享逻辑指标。请求上下文可包含当前任务实际关联的 `composition_intents`，Gateway 只递归检查这些组合的叶子，不展开整个注册表。
+候选解析沿用 legacy-first。只有约束候选无可行 binding 且拒绝证据包含 `core_semantics_below_floor` 时，才用当前请求文本做一次本地核心语义回退；成功 legacy binding 不变，回退不发起额外 Provider/飞书请求，回退失败仍返回原确认/阻断状态。
+
+能力对象可包含 `task_resolutions`、`requirement_bindings` 和 `task_metric_dimension_bindings`。它们是按 `task_id` 投影的权威解析结果，包含任务级核心指标绑定、需求级源侧派生或维度约束 binding、指标状态、组合回退结果和确认 cases。`metric_constraints`、局部 `semantic_text` 和 `derived_metric_id` 随 consumer 进入 resolve；候选在同一固定索引上完成多通道元信息召回、核心语义、指标对象/单位 provenance、维度枚举、派生履约及结构粒度判断，不读取坐标、事实块或单元格，也不产生候选级远端调用。候选摘要最多保留三个逻辑候选；`confidence` 是结构化完整语义置信度，`lexical_confidence` 是原始名称分，`match_evidence` 只保留命中通道和各正交轴的紧凑状态，不复制完整源索引。实际事实块、时期覆盖、物理选择器和安全 AST 由 Prepare 校验并物化。根级 `metric_bindings` 仅表示所有任务结论一致的兼容核心绑定；任何 requirement-scoped binding 都不得覆盖共享逻辑指标。请求上下文可包含当前任务实际关联的 `composition_intents`，Gateway 只递归检查这些组合的叶子，不展开整个注册表。
 
 `fetch()` 接收 provider-neutral 事实需求和 runner 注入的 `source_binding/1.0`：
 
@@ -26,7 +28,7 @@ facts = gateway.fetch(fetch_request)
   "freshness": "live",
   "resolution_policy_hash": "...",
   "business_intent_policy_hash": "...",
-  "resolution_engine_version": "2.5.0",
+  "resolution_engine_version": "2.8.0",
   "fact_provider_version": "1.1.0"
 }
 ```

@@ -175,6 +175,14 @@ def project_task_capabilities(
     for bindings in projected["metric_dimension_bindings"].values():
         if isinstance(bindings, dict):
             resolved_dimensions.update(str(value) for value in bindings.values())
+    for binding in projected["requirement_bindings"].values():
+        if not isinstance(binding, dict):
+            continue
+        resolved_dimensions.update(
+            str(item.get("source_dimension"))
+            for item in binding.get("metric_constraints") or []
+            if isinstance(item, dict) and item.get("source_dimension")
+        )
     projected["dimensions"] = {
         name: deepcopy(metadata)
         for name, metadata in (capabilities.get("dimensions") or {}).items()

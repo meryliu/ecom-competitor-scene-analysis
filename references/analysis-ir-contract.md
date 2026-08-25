@@ -126,6 +126,23 @@
 }
 ```
 
+需求级逻辑指标约束使用可选 `metric_constraints`：
+
+```json
+{
+  "constraint_id": "platform_jd",
+  "kind": "dimension_filter",
+  "operator": "eq",
+  "values": ["京东"],
+  "dimension_hint": "平台",
+  "provenance": "model_inferred"
+}
+```
+
+`operator` 只允许 `eq|in|exclude`，同一 requirement 的多项约束按 AND 组合。该结构表达逻辑口径，不代表物理选择器已可用；Resolve 使用指标支持维度和实时枚举判断可得性，Prepare 才写入 `dimensions` 或生成维度成员适配。约束身份必须包含 `task_id + requirement_id + metric_ref + normalized constraints`，所有 binding 均按 requirement 隔离，不能覆盖同一逻辑指标的无约束需求。
+
+安全自动路径限于：现成完整口径事实、基础指标单成员选择、可加指标的多成员求和、同一指标全域减同一指标排除成员，以及既有注册组合/派生。两个独立指标名称看似可相减时最多生成需确认假设；只有用户显式公式、注册定义或结构化同指标成员关系才能生成 AST。
+
 ### 派生需求
 
 注册定义使用 `definition_status=registered` 和 `derived_metric_id`。未注册但唯一可推理的简单关系使用 `definition_status=inferred`，并提供 `definition.expression`、`required_period_roles`、`unit` 和 `inference_basis`。存在多个合理公式、分母或范围时生成 clarification，不得放入自定义计算兜底。

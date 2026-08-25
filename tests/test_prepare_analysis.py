@@ -348,6 +348,172 @@ class PrepareAnalysisTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "声明单位与源表元信息冲突"):
             prepare_analysis_ir(ir, source_index(), self.compositions, self.derived)
 
+    def test_model_inferred_unit_is_overwritten_by_source_metadata(self) -> None:
+        ir = base_ir("支付GMV")
+        metric = ir["analysis_task"]["metrics"][0]
+        metric["unit"] = "万元"
+        metric["unit_source"] = "model_inferred"
+        prepared, _ = prepare_analysis_ir(
+            ir, source_index(), self.compositions, self.derived
+        )
+        resolved = prepared["analysis_task"]["metrics"][0]
+        self.assertEqual(resolved["unit"], "亿元")
+        self.assertEqual(resolved["unit_source"], "source_metric_metadata")
+        self.assertEqual(resolved["metadata_corrections"][0]["field"], "unit")
+
+    def test_requirement_scoped_member_binding_does_not_replace_shared_metric(self) -> None:
+        ir = base_ir("支付GMV")
+        ir["analysis_task"]["periods"] = {"analysis": "2026-06"}
+        ir["fact_observations"] = [
+            {
+                "requirement_id": "scoped", "metric_ref": "target",
+                "period_roles": ["analysis"], "view_id": "v",
+                "dimensions": {}, "dimension_refs": [],
+            },
+            {
+                "requirement_id": "ordinary", "metric_ref": "target",
+                "period_roles": ["analysis"], "view_id": "v",
+                "dimensions": {"平台": "京东"}, "dimension_refs": [],
+            },
+        ]
+        capabilities = source_index()
+        capabilities["requirement_bindings"] = {"scoped": {
+            "mode": "member_selector", "source_metric": "支付GMV",
+            "candidate_id": "candidate", "constraints_fingerprint": "fingerprint",
+            "metric_constraints": [{
+                "kind": "dimension_filter", "operator": "eq", "values": ["京东"],
+                "source_dimension": "平台", "provenance": "model_inferred",
+            }],
+        }}
+        prepared, _ = prepare_analysis_ir(
+            ir, capabilities, self.compositions, self.derived
+        )
+        requirements = {
+            item["requirement_id"]: item for item in prepared["fact_observations"]
+        }
+        self.assertNotEqual(requirements["scoped"]["metric_ref"], "target")
+        self.assertEqual(requirements["ordinary"]["metric_ref"], "target")
+        original = next(
+            item for item in prepared["analysis_task"]["metrics"]
+            if item["metric_id"] == "target"
+        )
+        self.assertEqual(original["name"], "支付GMV")
+
+    def test_equivalent_scoped_bindings_reuse_one_materialized_metric(self) -> None:
+        ir = base_ir("支付GMV")
+        ir["analysis_task"]["periods"] = {
+            "analysis": "2026-07", "analysis_last_year": "2025-07",
+            "comparison": "2026-06", "comparison_last_year": "2025-06",
+        }
+        ir["fact_observations"] = [{
+            "requirement_id": "level", "metric_ref": "target",
+            "period_roles": ["analysis"], "view_id": "v",
+            "dimensions": {}, "dimension_refs": [],
+        }]
+        ir["derived_requirements"] = [
+            {
+                "requirement_id": "yoy", "metric_ref": "target",
+                "derived_metric_id": "yoy_growth", "definition_status": "registered",
+                "metric_object": "volume", "view_id": "v",
+                "dimensions": {}, "dimension_refs": [],
+            },
+            {
+                "requirement_id": "trend", "metric_ref": "target",
+                "derived_metric_id": "yoy_trend_change", "definition_status": "registered",
+                "metric_object": "volume", "view_id": "v",
+                "dimensions": {}, "dimension_refs": [],
+            },
+        ]
+        capabilities = source_index()
+        capabilities["metrics"]["支付GMV完整口径"] = {
+            "unit": "亿元", "additive": True, "dimensions": ["无"],
+            "supported_grains": ["month"],
+        }
+        capabilities["dimensions"]["无"] = {"values": []}
+        capabilities["dimension_bindings"]["无"] = "无"
+        capabilities["availability"]["month"]["metrics"]["支付GMV完整口径"] = {
+            "dimension": "无"
+        }
+        capabilities["availability"]["month"]["periods"] = [
+            "2025-06", "2025-07", "2026-06", "2026-07"
+        ]
+        shared = {
+            "mode": "source_scoped_fact", "source_metric": "支付GMV完整口径",
+            "constraints_fingerprint": "same-scope", "metric_constraints": [],
+        }
+        capabilities["requirement_bindings"] = {
+            requirement_id: {**shared, "candidate_id": f"candidate-{requirement_id}"}
+            for requirement_id in ("level", "yoy", "trend")
+        }
+        prepared, _ = prepare_analysis_ir(
+            ir, capabilities, self.compositions, self.derived
+        )
+        requirements = [
+            *prepared["fact_observations"], *prepared["derived_requirements"]
+        ]
+        self.assertEqual(len({item["metric_ref"] for item in requirements}), 1)
+        generated = [
+            item for item in prepared["analysis_task"]["metrics"]
+            if item.get("generated_from") == "requirement_binding"
+        ]
+        self.assertEqual(len(generated), 1)
+        plan, report = compile_and_validate(
+            prepared,
+            ROOT / "references" / "derived-metric-registry.json",
+            ROOT / "references" / "metric-composition-registry.json",
+        )
+        self.assertTrue(report["valid"], report)
+        self.assertEqual(len(plan["analysis_task"]["fact_requirements"]), 4)
+
+    def test_additive_exclude_materializes_only_same_metric_member_ast(self) -> None:
+        ir = base_ir("支付GMV")
+        ir["analysis_task"]["periods"] = {"analysis": "2026-06"}
+        ir["fact_observations"] = [{
+            "requirement_id": "exclude_douyin", "metric_ref": "target",
+            "period_roles": ["analysis"], "view_id": "v",
+            "dimensions": {}, "dimension_refs": [],
+        }]
+        capabilities = source_index()
+        capabilities["dimensions"]["平台"]["values"] = ["京东", "拼多多", "抖音"]
+        capabilities["requirement_bindings"] = {"exclude_douyin": {
+            "mode": "same_metric_total_minus_members", "source_metric": "支付GMV",
+            "candidate_id": "candidate", "constraints_fingerprint": "fingerprint",
+            "metric_constraints": [{
+                "kind": "dimension_filter", "operator": "exclude", "values": ["抖音"],
+                "source_dimension": "平台", "provenance": "model_inferred",
+            }],
+        }}
+        prepared, _ = prepare_analysis_ir(
+            ir, capabilities, self.compositions, self.derived
+        )
+        adaptation = next(
+            item for item in prepared["input_adaptations"]
+            if item.get("constraint_fulfillment") == "same_metric_total_minus_members"
+        )
+        self.assertEqual(adaptation["expression"]["op"], "subtract")
+        source_refs = set()
+
+        def visit(expression: dict) -> None:
+            if "fact" in expression:
+                source_refs.add(expression["fact"]["metric_ref"])
+            for arg in expression.get("args") or []:
+                visit(arg)
+
+        visit(adaptation["expression"])
+        self.assertEqual(len(source_refs), 1)
+        self.assertTrue(next(iter(source_refs)).startswith("__source_requirement_"))
+        plan, report = compile_and_validate(
+            prepared,
+            ROOT / "references" / "derived-metric-registry.json",
+            ROOT / "references" / "metric-composition-registry.json",
+        )
+        self.assertTrue(report["valid"], report)
+        self.assertTrue(any(
+            item.get("constraint_fulfillment") == "same_metric_total_minus_members"
+            for item in prepared["input_adaptations"]
+        ))
+        self.assertTrue(plan["analysis_task"]["fact_requirements"])
+
     def test_quarter_direct_fact_wins_over_month_aggregation(self) -> None:
         ir = base_ir("支付GMV")
         ir["fact_observations"] = [{

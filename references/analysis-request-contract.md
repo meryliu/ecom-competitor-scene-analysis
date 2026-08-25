@@ -53,7 +53,7 @@
 
 每项需求使用唯一 `requirement_id`；归因目标使用唯一 `target_id`。`criticality` 只使用 `core|required|optional`。只声明 Query 实际需要的时期角色和输出。
 
-`unit=待元信息解析` 和 `definition=待元信息解析` 只是模型侧占位状态，不是可执行元信息。统一 runner 在编译前使用当前 source revision 的结构索引补全所有已匹配指标；IR 中已有具体单位但与源元信息冲突时阻断。后续 binding 只校验预期单位，不得覆盖 Provider 事实中的具体单位。
+`unit=待元信息解析` 和 `definition=待元信息解析` 只是模型侧占位状态，不是可执行元信息。统一 runner 在编译前使用当前 source revision 的结构索引补全所有已匹配指标。模型推断具体单位时写 `unit_source=model_inferred`：Resolve 不以该单位硬过滤或加分，Prepare 以源元信息覆盖并记录修正；`user_explicit|user_formula|registered_definition|source_metadata` 等权威单位与源元信息冲突时阻断。后续 Compile/Execution 仍严格校验实际单位和量级。
 
 `metric_object` 是 Query 语义声明。默认视为 `model_inferred`；只有用户明确指定指标对象或公式约束时才写 `metric_object_source=user_explicit|user_formula`。复合“表现、增速、涨幅、相比上期”等语义由 runner 生成有界业务意图假设，并结合实时指标/维度元信息、事实块和时期一次筛成可执行候选；模型不要串行改写指标名称试取数据。
 
@@ -83,13 +83,15 @@
 
 | 数组 | 核心字段 |
 |---|---|
-| `fact_observations` | `requirement_id, metric_ref, period_roles, view_id, dimensions, dimension_refs, criticality` |
+| `fact_observations` | `requirement_id, metric_ref, period_roles, view_id, dimensions, dimension_refs, metric_constraints, criticality` |
 | `metric_compositions` | 上述通用字段加注册表中的 `composition_id` |
 | `derived_requirements` | `requirement_id, derived_metric_id, definition_status=registered, metric_ref, metric_object, view_id, dimensions, dimension_refs, criticality` |
 | `custom_calculations` | `requirement_id, definition_source=user_query, expression, unit, view_id, criticality` |
 | `attribution_targets` | `target_id, metric_ref, metric_object, scenario, target_semantics, decomposition, periods, view_id, group_dimensions, criticality` |
 
 例如，标量事实过滤使用 `{"dimensions":{"TOP6平台":"京东"},"dimension_refs":[]}`；TOP6 逐平台派生使用 `{"dimensions":{},"dimension_refs":["TOP6平台"]}`；TOP6 贡献归因的计算分组使用 `{"group_dimensions":["TOP6平台"]}`。`TOP6平台` 是当前源表的物理维度，不是 `平台` 维度下名为 `TOP6` 的逻辑集合。
+
+当 Query 含有维度过滤口径但物理维度尚未由元信息确认时，在对应 requirement 使用 `metric_constraints`，不要把模型猜测直接写成已确认的 `dimensions`。每项约束固定为 `kind=dimension_filter`，`operator` 只允许 `eq|in|exclude`，`values` 为非空数组，可给出 `dimension_hint` 和 `provenance`；多项约束按 AND 组合。`semantic_text` 保留该 requirement 的完整局部表述，供“现成完整口径指标优先”召回。Resolve 根据实时维度及枚举确认逻辑路径，Prepare 才物化物理选择器或同指标成员聚合。
 
 占位字段必须从 Query 或机器注册表填写。没有某类需求时保持空数组。归因的 `scenario`、`target_semantics`、时期和拆解必须与用户目标一致，不能套用其他归因问题的固定值。
 
@@ -117,6 +119,7 @@
 - 如果命名集合只作为整体范围，需求不添加该 `dimension_ref`，并通过集合聚合节点形成整体值。
 - 对源表已存在的范围维度直接使用物理维度名，不再把范围名称写成另一维度的逻辑值；只有注册表中实际存在的其他命名集合才保留用户原词并由 Provider/编译器解析。
 - Query 只有“京东”等维度值时，可把维度名写成模型候选；Provider 使用实时结构元信息反向确认。不得维护静态“值属于哪个维度”映射。
+- Query 中的包含、排除、多个成员、交集过滤或维度别名都使用同一 `metric_constraints` 结构；不要为具体平台或具体指标增加专用规则。现成完整口径事实优先于基础指标加维度；基础指标回退必须由当前指标支持维度、枚举和可加性共同证明。
 - “分别”“各平台”“每个平台”等表述必须添加相应 `dimension_ref`。
 
 计算节点的 `group_dimensions` 使用真实分组维度，例如 `TOP6平台`。命名集合是选择域，不是独立维度值；源表中的 `TOP6平台` 则是独立物理维度。

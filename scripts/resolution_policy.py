@@ -20,12 +20,22 @@ from business_intent_policy import (
     generate_metric_hypotheses,
     load_business_intent_policy,
 )
+from candidate_semantics import (
+    constrained_core_evidence,
+    full_scope_evidence,
+)
+from metric_constraints import (
+    MetricConstraintError,
+    metric_constraints_fingerprint,
+    normalize_metric_constraints,
+)
+from semantic_context_guard import extract_current_core_hint
 from source_capability import evaluate_structural_grain_capability
 from time_rollup import normalize_period as _normalize_time_period
 
 
 POLICY_SCHEMA = "resolution_policy/2.0"
-ENGINE_VERSION = "2.5.0"
+ENGINE_VERSION = "2.8.0"
 DEFAULT_POLICY_PATH = (
     Path(__file__).resolve().parents[1]
     / "references"
@@ -120,7 +130,14 @@ def validate_resolution_policy(policy: dict[str, Any]) -> None:
         raise ResolutionPolicyError(
             "INVALID_RESOLUTION_POLICY", "semantic_normalization 必须是对象"
         )
-    allowed_semantic_keys = {"comparison_terms", "measure_terms", "equivalence_rules"}
+    allowed_semantic_keys = {
+        "comparison_terms",
+        "measure_terms",
+        "core_measure_terms",
+        "grain_terms",
+        "constraint_operator_terms",
+        "equivalence_rules",
+    }
     unknown_semantic = set(semantic_normalization) - allowed_semantic_keys
     if unknown_semantic:
         raise ResolutionPolicyError(
@@ -128,7 +145,13 @@ def validate_resolution_policy(policy: dict[str, Any]) -> None:
             "semantic_normalization 包含未允许字段",
             {"fields": sorted(unknown_semantic)},
         )
-    for field in ("comparison_terms", "measure_terms"):
+    for field in (
+        "comparison_terms",
+        "measure_terms",
+        "core_measure_terms",
+        "grain_terms",
+        "constraint_operator_terms",
+    ):
         values = semantic_normalization.get(field) or {}
         if not isinstance(values, dict) or any(
             not isinstance(key, str)
@@ -179,6 +202,7 @@ def validate_resolution_policy(policy: dict[str, Any]) -> None:
         )
     unknown_evaluation = set(candidate_evaluation) - {
         "lexical_recall_floor",
+        "core_semantic_floor",
         "minimum_candidate_margin",
         "allow_unique_capability_selection",
     }
@@ -188,8 +212,15 @@ def validate_resolution_policy(policy: dict[str, Any]) -> None:
             "candidate_evaluation 包含未允许字段",
             {"fields": sorted(unknown_evaluation)},
         )
-    for field in ("lexical_recall_floor", "minimum_candidate_margin"):
-        value = candidate_evaluation.get(field, 0.78 if field == "lexical_recall_floor" else 0.1)
+    for field in (
+        "lexical_recall_floor",
+        "core_semantic_floor",
+        "minimum_candidate_margin",
+    ):
+        value = candidate_evaluation.get(
+            field,
+            0.78 if field in {"lexical_recall_floor", "core_semantic_floor"} else 0.1,
+        )
         if not isinstance(value, (int, float)) or not 0 <= float(value) <= 1:
             raise ResolutionPolicyError(
                 "INVALID_RESOLUTION_POLICY",
@@ -331,11 +362,35 @@ def _derived_tokens(policy: dict[str, Any]) -> list[str]:
     )
 
 
+def _core_strip_tokens(policy: dict[str, Any]) -> list[str]:
+    semantic = policy.get("semantic_normalization") or {}
+    return sorted(
+        {
+            normalize_match_text(token)
+            for group in ("comparison_terms", "measure_terms", "grain_terms")
+            for tokens in (semantic.get(group) or {}).values()
+            for token in tokens
+            if normalize_match_text(token)
+        },
+        key=len,
+        reverse=True,
+    )
+
+
 def _strip_derived_tokens(value: Any, policy: dict[str, Any]) -> str:
     text = normalize_match_text(value)
-    for token in _derived_tokens(policy):
+    for token in _core_strip_tokens(policy):
         text = text.replace(token, "")
     return text
+
+
+def _grain_signature(value: Any, policy: dict[str, Any]) -> str | None:
+    text = normalize_match_text(value)
+    semantic = policy.get("semantic_normalization") or {}
+    for grain, tokens in (semantic.get("grain_terms") or {}).items():
+        if any(normalize_match_text(token) in text for token in tokens):
+            return str(grain)
+    return None
 
 
 def _core_semantic_score(
@@ -399,6 +454,7 @@ def _semantic_signature(
     return {
         "comparison_type": comparison_type,
         "measure_type": measure_type,
+        "grain_signature": _grain_signature(value, policy),
         "object": expected_object or actual_object,
         "unit": unit or None,
     }
@@ -553,18 +609,40 @@ def _query_metric_resolution(
         ]
         expected_object = requested.get("metric_object")
         actual_object = _metric_object(metadata)
+        object_provenance = str(
+            requested.get("metric_object_provenance")
+            or requested.get("metric_object_source")
+            or requested.get("provenance")
+            or "model_inferred"
+        )
+        soft_conflicts: list[str] = []
         if (
             "metric_object_compatible" in configured_gates
             and expected_object
             and actual_object
             and expected_object != actual_object
         ):
-            conflicts.append("metric_object_mismatch")
+            if object_provenance == "model_inferred":
+                soft_conflicts.append("model_inferred_metric_object_mismatch")
+            else:
+                conflicts.append("metric_object_mismatch")
+        unit_provenance = str(
+            requested.get("unit_provenance")
+            or requested.get("unit_source")
+            or (
+                "model_inferred"
+                if str(requested.get("unit") or "").strip().lower() in UNRESOLVED_UNITS
+                else "user_explicit"
+            )
+        )
         if (
             "unit_compatible" in configured_gates
             and not _unit_compatible(requested.get("unit"), metadata.get("unit"))
         ):
-            conflicts.append("unit_mismatch")
+            if unit_provenance == "model_inferred":
+                soft_conflicts.append("model_inferred_unit_mismatch")
+            else:
+                conflicts.append("unit_mismatch")
         semantic = _semantic_compatibility(
             name,
             str(raw.get("matched_text") or candidate_name),
@@ -584,7 +662,6 @@ def _query_metric_resolution(
             for conflict in raw_conflicts
             if str(conflict).startswith("protected_term_difference:")
         ]
-        soft_conflicts: list[str] = []
         if protected_conflicts and semantic["status"] == "conflict":
             conflicts.append(f"protected_semantics_conflict:{semantic['reason']}")
         elif protected_conflicts and semantic["status"] == "unknown":
@@ -672,6 +749,586 @@ def _query_metric_resolution(
     }
 
 
+def _metric_additive(metadata: dict[str, Any]) -> bool:
+    if metadata.get("additive") is not None:
+        return bool(metadata.get("additive"))
+    return str(
+        metadata.get("aggregation_mode") or metadata.get("aggregation") or ""
+    ).strip().lower() in {"additive", "sum", "summable", "可加总"}
+
+
+def _constraint_phrase(consumer: dict[str, Any]) -> str:
+    return str(
+        consumer.get("semantic_text") or consumer.get("query_fragment") or ""
+    ).strip()
+
+
+def _constraint_derived_terms(
+    metric: dict[str, Any],
+    consumer: dict[str, Any],
+    intent_policy: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    derived_metric_id = str(consumer.get("derived_metric_id") or "")
+    metric_name = str(metric.get("name") or "")
+    terms: list[str] = []
+    triggers: list[str] = []
+    for rule in intent_policy.get("rules") or []:
+        if derived_metric_id not in {
+            str(value) for value in rule.get("derived_metric_ids") or []
+        }:
+            continue
+        terms.extend(
+            str(template).replace("{metric}", metric_name)
+            for template in rule.get("metric_term_templates") or []
+        )
+        trigger = rule.get("triggers") or {}
+        triggers.extend(str(value) for value in trigger.get("any") or [])
+        triggers.extend(str(value) for value in trigger.get("all") or [])
+    return list(dict.fromkeys(terms)), list(dict.fromkeys(triggers))
+
+
+def _constraint_derived_evidence(
+    consumer: dict[str, Any],
+    candidate_name: str,
+    metadata: dict[str, Any],
+    recall: dict[str, Any],
+    full_scope: bool,
+    derived_triggers: list[str],
+    core_score: float,
+) -> dict[str, Any]:
+    labels = [candidate_name, *(metadata.get("aliases") or [])]
+    normalized_triggers = [
+        normalize_match_text(value) for value in derived_triggers if normalize_match_text(value)
+    ]
+    source_derived = bool(normalized_triggers) and any(
+        token in normalize_match_text(label)
+        for label in labels
+        for token in normalized_triggers
+    )
+    requirement_type = str(consumer.get("requirement_type") or "")
+    if requirement_type != "derived_requirements":
+        return {
+            "status": "source_derived_not_allowed" if source_derived else "not_applicable",
+            "tier": 3 if source_derived else 0,
+            "score": 0.0,
+            "conflict": "source_derived_cannot_replace_level" if source_derived else None,
+        }
+    derived_metric_id = str(consumer.get("derived_metric_id") or "")
+    if not derived_metric_id:
+        return {
+            "status": "unresolved",
+            "tier": 3,
+            "score": 0.0,
+            "conflict": "derived_metric_id_missing",
+        }
+    if source_derived:
+        if full_scope and "derived_hypothesis" in set(recall.get("channels") or []):
+            return {
+                "status": "source_derived_exact",
+                "tier": 0,
+                "score": core_score,
+                "derived_metric_id": derived_metric_id,
+                "conflict": None,
+            }
+        return {
+            "status": "source_derived_constraint_path_unsupported",
+            "tier": 3,
+            "score": 0.0,
+            "derived_metric_id": derived_metric_id,
+            "conflict": "source_derived_constraint_path_unsupported",
+        }
+    return {
+        "status": "registered_local",
+        "tier": 1,
+        "score": 1.0,
+        "derived_metric_id": derived_metric_id,
+        "conflict": None,
+    }
+
+
+def _dimension_matches_constraint(
+    constraint: dict[str, Any], index: dict[str, Any]
+) -> list[dict[str, Any]]:
+    requested_values = {
+        normalize_match_text(value) for value in constraint.get("values") or []
+    }
+    hint = normalize_match_text(constraint.get("dimension_hint"))
+    matches: list[dict[str, Any]] = []
+    for name, metadata in (index.get("dimensions") or {}).items():
+        names = {normalize_match_text(name)} | {
+            normalize_match_text(alias) for alias in metadata.get("aliases") or []
+        }
+        if hint and hint not in names:
+            continue
+        domain = {
+            normalize_match_text(value) for value in metadata.get("values") or []
+        }
+        if not requested_values.issubset(domain):
+            continue
+        matches.append({
+            "dimension": str(name),
+            "dimension_hint_exact": bool(hint and hint == normalize_match_text(name)),
+            "value_evidence": len(requested_values),
+        })
+    return matches
+
+
+def _full_scope_phrase_evidence(
+    phrase: str,
+    candidate_name: str,
+    metadata: dict[str, Any],
+    constraints: list[dict[str, Any]],
+    core_evidence: dict[str, Any],
+    core_floor: float,
+    policy: dict[str, Any],
+) -> dict[str, Any]:
+    return full_scope_evidence(
+        phrase,
+        candidate_name,
+        metadata,
+        constraints,
+        core_evidence,
+        core_floor,
+        policy,
+    )
+
+
+def _constraint_core_evidence(
+    requested_core: Any,
+    candidate_name: str,
+    metadata: dict[str, Any],
+    constraints: list[dict[str, Any]],
+    policy: dict[str, Any],
+) -> dict[str, Any]:
+    return constrained_core_evidence(
+        requested_core,
+        candidate_name,
+        metadata,
+        constraints,
+        policy,
+    )
+
+
+def _constraint_recall_names(
+    index: dict[str, Any],
+    metric: dict[str, Any],
+    consumer: dict[str, Any],
+    constraints: list[dict[str, Any]],
+    policy: dict[str, Any],
+    query: str,
+    derived_terms: list[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Bounded union of full phrase, core and metadata-conditioned recall."""
+    catalogue = index.get("metrics") or {}
+    channels: dict[str, dict[str, Any]] = {}
+
+    def collect(term: str, subset: dict[str, dict[str, Any]], channel: str) -> None:
+        if not term or not subset:
+            return
+        requested = {**metric, "name": term}
+        # The legacy matcher truncates to lexical Top3. Constrained recall scores
+        # each canonical metric locally so structural evidence is evaluated first.
+        for canonical, metadata in subset.items():
+            resolution = _query_metric_resolution(
+                requested, {canonical: metadata}, query, policy
+            )
+            for candidate in resolution.get("candidates") or []:
+                name = str(candidate.get("name") or "")
+                if not name:
+                    continue
+                entry = channels.setdefault(
+                    name,
+                    {"candidate": candidate, "channels": [], "recall_channels": {}},
+                )
+                if channel not in entry["channels"]:
+                    entry["channels"].append(channel)
+                channel_packet = {
+                    "confidence": round(float(candidate.get("confidence") or 0.0), 6),
+                    "lexical": round(float(candidate.get("lexical_score") or 0.0), 6),
+                    "status": str(resolution.get("status") or "unknown"),
+                }
+                previous_channel = (entry.get("recall_channels") or {}).get(channel)
+                if previous_channel is None or channel_packet["confidence"] > float(
+                    previous_channel.get("confidence") or 0.0
+                ):
+                    entry["recall_channels"][channel] = channel_packet
+                if float(candidate.get("confidence") or 0.0) > float(
+                    (entry.get("candidate") or {}).get("confidence") or 0.0
+                ):
+                    entry["candidate"] = candidate
+
+    phrase = _constraint_phrase(consumer)
+    collect(phrase, catalogue, "full_phrase")
+    collect(str(metric.get("name") or ""), catalogue, "core_metric")
+    for term in derived_terms or []:
+        collect(str(term), catalogue, "derived_hypothesis")
+    possible_dimensions = {
+        item["dimension"]
+        for constraint in constraints
+        for item in _dimension_matches_constraint(constraint, index)
+    }
+    conditioned = {
+        name: metadata
+        for name, metadata in catalogue.items()
+        if possible_dimensions
+        & {str(value) for value in metadata.get("dimensions") or []}
+    }
+    collect(str(metric.get("name") or ""), conditioned, "metadata_conditioned")
+    return channels
+
+
+def _resolve_constrained_requirement(
+    index: dict[str, Any],
+    context: dict[str, Any],
+    metric: dict[str, Any],
+    consumer: dict[str, Any],
+    policy: dict[str, Any],
+    intent_policy: dict[str, Any],
+    core_override: str | None = None,
+) -> dict[str, Any]:
+    try:
+        constraints = normalize_metric_constraints(consumer.get("metric_constraints"))
+    except MetricConstraintError as exc:
+        return {"binding": None, "candidates": [], "rejected_candidates": [], "error": str(exc)}
+    catalogue = index.get("metrics") or {}
+    derived_terms, derived_triggers = _constraint_derived_terms(
+        metric, consumer, intent_policy
+    )
+    recalled = _constraint_recall_names(
+        index,
+        metric,
+        consumer,
+        constraints,
+        policy,
+        str(context.get("query") or ""),
+        derived_terms,
+    )
+    evaluation = policy.get("candidate_evaluation") or {}
+    core_floor = float(
+        evaluation.get(
+            "core_semantic_floor", evaluation.get("lexical_recall_floor", 0.78)
+        )
+    )
+    rollup_edges = (policy.get("grain_rollup") or {}).get("allowed_edges") or []
+    target_grains = {
+        parsed[0]
+        for period in consumer.get("periods") or metric.get("required_periods") or []
+        if (parsed := _normalize_period(period)) is not None
+    }
+    phrase = _constraint_phrase(consumer)
+    viable: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    requested_core = core_override or metric.get("name")
+    for name, recall in recalled.items():
+        metadata = catalogue.get(name) or {}
+        raw = recall.get("candidate") or {}
+        core_evidence = _constraint_core_evidence(
+            requested_core, name, metadata, constraints, policy
+        )
+        core_score = float(core_evidence.get("score") or 0.0)
+        grain_checks = [
+            evaluate_structural_grain_capability(metadata, grain, rollup_edges)
+            for grain in sorted(target_grains)
+        ]
+        structural_available = bool(grain_checks) and all(
+            item.get("status") == "available" for item in grain_checks
+        )
+        conflicts = list(raw.get("conflicts") or [])
+        scope_evidence = _full_scope_phrase_evidence(
+            phrase,
+            name,
+            metadata,
+            constraints,
+            core_evidence,
+            core_floor,
+            policy,
+        )
+        # Keep a private structural signal for the bounded fallback.  The
+        # normal scope gate intentionally depends on the core floor, but a
+        # candidate whose single alias covers the complete constraint may be
+        # recoverable after replacing a drifted model core.
+        context_scope_possible = bool(
+            _full_scope_phrase_evidence(
+                phrase,
+                name,
+                metadata,
+                constraints,
+                core_evidence,
+                0.0,
+                policy,
+            ).get("full_scope")
+        )
+        full_scope = bool(scope_evidence.get("full_scope"))
+        derived_evidence = _constraint_derived_evidence(
+            consumer,
+            name,
+            metadata,
+            recall,
+            full_scope,
+            (
+                derived_triggers
+                if consumer.get("requirement_type") == "derived_requirements"
+                else _derived_tokens(policy)
+            ),
+            core_score,
+        )
+        if derived_evidence.get("conflict"):
+            conflicts.append(str(derived_evidence["conflict"]))
+        resolved_constraints: list[dict[str, Any]] = []
+        requires_confirmation = False
+        path: str | None = (
+            "source_derived_fact"
+            if full_scope and derived_evidence.get("status") == "source_derived_exact"
+            else "source_scoped_fact"
+            if full_scope
+            else None
+        )
+        constraint_tier = 0 if full_scope else 1
+        fulfillment_tier = 0 if full_scope else 1
+        dimension_evidence = 0
+        if not full_scope:
+            supported = {str(value) for value in metadata.get("dimensions") or []}
+            for constraint in constraints:
+                matches = [
+                    item
+                    for item in _dimension_matches_constraint(constraint, index)
+                    if item["dimension"] in supported
+                ]
+                if not matches:
+                    conflicts.append("constraint_dimension_unavailable")
+                    continue
+                if len(matches) != 1:
+                    conflicts.append("constraint_dimension_ambiguous")
+                    requires_confirmation = True
+                    continue
+                selected = matches[0]
+                dimension_evidence += int(selected["dimension_hint_exact"]) + int(
+                    selected["value_evidence"]
+                )
+                resolved_constraints.append({
+                    **deepcopy(constraint),
+                    "source_dimension": selected["dimension"],
+                })
+            operators = {item["operator"] for item in resolved_constraints}
+            if "exclude" in operators:
+                path = "same_metric_total_minus_members"
+                fulfillment_tier = 3
+            elif any(
+                item["operator"] == "in" and len(item["values"]) > 1
+                for item in resolved_constraints
+            ):
+                path = "additive_member_sum"
+                fulfillment_tier = 2
+            else:
+                path = "member_selector"
+                fulfillment_tier = 1
+            if path in {"same_metric_total_minus_members", "additive_member_sum"} and not _metric_additive(metadata):
+                conflicts.append("metric_non_additive")
+        if core_score < core_floor:
+            conflicts.append("core_semantics_below_floor")
+        if not structural_available:
+            conflicts.extend(
+                str(item.get("reason"))
+                for item in grain_checks
+                if item.get("status") != "available" and item.get("reason")
+            )
+        semantic_tier = 0 if core_score >= core_floor else 3
+        match_confidence = (
+            float(scope_evidence.get("score") or 0.0) if full_scope else core_score
+        )
+        lexical_confidence = round(
+            float(raw.get("lexical_score") or raw.get("confidence") or 0.0), 6
+        )
+        candidate = {
+            "metric": name,
+            "status": "viable" if not conflicts else "infeasible",
+            "path": path,
+            "semantic_tier": semantic_tier,
+            "constraint_tier": constraint_tier,
+            "derived_tier": int(derived_evidence.get("tier") or 0),
+            "fulfillment_tier": fulfillment_tier,
+            "requires_confirmation": requires_confirmation,
+            "confidence": round(match_confidence, 6),
+            "lexical_confidence": lexical_confidence,
+            "confidence_detail": {
+                "core": round(core_score, 6),
+                "derived": round(float(derived_evidence.get("score") or 0.0), 6),
+                "grain_hint": _grain_signature(metric.get("name"), policy),
+                "dimension_evidence": dimension_evidence,
+                "lexical": lexical_confidence,
+            },
+            "match_evidence": {
+                "recall_channels": deepcopy(recall.get("recall_channels") or {}),
+                "core": {
+                    "score": round(core_score, 6),
+                    "floor": core_floor,
+                    "status": "pass" if core_score >= core_floor else "fail",
+                    "matched_text": core_evidence.get("matched_text"),
+                    "matched_core": core_evidence.get("matched_core"),
+                },
+                "constraint": deepcopy(scope_evidence),
+                "derived": {
+                    key: deepcopy(value)
+                    for key, value in derived_evidence.items()
+                    if key != "conflict"
+                },
+                "grain": {
+                    "target": next(iter(target_grains)) if len(target_grains) == 1 else None,
+                    "status": "available" if structural_available else "unavailable",
+                },
+            },
+            "constraints": resolved_constraints,
+            "grain": next(iter(target_grains)) if len(target_grains) == 1 else None,
+            "grain_checks": grain_checks,
+            "evidence": [f"recall:{channel}" for channel in recall.get("channels") or []]
+            + ["core_semantics_scored", "constraint_metadata_evaluated"],
+            "soft_conflicts": list(raw.get("soft_conflicts") or []),
+            "conflicts": sorted(set(conflicts)),
+            "_context_scope_possible": context_scope_possible,
+        }
+        (viable if not conflicts else rejected).append(candidate)
+
+    def rank(item: dict[str, Any]) -> tuple[Any, ...]:
+        detail = item.get("confidence_detail") or {}
+        return (
+            int(item.get("semantic_tier") or 0),
+            int(item.get("constraint_tier") or 0),
+            int(item.get("derived_tier") or 0),
+            int(item.get("fulfillment_tier") or 0),
+            bool(item.get("requires_confirmation")),
+            -float(detail.get("core") or 0.0),
+            -float(detail.get("derived") or 0.0),
+            -int(detail.get("dimension_evidence") or 0),
+            -float(detail.get("lexical") or 0.0),
+            str(item.get("metric") or ""),
+        )
+
+    identity = {
+        "task_id": context.get("task_id"),
+        "requirement_id": consumer.get("requirement_id"),
+        "metric_ref": metric.get("metric_ref") or metric.get("name"),
+        "constraints_fingerprint": metric_constraints_fingerprint(constraints),
+    }
+    for candidate in [*viable, *rejected]:
+        candidate["candidate_id"] = stable_id("constraint_candidate", {
+            **identity,
+            "metric": candidate.get("metric"),
+            "path": candidate.get("path"),
+            "constraints": candidate.get("constraints"),
+        })
+    viable.sort(key=rank)
+    rejected.sort(key=rank)
+    best = viable[0] if viable else None
+    best_prefix = rank(best)[:-1] if best else None
+    tied = [item for item in viable if rank(item)[:-1] == best_prefix] if best else []
+    binding = best if best and len(tied) == 1 and not best.get("requires_confirmation") else None
+    limit = int(policy.get("limits", {}).get("max_candidates_per_case", 3))
+    fallback_pool = [
+        item
+        for item in rejected
+        if "core_semantics_below_floor" in set(item.get("conflicts") or [])
+    ]
+    fallback_pool.sort(
+        key=lambda item: (
+            not bool(item.get("_context_scope_possible")),
+            rank(item),
+        )
+    )
+    return {
+        "identity": identity,
+        "binding": deepcopy(binding) if binding else None,
+        "candidates": deepcopy(viable[:limit]),
+        "rejected_candidates": deepcopy(rejected[:limit]),
+        # Keep the bounded public rejection list intact, while retaining only
+        # core-gate failures for the one request-local fallback below.  This
+        # prevents semantic-tier ordering from hiding a recoverable candidate.
+        "_context_fallback_candidates": deepcopy(
+            fallback_pool[:limit]
+        ),
+    }
+
+
+_CONTEXT_FALLBACK_BLOCKERS = {
+    "grain_not_supported",
+    "grain_rollup_not_allowed",
+    "metadata_grain_unsupported",
+    "constraint_dimension_ambiguous",
+    "metric_non_additive",
+    "metric_object_mismatch",
+    "unit_mismatch",
+    "protected_semantics_conflict:comparison_semantics_conflict",
+}
+
+
+def _context_fallback_candidate_candidates(resolution: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return rejected candidates eligible for one semantic-only retry."""
+    eligible: list[dict[str, Any]] = []
+    source = resolution.get("_context_fallback_candidates")
+    for candidate in source if source is not None else (resolution.get("rejected_candidates") or []):
+        conflicts = {str(item) for item in candidate.get("conflicts") or []}
+        if "core_semantics_below_floor" not in conflicts:
+            continue
+        if conflicts & _CONTEXT_FALLBACK_BLOCKERS:
+            continue
+        if "constraint_dimension_unavailable" in conflicts and not candidate.get(
+            "_context_scope_possible"
+        ):
+            continue
+        if "source_derived_constraint_path_unsupported" in conflicts and not candidate.get(
+            "_context_scope_possible"
+        ):
+            continue
+        eligible.append(candidate)
+    return eligible
+
+
+def _try_context_fallback(
+    index: dict[str, Any],
+    context: dict[str, Any],
+    metric: dict[str, Any],
+    consumer: dict[str, Any],
+    policy: dict[str, Any],
+    intent_policy: dict[str, Any],
+    legacy_resolution: dict[str, Any],
+) -> dict[str, Any]:
+    """Retry only a core-semantic failure, using current request text."""
+    if legacy_resolution.get("binding") or legacy_resolution.get("candidates"):
+        return legacy_resolution
+    if not _context_fallback_candidate_candidates(legacy_resolution):
+        return legacy_resolution
+    hint = extract_current_core_hint(
+        context.get("query"),
+        consumer.get("semantic_text") or consumer.get("query_fragment"),
+        policy,
+        consumer.get("metric_constraints") or [],
+    )
+    core_hint = str(hint.get("hint") or "")
+    if not core_hint:
+        return legacy_resolution
+    retry = _resolve_constrained_requirement(
+        index,
+        context,
+        metric,
+        consumer,
+        policy,
+        intent_policy,
+        core_override=core_hint,
+    )
+    # A fallback is allowed to change the legacy result only when it produces
+    # one unique binding.  Ambiguous or blocked retry results preserve legacy.
+    if not retry.get("binding"):
+        return legacy_resolution
+    retry["context_guard"] = {
+        "applied": True,
+        "mode": "failure_fallback",
+        "reason": "legacy_core_semantic_gate_failed",
+        "core_hint": core_hint,
+        "hint_source": hint.get("source"),
+        "explicit_reference": bool(hint.get("explicit_reference")),
+    }
+    return retry
+
+
 def _normalize_period(value: Any) -> tuple[str, str] | None:
     return _normalize_time_period(value)
 
@@ -745,9 +1402,14 @@ def _intent_candidate_packet(candidate: dict[str, Any]) -> dict[str, Any]:
             "metric_object",
             "requested_terms",
             "confidence",
+            "lexical_confidence",
             "semantic_tier",
+            "constraint_tier",
+            "derived_tier",
+            "fulfillment_tier",
             "requires_confirmation",
             "confidence_detail",
+            "match_evidence",
             "semantic_status",
             "soft_conflicts",
             "path",
@@ -758,6 +1420,7 @@ def _intent_candidate_packet(candidate: dict[str, Any]) -> dict[str, Any]:
             "evidence",
             "conflicts",
             "object_override_allowed",
+            "constraints",
         )
         if key in candidate
     }
@@ -919,6 +1582,12 @@ def _resolve_business_intent(
                     and item.get("reason")
                 }
                 conflicts.update(str(value) for value in recalled.get("conflicts") or [])
+                if (
+                    "model_inferred_metric_object_mismatch"
+                    in set(recalled.get("soft_conflicts") or [])
+                    and recalled.get("semantic_status") != "equivalent"
+                ):
+                    conflicts.add("model_inferred_object_semantics_unproven")
                 # A source-side derived metric cannot replace a shared logical metric
                 # until the downstream contract binds it to one requirement only.
                 if intent_id != "declared_metric" and has_registered_derived:
@@ -946,6 +1615,9 @@ def _resolve_business_intent(
                     "confidence_detail": {
                         "core": round(core_score, 6),
                         "derived": round(derived_score, 6),
+                        "grain_hint": _grain_signature(
+                            metric.get("name"), resolution_policy
+                        ),
                         "lexical": lexical_score,
                         "semantic": recalled.get("semantic_status", "unknown"),
                         "metadata": "pass" if dimension_failure is None else "fail",
@@ -1314,6 +1986,151 @@ def resolve_request_overlay(
             requested_name = str(metric["name"])
             binding_attempts[requested_name] = binding_attempts.get(requested_name, 0) + 1
             metric_ref = str(metric.get("metric_ref") or requested_name)
+            metric_consumers = [
+                item for item in metric.get("consumers") or [] if isinstance(item, dict)
+            ]
+            constrained_consumers = [
+                item for item in metric_consumers if item.get("metric_constraints")
+            ]
+            constrained_bound: set[str] = set()
+            for consumer in constrained_consumers:
+                requirement_id = str(consumer.get("requirement_id") or "")
+                constraint_resolution = _resolve_constrained_requirement(
+                    overlay, context, metric, consumer, policy, intent_policy
+                )
+                constraint_resolution = _try_context_fallback(
+                    overlay,
+                    context,
+                    metric,
+                    consumer,
+                    policy,
+                    intent_policy,
+                    constraint_resolution,
+                )
+                constraint_identity = constraint_resolution.get("identity") or {
+                    "task_id": task_id,
+                    "requirement_id": requirement_id,
+                    "metric_ref": metric_ref,
+                    "constraints_fingerprint": stable_id(
+                        "invalid_constraints", consumer.get("metric_constraints")
+                    ),
+                }
+                case_identity = {
+                    "source_id": source.get("spreadsheet_token") or source.get("url"),
+                    "kind": "metric_constraint",
+                    **constraint_identity,
+                }
+                case_id = stable_id("resolution_case", case_identity)
+                selected_id, constraint_patch_status = _patch_selection(
+                    case_id,
+                    context_patches,
+                    source,
+                    policy_hash,
+                    {
+                        "metric_constraints_fingerprint": constraint_identity.get(
+                            "constraints_fingerprint"
+                        )
+                    },
+                    require_engine_version=True,
+                )
+                constraint_candidates = constraint_resolution.get("candidates") or []
+                selected_constraint = next(
+                    (
+                        item
+                        for item in constraint_candidates
+                        if item.get("candidate_id") == selected_id
+                    ),
+                    None,
+                ) or constraint_resolution.get("binding")
+                if selected_constraint is not None and requirement_id:
+                    constrained_bound.add(requirement_id)
+                    binding_packet = {
+                        "mode": selected_constraint.get("path"),
+                        "source_metric": selected_constraint.get("metric"),
+                        "candidate_id": selected_constraint.get("candidate_id"),
+                        "metric_constraints": deepcopy(
+                            selected_constraint.get("constraints") or []
+                        ),
+                        "constraints_fingerprint": constraint_identity.get(
+                            "constraints_fingerprint"
+                        ),
+                    }
+                    if selected_constraint.get("path") == "source_derived_fact":
+                        binding_packet["derived_metric_id"] = consumer.get(
+                            "derived_metric_id"
+                        )
+                        binding_packet["source_period_role"] = next(
+                            iter(consumer.get("period_roles") or ["analysis"]),
+                            "analysis",
+                        )
+                    task_resolution["requirement_bindings"][requirement_id] = binding_packet
+                constraint_action = (
+                    "auto"
+                    if selected_constraint is not None
+                    else "confirm"
+                    if constraint_candidates
+                    else "block"
+                )
+                constraint_case = {
+                    "case_id": case_id,
+                    "action": constraint_action,
+                    "kind": "metric_constraint",
+                    "requested_term": _constraint_phrase(consumer) or requested_name,
+                    "task_ids": [task_id],
+                    "metric_ref": metric_ref,
+                    "requirement_id": requirement_id,
+                    "selected_candidate_id": (
+                        selected_constraint.get("candidate_id")
+                        if selected_constraint
+                        else None
+                    ),
+                    "policy_version": policy.get("policy_version"),
+                    "resolution_policy_hash": policy_hash,
+                    "source_revision": source.get("revision"),
+                    "schema_hash": source.get("schema_hash"),
+                    "resolution_engine_version": ENGINE_VERSION,
+                    "metric_constraints_fingerprint": constraint_identity.get(
+                        "constraints_fingerprint"
+                    ),
+                    "patch_status": constraint_patch_status,
+                    "candidates": [
+                        _intent_candidate_packet(item) for item in constraint_candidates
+                    ],
+                    "rejected_candidates": [
+                        _intent_candidate_packet(item)
+                        for item in (constraint_resolution.get("rejected_candidates") or [])
+                    ],
+                }
+                if constraint_resolution.get("context_guard"):
+                    constraint_case["context_guard"] = deepcopy(
+                        constraint_resolution["context_guard"]
+                    )
+                decisions.append(constraint_case)
+                if selected_constraint is None:
+                    cases.append(constraint_case)
+                    task_resolution["resolution_cases"].append(constraint_case)
+            if constrained_consumers and len(constrained_consumers) == len(metric_consumers):
+                all_requirement_ids = {
+                    str(item.get("requirement_id") or "")
+                    for item in constrained_consumers
+                    if item.get("requirement_id")
+                }
+                task_resolution["metric_statuses"][metric_ref] = {
+                    "requested_metric": requested_name,
+                    "status": (
+                        "requirement_bound"
+                        if all_requirement_ids == constrained_bound
+                        else "ambiguous"
+                        if any(
+                            case.get("action") == "confirm"
+                            and case.get("metric_ref") == metric_ref
+                            for case in task_resolution["resolution_cases"]
+                        )
+                        else "not_executable"
+                    ),
+                    "binding": None,
+                }
+                continue
             intent_resolution = _resolve_business_intent(
                 overlay, context, metric, policy, intent_policy
             )

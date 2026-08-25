@@ -133,6 +133,15 @@ class FeishuCompetitorGateway(DataGateway):
         for bindings in (resolution.get("metric_dimension_bindings") or {}).values():
             if isinstance(bindings, dict):
                 resolved_dimensions.update(str(value) for value in bindings.values())
+        for task_resolution in task_resolutions.values():
+            for binding in (task_resolution.get("requirement_bindings") or {}).values():
+                if not isinstance(binding, dict):
+                    continue
+                resolved_dimensions.update(
+                    str(item.get("source_dimension"))
+                    for item in binding.get("metric_constraints") or []
+                    if isinstance(item, dict) and item.get("source_dimension")
+                )
         availability: dict[str, Any] = {}
         for grain, sheet in (resolved_index.get("sheets") or {}).items():
             if not isinstance(sheet, dict) or not sheet.get("available"):

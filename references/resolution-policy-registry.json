@@ -1,6 +1,6 @@
 {
   "schema_version": "resolution_policy/2.0",
-  "policy_version": "2.2.0",
+  "policy_version": "2.4.0",
   "limits": {
     "max_candidates_per_case": 3
   },
@@ -12,10 +12,24 @@
     },
     "measure_terms": {
       "growth_rate": ["增速", "增长率", "涨幅"],
-      "delta": ["增量", "绝对变化"],
+      "delta": ["增量", "绝对变化"]
+    },
+    "core_measure_terms": {
       "count": ["订单量"],
       "price": ["订单价"],
       "gmv": ["gmv"]
+    },
+    "grain_terms": {
+      "day": ["日度"],
+      "week": ["周度"],
+      "month": ["月度"],
+      "quarter": ["季度"],
+      "year": ["年度"]
+    },
+    "constraint_operator_terms": {
+      "eq": ["仅", "只看", "限定"],
+      "in": ["合计", "之和", "包含", "及", "和"],
+      "exclude": ["剔除", "不含", "排除", "除去", "去除", "剔", "exclude", "without"]
     },
     "equivalence_rules": [
       {
@@ -29,6 +43,7 @@
   },
   "candidate_evaluation": {
     "lexical_recall_floor": 0.78,
+    "core_semantic_floor": 0.78,
     "minimum_candidate_margin": 0.1,
     "allow_unique_capability_selection": true
   },

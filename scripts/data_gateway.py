@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from _vendor.ecom_competitor_source import normalize_match_text
+from metric_constraints import normalize_metric_constraints
 from selector_context import task_filter_selectors
 
 
@@ -160,6 +161,16 @@ def build_resolve_request(
                 } | {
                     str(value) for value in (requirement.get("group_dimensions") or [])
                 }
+                metric_constraints = normalize_metric_constraints(
+                    requirement.get("metric_constraints")
+                )
+                constraint_dimensions = {
+                    str(item["dimension_hint"])
+                    for item in metric_constraints
+                    if item.get("dimension_hint")
+                }
+                task_dimensions.update(constraint_dimensions)
+                dimension_names.update(constraint_dimensions)
                 consumers_by_metric.setdefault(str(requirement["metric_ref"]), []).append({
                     "requirement_id": str(requirement.get(id_field) or ""),
                     "requirement_type": collection,
@@ -173,6 +184,7 @@ def build_resolve_request(
                     "derived_metric_id": requirement.get("derived_metric_id"),
                     "semantic_text": requirement.get("semantic_text"),
                     "query_fragment": requirement.get("query_fragment"),
+                    "metric_constraints": metric_constraints,
                     "allowed_metric_objects": list(
                         (
                             derived_definitions.get(str(requirement.get("derived_metric_id")))
@@ -194,6 +206,12 @@ def build_resolve_request(
                     "metric_object": metric.get("metric_object"),
                     "metric_object_provenance": metric.get("metric_object_source") or "model_inferred",
                     "unit": metric.get("unit"),
+                    "unit_provenance": metric.get("unit_source") or (
+                        "model_inferred"
+                        if str(metric.get("unit") or "").strip().lower()
+                        in {"", "unknown", "待元信息解析", "未解析"}
+                        else "user_explicit"
+                    ),
                     "consumers": deepcopy(consumers_by_metric.get(metric_ref) or []),
                     "required_periods": sorted({
                         str(period)

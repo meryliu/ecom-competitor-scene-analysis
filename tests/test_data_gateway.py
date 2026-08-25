@@ -13,6 +13,32 @@ from data_gateway import build_resolve_request, load_source_config  # noqa: E402
 
 
 class DataGatewayContractTests(unittest.TestCase):
+    def test_resolve_request_preserves_requirement_metric_constraints(self) -> None:
+        tasks = [("q", {
+            "analysis_task": {
+                "query": "京东闭环电商佣金收入",
+                "metrics": [{
+                    "metric_id": "commission", "name": "闭环电商佣金收入",
+                    "metric_object": "volume", "unit": "亿元",
+                    "unit_source": "model_inferred",
+                }],
+                "periods": {"analysis": "2026-06"},
+            },
+            "fact_observations": [{
+                "requirement_id": "scoped", "metric_ref": "commission",
+                "period_roles": ["analysis"], "semantic_text": "京东闭环电商佣金收入",
+                "metric_constraints": [{
+                    "kind": "dimension_filter", "operator": "eq", "values": ["京东"],
+                    "dimension_hint": "平台", "provenance": "model_inferred",
+                }],
+            }],
+        })]
+        request = build_resolve_request(tasks, {"definitions": {}})
+        metric = request["contexts"][0]["metrics"][0]
+        self.assertEqual(metric["unit_provenance"], "model_inferred")
+        self.assertEqual(metric["consumers"][0]["metric_constraints"][0]["operator"], "eq")
+        self.assertIn("平台", request["dimensions"])
+
     def test_effective_config_hash_includes_source_override(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "source-config.json"
@@ -129,6 +155,11 @@ class DataGatewayContractTests(unittest.TestCase):
             },
             "derived_requirements": [{
                 "requirement_id": "d", "metric_ref": "m", "derived_metric_id": "mom",
+                "semantic_text": "京东业务涨幅较上月变化",
+                "metric_constraints": [{
+                    "kind": "dimension_filter", "operator": "eq", "values": ["京东"],
+                    "dimension_hint": "平台", "provenance": "user_explicit",
+                }],
             }],
         })]
         request = build_resolve_request(
@@ -141,4 +172,8 @@ class DataGatewayContractTests(unittest.TestCase):
         )
         metric = request["contexts"][0]["metrics"][0]
         self.assertEqual(metric["required_periods"], ["2026-06", "2026-07"])
-        self.assertEqual(metric["consumers"][0]["allowed_metric_objects"], ["volume"])
+        consumer = metric["consumers"][0]
+        self.assertEqual(consumer["allowed_metric_objects"], ["volume"])
+        self.assertEqual(consumer["derived_metric_id"], "mom")
+        self.assertEqual(consumer["semantic_text"], "京东业务涨幅较上月变化")
+        self.assertEqual(consumer["metric_constraints"][0]["operator"], "eq")

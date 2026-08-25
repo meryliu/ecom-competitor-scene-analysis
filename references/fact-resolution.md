@@ -4,8 +4,8 @@
 
 ## 映射发生位置
 
-1. Gateway resolve 对复合 Query 按 `business-intent-policy-registry.json` 生成有限原始假设；策略只提供语义模板，不提供标准名称映射。
-2. 同一次 resolve 将核心指标语义与派生语义分开评分，并用指标元信息做轻量结构粒度判断。结构不可执行候选只留在诊断拒绝信息，不进入自动选择或澄清；实际事实块与时期覆盖由 prepare 校验。
+1. Gateway resolve 对复合 Query 按 `business-intent-policy-registry.json` 生成有限原始假设；策略只提供语义模板，不提供标准名称映射。语义归一化分别记录比较词、派生度量词、核心度量词和时间粒度词：订单量、订单价、GMV 保留在核心语义；日度、周度、月度、季度、年度只形成粒度提示，不增加派生得分。
+2. 无约束需求保持既有召回路径。有 `metric_constraints` 的需求合并完整局部短语、核心指标、维度元信息子集及按需派生假设召回，按规范名去重后统一评价；完整口径候选不能被词面 TopK 提前丢弃。候选先过核心语义、权威指标对象/单位、保护语义和结构粒度硬门，再按 `semantic_tier -> constraint_tier -> derived_tier -> fulfillment_tier -> requires_confirmation -> core -> derived -> dimension evidence -> lexical -> candidate_id` 排序。维度、派生或粒度满足不能挽救错误核心语义。旧路径没有可行候选且存在 `core_semantics_below_floor` 时，才使用当前 Query/consumer `semantic_text` 做一次请求内核心提示回退；回退必须得到唯一可行 binding，否则保留原确认/阻断结果。粒度、维度歧义/缺失、不可加性和显式对象/单位冲突不由该回退挽救，也不触发远端重取。
 3. 源索引构建保留未决物理指标块；请求级 resolver 联合评估“物理块、指标、维度、行域”，不得先独立确定指标再猜维度。业务意图选定后不再重新猜业务语义。
 4. prepare/compile 保留逻辑指标和维度，同时生成按指标隔离的 `source_metric_name`、`source_dimension_refs`、`source_selector_dimensions`、`source_dimension_domains` 与 `dimension_projection`。
 5. Provider 用物理字段定位事实，并用实时枚举确认维度值、物理维度全域或命名集合。`TOP6平台` 直接走物理维度全域，不经过逻辑集合注册表。
@@ -20,6 +20,8 @@
 
 Query 仅提供维度值时，模型可以给出维度名候选，但最终绑定必须由 Provider 使用当前结构索引反向确认。单值只命中一个维度时自动确认；命中多个维度时返回候选；唯一命中与候选维度不同时返回 `resolution_patch`。解析证据写入 `dimension_resolutions`，不为单个业务值维护静态归属表。
 
+当前 Query 是本次指标语义的权威上下文。正常候选绑定成功后不因其他上下文改写；仅当约束候选全部因 `core_semantics_below_floor` 被拒绝时，resolver 才可在同一请求内用当前 Query/consumer `semantic_text` 提取一次保守核心提示重评。该回退最多一次、复用内存索引且不调用 Provider；没有唯一可行结果时保留原确认/阻断。没有明确引用词时不得从历史指标继承核心语义。
+
 ## Provider 输入和输出
 
 编译器生成结构化逻辑 `fact_slots`，再把物理身份兼容的槽位合并为 `fact_demands`，原 task、时期角色、视角和选择器保留为 `consumer_bindings`。Gateway resolve 首轮刷新共享结构索引并输出不含坐标的逻辑能力；fetch 复用同一固定索引，批量读取唯一物理事实并输出 `scene_facts/2.0`。一次请求只读基础指标；组合指标和通用派生在本地执行器中计算。
@@ -33,6 +35,13 @@ Query 仅提供维度值时，模型可以给出维度名候选，但最终绑�
 只有会改变结果的歧义才提问，问题必须列出候选名称、元信息证据、置信度和受影响的指标/周期/维度。澄清后通过 IR 的 `resolution_patches` 更新并重编译。patch 必须匹配 case ID、候选 ID、source revision、schema hash 和 policy hash；任一变化均视为 stale，重新生成候选。用户确认不得沉淀为全局别名或规则。
 
 决策注册表不是名称映射枚举。它只能使用实现白名单中的 hard gates、strong evidence、阈值和候选上限；模型推断本身不能单独触发自动绑定。
+
+约束候选优先级为：完全满足口径的现成事实、基础指标加已确认维度成员、可加成员集合、同指标全域减同指标排除成员、已注册组合/派生。Resolve 只根据名称、别名、维度及枚举、结构粒度和可加性证明逻辑路径，不检查坐标、事实块或具体单元格；Prepare 才验证这些物理条件并生成 `source_scoped_fact`、成员选择、成员求和或同指标排除 AST。两个独立指标（例如总量指标和名称相似的某平台独立指标）没有结构化关系时不得自动生成减法。
+
+`eq|in|exclude` 使用同一通用约束签名比较器。完整口径证据必须由同一个规范名或单个别名覆盖全部 AND 约束，不能跨别名拼接；排除约束还必须同时命中排除算子和值。候选 `confidence` 表示核心与全部必需约束的瓶颈置信度，`lexical_confidence` 保留旧名称匹配分，`match_evidence` 紧凑记录各召回通道、核心、约束、派生与粒度状态。源侧预计算派生只绑定对应派生 requirement；没有唯一源侧派生时使用注册本地派生。
+`metric_constraint` case 还携带有界 `rejected_candidates`，包括候选名称、核心分/门槛、结构冲突和约束证据，便于解释阻断原因而不改变候选排序。
+
+单位与指标对象按 provenance 处理：`model_inferred` 不作硬过滤且不获得排序收益，冲突作为软诊断交给 Prepare 用源元信息纠正；用户显式、用户公式、注册定义和源元信息声明仍是硬约束。Compile、Execution 和事实质量闸门不放宽单位一致性与量级校验。
 
 业务意图注册表同样不得登记标准指标或维度映射，只能维护需求级派生触发、指标对象、名称模板、优先级和候选上限。完整 Query 只在没有结构化 consumer 的兼容路径使用；有 consumer 时仅使用其 `derived_metric_id` 或局部语义片段。规则与 source revision、schema hash、resolution policy hash 一同进入审计指纹；策略变更后旧确认补丁失效。普通事实和派生可参与意图展开，归因目标、用户公式和注册组合叶子不允许被自动改写指标对象。
 
