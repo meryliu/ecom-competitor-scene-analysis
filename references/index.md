@@ -20,6 +20,7 @@
 - [fast-query-contract.md](fast-query-contract.md)
 - [fetch-contract.md](fetch-contract.md)
 - [metric-composition-registry.json](metric-composition-registry.json)
+- [metric-composition-specs.md](metric-composition-specs.md)
 - [output-contract.md](output-contract.md)
 - [resolution-policy-registry.json](resolution-policy-registry.json)
 - [source-resolution-policy.md](source-resolution-policy.md)

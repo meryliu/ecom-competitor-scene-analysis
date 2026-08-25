@@ -44,6 +44,147 @@ def fact(slot_id: str, value: float = 1.0) -> dict:
 
 
 class NormalizeFactsTests(unittest.TestCase):
+    def test_six_registered_tr_compositions_execute_with_shared_facts(self) -> None:
+        definitions = (
+            ("ad_payment", "广告支付TR", "competitor_ad_payment_tr"),
+            ("ad_settlement", "广告结算TR", "competitor_ad_settlement_tr"),
+            ("commission_payment", "佣金支付TR", "competitor_commission_payment_tr"),
+            ("commission_settlement", "佣金结算TR", "competitor_commission_settlement_tr"),
+            ("comprehensive_payment", "综合支付TR", "competitor_comprehensive_payment_tr"),
+            ("comprehensive_settlement", "综合结算TR", "competitor_comprehensive_settlement_tr"),
+        )
+        ir = {
+            "ir_version": "analysis_ir/1.0",
+            "analysis_task": {
+                "query": "查询六个TR", "analysis_goal": "返回六个TR",
+                "metrics": [
+                    {"metric_id": metric_id, "name": name, "metric_object": "ratio", "unit": "rate"}
+                    for metric_id, name, _ in definitions
+                ],
+                "periods": {"analysis": "2026-05"},
+                "scope": "整体", "filters": [],
+            },
+            "views": [{"view_id": "overall"}],
+            "dimension_trees": [], "input_adaptations": [], "fact_observations": [],
+            "metric_compositions": [
+                {
+                    "requirement_id": metric_id, "metric_ref": metric_id,
+                    "composition_id": composition_id, "period_roles": ["analysis"],
+                    "view_id": "overall", "dimension_refs": [], "dimensions": {},
+                    "criticality": "core",
+                }
+                for metric_id, _, composition_id in definitions
+            ],
+            "derived_requirements": [], "custom_calculations": [],
+            "attribution_targets": [], "output_requirements": [], "clarifications": [],
+        }
+        plan, report = compile_and_validate(
+            ir,
+            ROOT / "references" / "derived-metric-registry.json",
+            ROOT / "references" / "metric-composition-registry.json",
+        )
+        self.assertTrue(report["valid"], report)
+        slots = plan["fetch_requests"][0]["fact_slots"]
+        self.assertEqual(len(slots), 4)
+        values = {
+            "闭环电商广告收入": 10.0,
+            "闭环电商佣金收入": 5.0,
+            "支付GMV": 100.0,
+            "结算GMV": 80.0,
+        }
+        rows = []
+        for slot in slots:
+            rows.append({
+                "fact_id": slot["fact_slot_id"],
+                "fact_slot_id": slot["fact_slot_id"],
+                "metric_ref": slot["metric_ref"],
+                "metric": slot["metric"],
+                "view_id": slot["view_id"],
+                "period": slot["period"],
+                "period_role": slot["period_role"],
+                "dimensions": {},
+                "value": values[slot["metric"]],
+                "unit": "亿元",
+                "definition": slot["metric"],
+                "additive": True,
+                "missing": False,
+                "raw_missing": False,
+                "source_request_id": "request_1",
+                "source_ref": {"revision": 1},
+            })
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = execute_plan(
+                plan, rows, root / "manifest.json", root / "events.jsonl"
+            )
+        self.assertEqual(manifest["status"], "success")
+        results = {
+            item["derived_metric_id"]: item["value"]
+            for item in manifest["derived_results"]
+        }
+        expected = {
+            "competitor_ad_payment_tr": 0.10,
+            "competitor_ad_settlement_tr": 0.125,
+            "competitor_commission_payment_tr": 0.05,
+            "competitor_commission_settlement_tr": 0.0625,
+            "competitor_comprehensive_payment_tr": 0.15,
+            "competitor_comprehensive_settlement_tr": 0.1875,
+        }
+        self.assertEqual(set(results), set(expected))
+        for metric_id, value in expected.items():
+            self.assertAlmostEqual(results[metric_id], value)
+
+    def test_registered_tr_composition_fails_on_zero_denominator(self) -> None:
+        ir = {
+            "ir_version": "analysis_ir/1.0",
+            "analysis_task": {
+                "query": "广告支付TR", "analysis_goal": "返回广告支付TR",
+                "metrics": [{
+                    "metric_id": "tr", "name": "广告支付TR",
+                    "metric_object": "ratio", "unit": "rate",
+                }],
+                "periods": {"analysis": "2026-05"},
+                "scope": "整体", "filters": [],
+            },
+            "views": [{"view_id": "overall"}],
+            "dimension_trees": [], "input_adaptations": [], "fact_observations": [],
+            "metric_compositions": [{
+                "requirement_id": "tr", "metric_ref": "tr",
+                "composition_id": "competitor_ad_payment_tr",
+                "period_roles": ["analysis"], "view_id": "overall",
+                "dimension_refs": [], "dimensions": {}, "criticality": "core",
+            }],
+            "derived_requirements": [], "custom_calculations": [],
+            "attribution_targets": [], "output_requirements": [], "clarifications": [],
+        }
+        plan, report = compile_and_validate(
+            ir,
+            ROOT / "references" / "derived-metric-registry.json",
+            ROOT / "references" / "metric-composition-registry.json",
+        )
+        self.assertTrue(report["valid"], report)
+        rows = []
+        for slot in plan["fetch_requests"][0]["fact_slots"]:
+            rows.append({
+                "fact_id": slot["fact_slot_id"], "fact_slot_id": slot["fact_slot_id"],
+                "metric_ref": slot["metric_ref"], "metric": slot["metric"],
+                "view_id": slot["view_id"], "period": slot["period"],
+                "period_role": slot["period_role"], "dimensions": {},
+                "value": 10.0 if slot["metric"] == "闭环电商广告收入" else 0.0,
+                "unit": "亿元", "definition": slot["metric"], "additive": True,
+                "missing": False, "raw_missing": False,
+                "source_request_id": "request_1", "source_ref": {"revision": 1},
+            })
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = execute_plan(
+                plan, rows, root / "manifest.json", root / "events.jsonl"
+            )
+        self.assertEqual(manifest["status"], "blocked")
+        derived = manifest["derived_results"][0]
+        self.assertEqual(derived["status"], "failed")
+        self.assertIn("denominator is 0", derived["error"])
+
     def test_one_physical_fact_can_feed_distinct_logical_views(self) -> None:
         payload = {
             "schema_version": "scene_facts/2.0",

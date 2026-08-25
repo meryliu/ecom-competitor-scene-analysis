@@ -473,6 +473,41 @@ class PrepareAnalysisTests(unittest.TestCase):
         )
         self.assertTrue(any(item.get("mode") == "derived" for item in decisions))
 
+    def test_missing_comprehensive_payment_tr_auto_declares_three_inputs(self) -> None:
+        ir = base_ir("综合支付TR", "ratio")
+        ir["analysis_task"]["periods"] = {"analysis": "2026年5月"}
+        ir["fact_observations"] = [{
+            "requirement_id": "tr",
+            "metric_ref": "target",
+            "period_roles": ["analysis"],
+            "view_id": "v",
+            "dimensions": {"平台": "京东"},
+            "dimension_refs": [],
+        }]
+        capabilities = source_index()
+        for name in ("闭环电商广告收入", "闭环电商佣金收入"):
+            capabilities["metrics"][name] = {
+                "unit": "亿元", "additive": True, "dimensions": ["平台"]
+            }
+            capabilities["metric_bindings"][name] = name
+            capabilities["availability"]["month"]["metrics"][name] = {
+                "dimension": "平台"
+            }
+
+        prepared, decisions = prepare_analysis_ir(
+            ir, capabilities, self.compositions, self.derived
+        )
+        self.assertEqual(prepared["fact_observations"], [])
+        self.assertEqual(
+            prepared["metric_compositions"][0]["composition_id"],
+            "competitor_comprehensive_payment_tr",
+        )
+        self.assertEqual(
+            {item["name"] for item in prepared["analysis_task"]["metrics"]},
+            {"综合支付TR", "闭环电商广告收入", "闭环电商佣金收入", "支付GMV"},
+        )
+        self.assertTrue(any(item.get("mode") == "derived" for item in decisions))
+
     def test_task_composition_resolution_uses_leaf_bindings_when_direct_metric_is_absent(self) -> None:
         ir = base_ir("结算率", "ratio")
         ir["analysis_task"]["periods"] = {"analysis": "2026年5月"}

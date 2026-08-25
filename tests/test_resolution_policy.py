@@ -754,6 +754,63 @@ class ResolutionPolicyTests(unittest.TestCase):
             self.assertEqual(status["status"], "bound")
             self.assertEqual(status["structural_capability"][0]["path"], "aggregate_fact")
 
+    def test_multi_input_composition_requires_every_leaf_to_bind(self) -> None:
+        metric_names = ("闭环电商广告收入", "闭环电商佣金收入", "支付GMV")
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                name: {
+                    "unit": "亿元", "metric_object": "volume",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                    "aggregation_mode": "additive",
+                }
+                for name in metric_names
+            },
+            "dimensions": {},
+            "sheets": {},
+        }
+        consumers = [{
+            "requirement_id": "comprehensive_tr",
+            "requirement_type": "metric_compositions",
+            "periods": ["2026-07"],
+        }]
+        intent = {
+            "metric_ref": "tr", "requested_metric": "综合支付TR",
+            "composition_id": "competitor_comprehensive_payment_tr",
+            "inputs": [
+                {"role": "ad_revenue", "metric": "闭环电商广告收入"},
+                {"role": "commission_revenue", "metric": "闭环电商佣金收入"},
+                {"role": "payment_gmv", "metric": "支付GMV"},
+            ],
+            "consumers": consumers,
+        }
+        request = {
+            "metrics": ["综合支付TR", *metric_names],
+            "composition_registry_hash": "registry",
+            "contexts": [{
+                "task_id": "q", "query": "综合支付TR", "periods": ["2026-07"],
+                "metrics": [{
+                    "metric_ref": "tr", "name": "综合支付TR", "metric_object": "ratio",
+                    "unit": "待元信息解析", "consumers": consumers,
+                }],
+                "composition_intents": [intent],
+            }],
+        }
+        ready = resolve_request_overlay(index, request, self.policy)
+        resolution = ready["task_resolutions"]["q"]["composition_resolutions"][0]
+        self.assertEqual(resolution["fallback_status"], "ready")
+        self.assertEqual(set(resolution["input_bindings"]), {
+            "ad_revenue", "commission_revenue", "payment_gmv"
+        })
+
+        index["metrics"].pop("闭环电商佣金收入")
+        blocked = resolve_request_overlay(index, request, self.policy)
+        resolution = blocked["task_resolutions"]["q"]["composition_resolutions"][0]
+        self.assertIn(resolution["fallback_status"], {"blocked", "confirm"})
+        self.assertNotEqual(
+            resolution["input_statuses"]["commission_revenue"]["status"], "bound"
+        )
+
     def test_registered_composition_rejects_explicitly_unsupported_leaf_breakdown(self) -> None:
         index = {
             "source": {"url": "source", "revision": 1, "schema_hash": "schema"},

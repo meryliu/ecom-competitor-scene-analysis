@@ -146,6 +146,8 @@
 
 指标组合用 `metric_compositions` 表达“指标是什么”，由 [metric-composition-registry.json](metric-composition-registry.json) 展开为基础事实；通用同比、环比和期间变化仍放在 `derived_requirements`。
 
+注册组合使用 `inputs + expression` 安全 AST。`inputs[].role` 在定义内唯一，表达式通过 `input_role` 引用输入并可重复复用同一事实槽；允许的算子与自定义计算一致，但组合注册表不得引用任意事实选择器或其他结果节点。完整维护规则见 [metric-composition-specs.md](metric-composition-specs.md)。旧版两输入 `operator=divide` 定义仅用于兼容。
+
 ```json
 {
   "requirement_id": "settlement_rate_1",
@@ -335,7 +337,7 @@ Prepare 在事实能力判断前形成统一过滤上下文：`analysis_task.fil
   },
   "compiler": {
     "name": "scene-analysis-plan-compiler",
-    "version": "1.1.0",
+    "version": "1.7.0",
     "source_ir_version": "analysis_ir/1.0",
     "source_ir_sha256": "...",
     "timings": {

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.0 - 2026-08-25
+
+- 注册广告、佣金和综合支付/结算 TR 六个同周期组合指标。
+- 将组合编译器扩展为受限多输入 AST，并保留旧版两输入除法定义兼容。
+- 补充组合指标维护契约、自动回退和执行回归测试。
+
 ## 1.1.0 - 2026-08-21
 
 - Add a versioned, declarative business-intent policy with bounded semantic hypotheses.

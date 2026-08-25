@@ -44,6 +44,37 @@ class DataGatewayContractTests(unittest.TestCase):
         self.assertEqual(request["contexts"][0]["composition_intents"][0]["composition_id"], "rate")
         self.assertEqual(request["dimensions"], ["平台"])
 
+    def test_resolve_request_collects_all_comprehensive_tr_leaves_once(self) -> None:
+        registry = json.loads(
+            (ROOT / "references" / "metric-composition-registry.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        tasks = [("q", {
+            "analysis_task": {
+                "query": "2026年5月综合支付TR",
+                "metrics": [{
+                    "metric_id": "tr", "name": "综合支付TR", "metric_object": "ratio"
+                }],
+                "periods": {"analysis": "2026-05"},
+            },
+            "fact_observations": [{
+                "requirement_id": "tr_fact", "metric_ref": "tr",
+                "period_roles": ["analysis"],
+            }],
+        })]
+        request = build_resolve_request(tasks, registry)
+        self.assertEqual(
+            request["metrics"],
+            ["支付GMV", "综合支付TR", "闭环电商佣金收入", "闭环电商广告收入"],
+        )
+        intent = request["contexts"][0]["composition_intents"][0]
+        self.assertEqual(intent["composition_id"], "competitor_comprehensive_payment_tr")
+        self.assertEqual(
+            {item["role"] for item in intent["inputs"]},
+            {"ad_revenue", "commission_revenue", "payment_gmv"},
+        )
+
     def test_resolve_request_marks_metric_object_as_model_inferred_by_default(self) -> None:
         tasks = [("q", {
             "analysis_task": {

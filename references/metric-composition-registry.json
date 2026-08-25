@@ -1,6 +1,6 @@
 {
   "registry_name": "ecom-competitor-metric-compositions",
-  "registry_version": "1.0.0",
+  "registry_version": "1.1.0",
   "definitions": {
     "competitor_settlement_rate": {
       "definition_version": "1.0.0",
@@ -11,6 +11,13 @@
         {"role": "numerator", "metric": "结算GMV"},
         {"role": "denominator", "metric": "支付GMV"}
       ],
+      "expression": {
+        "op": "divide",
+        "args": [
+          {"input_role": "numerator"},
+          {"input_role": "denominator"}
+        ]
+      },
       "formula": "settlement_gmv / payment_gmv",
       "unit": "rate",
       "output_fields": ["value", "numerator", "denominator"],
@@ -21,6 +28,158 @@
         "facts_present",
         "denominator_nonzero"
       ],
+      "execution_mode": "lightweight_executor/composition"
+    },
+    "competitor_ad_payment_tr": {
+      "definition_version": "1.0.0",
+      "metric_object": "ratio",
+      "trigger_phrases": ["广告支付TR"],
+      "inputs": [
+        {"role": "ad_revenue", "metric": "闭环电商广告收入"},
+        {"role": "payment_gmv", "metric": "支付GMV"}
+      ],
+      "expression": {
+        "op": "divide",
+        "args": [
+          {"input_role": "ad_revenue"},
+          {"input_role": "payment_gmv"}
+        ]
+      },
+      "formula": "ad_revenue / payment_gmv",
+      "unit": "rate",
+      "output_fields": ["value"],
+      "minimal_validation": ["same_period", "same_scope", "same_dimensions", "facts_present", "denominator_nonzero"],
+      "execution_mode": "lightweight_executor/composition"
+    },
+    "competitor_ad_settlement_tr": {
+      "definition_version": "1.0.0",
+      "metric_object": "ratio",
+      "trigger_phrases": ["广告结算TR"],
+      "inputs": [
+        {"role": "ad_revenue", "metric": "闭环电商广告收入"},
+        {"role": "settlement_gmv", "metric": "结算GMV"}
+      ],
+      "expression": {
+        "op": "divide",
+        "args": [
+          {"input_role": "ad_revenue"},
+          {"input_role": "settlement_gmv"}
+        ]
+      },
+      "formula": "ad_revenue / settlement_gmv",
+      "unit": "rate",
+      "output_fields": ["value"],
+      "minimal_validation": ["same_period", "same_scope", "same_dimensions", "facts_present", "denominator_nonzero"],
+      "execution_mode": "lightweight_executor/composition"
+    },
+    "competitor_commission_payment_tr": {
+      "definition_version": "1.0.0",
+      "metric_object": "ratio",
+      "trigger_phrases": ["佣金支付TR"],
+      "inputs": [
+        {"role": "commission_revenue", "metric": "闭环电商佣金收入"},
+        {"role": "payment_gmv", "metric": "支付GMV"}
+      ],
+      "expression": {
+        "op": "divide",
+        "args": [
+          {"input_role": "commission_revenue"},
+          {"input_role": "payment_gmv"}
+        ]
+      },
+      "formula": "commission_revenue / payment_gmv",
+      "unit": "rate",
+      "output_fields": ["value"],
+      "minimal_validation": ["same_period", "same_scope", "same_dimensions", "facts_present", "denominator_nonzero"],
+      "execution_mode": "lightweight_executor/composition"
+    },
+    "competitor_commission_settlement_tr": {
+      "definition_version": "1.0.0",
+      "metric_object": "ratio",
+      "trigger_phrases": ["佣金结算TR"],
+      "inputs": [
+        {"role": "commission_revenue", "metric": "闭环电商佣金收入"},
+        {"role": "settlement_gmv", "metric": "结算GMV"}
+      ],
+      "expression": {
+        "op": "divide",
+        "args": [
+          {"input_role": "commission_revenue"},
+          {"input_role": "settlement_gmv"}
+        ]
+      },
+      "formula": "commission_revenue / settlement_gmv",
+      "unit": "rate",
+      "output_fields": ["value"],
+      "minimal_validation": ["same_period", "same_scope", "same_dimensions", "facts_present", "denominator_nonzero"],
+      "execution_mode": "lightweight_executor/composition"
+    },
+    "competitor_comprehensive_payment_tr": {
+      "definition_version": "1.0.0",
+      "metric_object": "ratio",
+      "trigger_phrases": ["综合支付TR"],
+      "inputs": [
+        {"role": "ad_revenue", "metric": "闭环电商广告收入"},
+        {"role": "commission_revenue", "metric": "闭环电商佣金收入"},
+        {"role": "payment_gmv", "metric": "支付GMV"}
+      ],
+      "expression": {
+        "op": "add",
+        "args": [
+          {
+            "op": "divide",
+            "args": [
+              {"input_role": "ad_revenue"},
+              {"input_role": "payment_gmv"}
+            ]
+          },
+          {
+            "op": "divide",
+            "args": [
+              {"input_role": "commission_revenue"},
+              {"input_role": "payment_gmv"}
+            ]
+          }
+        ]
+      },
+      "formula": "ad_revenue / payment_gmv + commission_revenue / payment_gmv",
+      "unit": "rate",
+      "output_fields": ["value"],
+      "minimal_validation": ["same_period", "same_scope", "same_dimensions", "facts_present", "denominator_nonzero"],
+      "execution_mode": "lightweight_executor/composition"
+    },
+    "competitor_comprehensive_settlement_tr": {
+      "definition_version": "1.0.0",
+      "metric_object": "ratio",
+      "trigger_phrases": ["综合结算TR"],
+      "inputs": [
+        {"role": "ad_revenue", "metric": "闭环电商广告收入"},
+        {"role": "commission_revenue", "metric": "闭环电商佣金收入"},
+        {"role": "settlement_gmv", "metric": "结算GMV"}
+      ],
+      "expression": {
+        "op": "add",
+        "args": [
+          {
+            "op": "divide",
+            "args": [
+              {"input_role": "ad_revenue"},
+              {"input_role": "settlement_gmv"}
+            ]
+          },
+          {
+            "op": "divide",
+            "args": [
+              {"input_role": "commission_revenue"},
+              {"input_role": "settlement_gmv"}
+            ]
+          }
+        ]
+      },
+      "formula": "ad_revenue / settlement_gmv + commission_revenue / settlement_gmv",
+      "unit": "rate",
+      "output_fields": ["value"],
+      "minimal_validation": ["same_period", "same_scope", "same_dimensions", "facts_present", "denominator_nonzero"],
       "execution_mode": "lightweight_executor/composition"
     }
   }

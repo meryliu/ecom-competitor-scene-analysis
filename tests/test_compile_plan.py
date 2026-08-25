@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from compile_plan import compile_and_validate  # noqa: E402
+from compile_plan import CompileError, compile_and_validate  # noqa: E402
 from validate_execution import Validator  # noqa: E402
 
 
@@ -719,6 +720,112 @@ class CompilePlanTests(unittest.TestCase):
             if node["node_id"].startswith("composition_settlement_rate")
         )
         self.assertEqual(node["execution"]["unit"], "rate")
+
+    def test_comprehensive_tr_compiles_nested_ast_and_reuses_denominator_slot(self) -> None:
+        ir = base_ir()
+        ir["analysis_task"]["metrics"] = [{
+            "metric_id": "tr", "name": "综合支付TR",
+            "metric_object": "ratio", "unit": "rate",
+        }]
+        ir["metric_compositions"] = [{
+            "requirement_id": "comprehensive_tr",
+            "metric_ref": "tr",
+            "composition_id": "competitor_comprehensive_payment_tr",
+            "period_roles": ["analysis"],
+            "view_id": "platform_view",
+            "dimension_refs": ["TOP6平台"],
+            "dimensions": {},
+        }]
+        plan, report = self.compile(ir)
+        self.assertTrue(report["valid"], report)
+        node = next(
+            item for item in plan["nodes"]
+            if item["node_id"].startswith("composition_comprehensive_tr")
+        )
+        expression = node["execution"]["expression"]
+        self.assertEqual(expression["op"], "add")
+        self.assertEqual([item["op"] for item in expression["args"]], ["divide", "divide"])
+        self.assertEqual(
+            [item["fact"]["metric"] for item in expression["args"][0]["args"]],
+            ["闭环电商广告收入", "支付GMV"],
+        )
+        self.assertEqual(
+            [item["fact"]["metric"] for item in expression["args"][1]["args"]],
+            ["闭环电商佣金收入", "支付GMV"],
+        )
+        self.assertEqual(len(plan["fetch_requests"][0]["fact_slots"]), 3)
+        self.assertEqual(
+            sum(
+                slot["metric"] == "支付GMV"
+                for slot in plan["fetch_requests"][0]["fact_slots"]
+            ),
+            1,
+        )
+
+    def test_composition_ast_rejects_unknown_and_unused_input_roles(self) -> None:
+        ir = base_ir()
+        ir["analysis_task"]["metrics"] = [{
+            "metric_id": "tr", "name": "测试TR",
+            "metric_object": "ratio", "unit": "rate",
+        }]
+        ir["metric_compositions"] = [{
+            "requirement_id": "bad_tr", "metric_ref": "tr",
+            "composition_id": "bad_tr", "period_roles": ["analysis"],
+            "view_id": "platform_view", "dimension_refs": [], "dimensions": {},
+        }]
+        invalid_definitions = [
+            {
+                "inputs": [{"role": "declared", "metric": "支付GMV"}],
+                "expression": {"input_role": "missing"},
+            },
+            {
+                "inputs": [
+                    {"role": "used", "metric": "支付GMV"},
+                    {"role": "unused", "metric": "结算GMV"},
+                ],
+                "expression": {"input_role": "used"},
+            },
+        ]
+        for definition in invalid_definitions:
+            definition.update({
+                "definition_version": "1.0.0", "metric_object": "ratio", "unit": "rate"
+            })
+            registry = {
+                "registry_name": "test", "registry_version": "1.0.0",
+                "definitions": {"bad_tr": definition},
+            }
+            with self.subTest(definition=definition), tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary) / "compositions.json"
+                path.write_text(json.dumps(registry, ensure_ascii=False), encoding="utf-8")
+                with self.assertRaises(CompileError):
+                    compile_and_validate(ir, REGISTRY, path)
+
+    def test_legacy_two_input_divide_composition_remains_supported(self) -> None:
+        ir = base_ir()
+        ir["metric_compositions"] = [{
+            "requirement_id": "legacy_rate", "metric_ref": "rate",
+            "composition_id": "legacy_rate", "period_roles": ["analysis"],
+            "view_id": "platform_view", "dimension_refs": [], "dimensions": {},
+        }]
+        registry = {
+            "registry_name": "test", "registry_version": "1.0.0",
+            "definitions": {"legacy_rate": {
+                "definition_version": "1.0.0", "metric_object": "ratio",
+                "operator": "divide",
+                "inputs": [
+                    {"role": "numerator", "metric_ref": "settlement"},
+                    {"role": "denominator", "metric_ref": "payment"},
+                ],
+                "unit": "rate",
+            }},
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "compositions.json"
+            path.write_text(json.dumps(registry, ensure_ascii=False), encoding="utf-8")
+            plan, report = compile_and_validate(ir, REGISTRY, path)
+        self.assertTrue(report["valid"], report)
+        node = next(item for item in plan["nodes"] if item["type"] == "metric_composition")
+        self.assertEqual(node["execution"]["expression"]["op"], "divide")
 
     def test_selected_set_share_records_physical_dimension_domain(self) -> None:
         ir = base_ir()

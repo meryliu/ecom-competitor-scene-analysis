@@ -87,7 +87,8 @@ python3 scripts/run_analysis.py \
 - 解析决策阈值或候选策略维护：[references/resolution-policy-registry.json](references/resolution-policy-registry.json)；该文件只描述有限决策逻辑，不登记具体名称映射
 - 复合业务意图候选策略维护：[references/business-intent-policy-registry.json](references/business-intent-policy-registry.json)；只维护语义触发、指标对象和名称模板，不登记标准指标映射
 - 直接取数、粒度降级或派生回退：[references/source-resolution-policy.md](references/source-resolution-policy.md)
-- 派生或指标组合定义维护：[references/derived-metric-specs.md](references/derived-metric-specs.md) 及对应机器注册表
+- 指标组合定义维护：[references/metric-composition-specs.md](references/metric-composition-specs.md) 及 [references/metric-composition-registry.json](references/metric-composition-registry.json)
+- 通用派生定义维护：[references/derived-metric-specs.md](references/derived-metric-specs.md) 及 [references/derived-metric-registry.json](references/derived-metric-registry.json)
 - DAG、输入适配或节点执行：[references/executor-contract.md](references/executor-contract.md)
 - 取数、checkpoint 或 runner 阶段：[references/execution-contract.md](references/execution-contract.md)
 - 取数实现替换或 Gateway 边界：[references/data-gateway-contract.md](references/data-gateway-contract.md)

@@ -31,7 +31,7 @@ from validate_execution import Validator, reject_duplicate_keys
 
 
 COMPILER_NAME = "scene-analysis-plan-compiler"
-COMPILER_VERSION = "1.6.0"
+COMPILER_VERSION = "1.7.0"
 IR_VERSION = "analysis_ir/1.0"
 DEFAULT_RESIDUAL_TOLERANCE = 1e-8
 ALLOWED_CRITICALITIES = {"core", "required", "optional"}
@@ -877,25 +877,56 @@ class Compiler:
         definition = (self.composition_registry.get("definitions") or {}).get(composition_id)
         if not isinstance(definition, dict):
             raise CompileError(f"unknown metric composition: {composition_id}")
-        if definition.get("operator") != "divide":
-            raise CompileError(f"{composition_id}.operator must be divide")
         inputs = definition.get("inputs")
-        if not isinstance(inputs, list) or len(inputs) != 2:
-            raise CompileError(f"{composition_id} currently requires exactly two inputs")
-        input_refs: list[str] = []
-        for item in inputs:
+        if not isinstance(inputs, list) or not inputs:
+            raise CompileError(f"{composition_id}.inputs must be a non-empty array")
+        input_refs: dict[str, str] = {}
+        for index, item in enumerate(inputs):
             if not isinstance(item, dict):
                 raise CompileError(f"{composition_id}.inputs must contain objects")
+            input_role = require_nonempty_string(
+                item.get("role"), f"{composition_id}.inputs[{index}].role"
+            )
+            if input_role in input_refs:
+                raise CompileError(
+                    f"{composition_id}.inputs contains duplicate role: {input_role!r}"
+                )
             input_ref = item.get("metric_ref")
             if input_ref is None:
-                input_ref = self._metric_ref_by_name(require_nonempty_string(item.get("metric"), "composition input metric"))
+                input_ref = self._metric_ref_by_name(
+                    require_nonempty_string(
+                        item.get("metric"), f"{composition_id}.inputs[{index}].metric"
+                    )
+                )
             self.metric(input_ref)
-            input_refs.append(str(input_ref))
+            input_refs[input_role] = str(input_ref)
+
+        expression_template = definition.get("expression")
+        if expression_template is None:
+            if definition.get("operator") != "divide" or len(input_refs) != 2:
+                raise CompileError(
+                    f"{composition_id} requires expression or legacy two-input divide"
+                )
+            expression_template = {
+                "op": "divide",
+                "args": [
+                    {"input_role": input_role}
+                    for input_role in input_refs
+                ],
+            }
+        elif definition.get("operator") is not None:
+            if not isinstance(expression_template, dict) or (
+                expression_template.get("op") != definition.get("operator")
+            ):
+                raise CompileError(
+                    f"{composition_id}.operator conflicts with expression"
+                )
+
         dimensions = requirement.get("dimensions") or {}
         if not isinstance(dimensions, dict):
             raise CompileError("derived requirement dimensions must be an object")
-        expressions: list[dict[str, Any]] = []
-        for input_ref in input_refs:
+        input_expressions: dict[str, dict[str, Any]] = {}
+        for input_role, input_ref in input_refs.items():
             base_metric = self.metric(input_ref)
             slot_id = self.add_fact_slot(
                 str(requirement["requirement_id"]),
@@ -908,7 +939,7 @@ class Compiler:
                 selector_dimensions=dimensions,
             )
             fact_slot_ids.append(slot_id)
-            expressions.append(self._bind_fact_domain(
+            input_expressions[input_role] = self._bind_fact_domain(
                 self._fact_selector(
                     base_metric["name"],
                     view_id=requirement.get("view_id"),
@@ -916,13 +947,68 @@ class Compiler:
                 ) | {"period_role": role},
                 dimensions,
                 requirement.get("dimension_refs", []),
-            ))
-        return {
-            "op": "divide",
-            "args": expressions,
+            )
+
+        referenced_roles: set[str] = set()
+
+        def instantiate(template: Any, path: str) -> dict[str, Any]:
+            if not isinstance(template, dict):
+                raise CompileError(f"{path} must be an object")
+            if "input_role" in template:
+                if set(template) != {"input_role"}:
+                    raise CompileError(f"{path} input_role reference has unsupported fields")
+                input_role = require_nonempty_string(
+                    template.get("input_role"), f"{path}.input_role"
+                )
+                if input_role not in input_expressions:
+                    raise CompileError(
+                        f"{path}.input_role references unknown composition input: {input_role!r}"
+                    )
+                referenced_roles.add(input_role)
+                return deepcopy(input_expressions[input_role])
+            if "literal" in template:
+                if set(template) != {"literal"}:
+                    raise CompileError(f"{path} literal has unsupported fields")
+                value = template["literal"]
+                if (
+                    not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or not math.isfinite(float(value))
+                ):
+                    raise CompileError(f"{path}.literal must be a finite number")
+                return {"literal": value}
+            if set(template) != {"op", "args"}:
+                raise CompileError(f"{path} must contain only op and args")
+            op = template.get("op")
+            args = template.get("args")
+            if op not in ALLOWED_EXPRESSION_OPS or not isinstance(args, list):
+                raise CompileError(f"unsupported composition expression operation: {op!r}")
+            minimum, maximum = ALLOWED_EXPRESSION_OPS[str(op)]
+            if len(args) < minimum or (maximum is not None and len(args) > maximum):
+                raise CompileError(
+                    f"invalid arity for composition expression operation: {op!r}"
+                )
+            return {
+                "op": op,
+                "args": [
+                    instantiate(arg, f"{path}.args[{index}]")
+                    for index, arg in enumerate(args)
+                ],
+            }
+
+        expression = instantiate(
+            expression_template, f"{composition_id}.expression"
+        )
+        unused_roles = sorted(set(input_refs) - referenced_roles)
+        if unused_roles:
+            raise CompileError(
+                f"{composition_id}.expression does not reference inputs: {unused_roles}"
+            )
+        expression.update({
             "composition_id": composition_id,
             "composition_metric": self.metric(metric_ref)["name"],
-        }
+        })
+        return expression
 
     def _instantiate_selected_set_share(
         self,
