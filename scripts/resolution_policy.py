@@ -35,7 +35,7 @@ from time_rollup import normalize_period as _normalize_time_period
 
 
 POLICY_SCHEMA = "resolution_policy/2.0"
-ENGINE_VERSION = "2.8.0"
+ENGINE_VERSION = "2.10.0"
 DEFAULT_POLICY_PATH = (
     Path(__file__).resolve().parents[1]
     / "references"
@@ -847,30 +847,49 @@ def _constraint_derived_evidence(
 
 
 def _dimension_matches_constraint(
-    constraint: dict[str, Any], index: dict[str, Any]
+    constraint: dict[str, Any],
+    index: dict[str, Any],
+    supported_dimensions: set[str] | None = None,
 ) -> list[dict[str, Any]]:
+    """Resolve a logical hint against physical dimensions using source metadata only."""
     requested_values = {
         normalize_match_text(value) for value in constraint.get("values") or []
     }
     hint = normalize_match_text(constraint.get("dimension_hint"))
-    matches: list[dict[str, Any]] = []
+    exact_matches: list[dict[str, Any]] = []
+    domain_matches: list[dict[str, Any]] = []
     for name, metadata in (index.get("dimensions") or {}).items():
+        if supported_dimensions is not None and str(name) not in supported_dimensions:
+            continue
         names = {normalize_match_text(name)} | {
             normalize_match_text(alias) for alias in metadata.get("aliases") or []
         }
-        if hint and hint not in names:
-            continue
         domain = {
             normalize_match_text(value) for value in metadata.get("values") or []
         }
         if not requested_values.issubset(domain):
             continue
-        matches.append({
+        name_exact = bool(hint and hint == normalize_match_text(name))
+        alias_exact = bool(hint and hint in names and not name_exact)
+        match = {
             "dimension": str(name),
-            "dimension_hint_exact": bool(hint and hint == normalize_match_text(name)),
+            "dimension_hint_exact": name_exact,
+            "dimension_alias_exact": alias_exact,
             "value_evidence": len(requested_values),
-        })
-    return matches
+            "method": (
+                "dimension_name_exact"
+                if name_exact
+                else "dimension_alias_exact"
+                if alias_exact
+                else "value_domain_after_metric_capability"
+            ),
+            "values": [str(value) for value in constraint.get("values") or []],
+        }
+        (exact_matches if name_exact or alias_exact else domain_matches).append(match)
+    matches = exact_matches or domain_matches
+    if len(matches) == 1 and matches[0]["method"] == "value_domain_after_metric_capability":
+        matches[0]["method"] = "value_domain_unique_after_metric_capability"
+    return sorted(matches, key=lambda item: item["dimension"])
 
 
 def _full_scope_phrase_evidence(
@@ -1074,7 +1093,9 @@ def _resolve_constrained_requirement(
         )
         if derived_evidence.get("conflict"):
             conflicts.append(str(derived_evidence["conflict"]))
-        resolved_constraints: list[dict[str, Any]] = []
+        constraint_variants: list[tuple[list[dict[str, Any]], list[dict[str, Any]], int]] = [
+            ([], [], 0)
+        ]
         requires_confirmation = False
         path: str | None = (
             "source_derived_fact"
@@ -1085,37 +1106,59 @@ def _resolve_constrained_requirement(
         )
         constraint_tier = 0 if full_scope else 1
         fulfillment_tier = 0 if full_scope else 1
-        dimension_evidence = 0
         if not full_scope:
             supported = {str(value) for value in metadata.get("dimensions") or []}
+            variant_limit = int(policy.get("limits", {}).get("max_candidates_per_case", 3))
             for constraint in constraints:
-                matches = [
-                    item
-                    for item in _dimension_matches_constraint(constraint, index)
-                    if item["dimension"] in supported
-                ]
+                matches = _dimension_matches_constraint(
+                    constraint, index, supported_dimensions=supported
+                )
                 if not matches:
                     conflicts.append("constraint_dimension_unavailable")
                     continue
-                if len(matches) != 1:
-                    conflicts.append("constraint_dimension_ambiguous")
+                if len(matches) > 1:
                     requires_confirmation = True
-                    continue
-                selected = matches[0]
-                dimension_evidence += int(selected["dimension_hint_exact"]) + int(
-                    selected["value_evidence"]
-                )
-                resolved_constraints.append({
-                    **deepcopy(constraint),
-                    "source_dimension": selected["dimension"],
-                })
-            operators = {item["operator"] for item in resolved_constraints}
+                expanded: list[
+                    tuple[list[dict[str, Any]], list[dict[str, Any]], int]
+                ] = []
+                for selected in matches:
+                    resolution = {
+                        "status": "resolved",
+                        "dimension": selected["dimension"],
+                        "method": selected["method"],
+                        "values": deepcopy(selected["values"]),
+                    }
+                    evidence = (
+                        int(selected["dimension_hint_exact"])
+                        + int(selected["dimension_alias_exact"])
+                        + int(selected["value_evidence"])
+                    )
+                    for variant, resolutions, score in constraint_variants:
+                        expanded.append((
+                            [*variant, {
+                                **deepcopy(constraint),
+                                "source_dimension": selected["dimension"],
+                            }],
+                            [*resolutions, resolution],
+                            score + evidence,
+                        ))
+                constraint_variants = sorted(
+                    expanded,
+                    key=lambda item: tuple(
+                        resolution["dimension"] for resolution in item[1]
+                    ),
+                )[:variant_limit]
+            operators = {
+                item["operator"]
+                for variant, _, _ in constraint_variants
+                for item in variant
+            }
             if "exclude" in operators:
                 path = "same_metric_total_minus_members"
                 fulfillment_tier = 3
             elif any(
                 item["operator"] == "in" and len(item["values"]) > 1
-                for item in resolved_constraints
+                for item in constraints
             ):
                 path = "additive_member_sum"
                 fulfillment_tier = 2
@@ -1139,54 +1182,57 @@ def _resolve_constrained_requirement(
         lexical_confidence = round(
             float(raw.get("lexical_score") or raw.get("confidence") or 0.0), 6
         )
-        candidate = {
-            "metric": name,
-            "status": "viable" if not conflicts else "infeasible",
-            "path": path,
-            "semantic_tier": semantic_tier,
-            "constraint_tier": constraint_tier,
-            "derived_tier": int(derived_evidence.get("tier") or 0),
-            "fulfillment_tier": fulfillment_tier,
-            "requires_confirmation": requires_confirmation,
-            "confidence": round(match_confidence, 6),
-            "lexical_confidence": lexical_confidence,
-            "confidence_detail": {
-                "core": round(core_score, 6),
-                "derived": round(float(derived_evidence.get("score") or 0.0), 6),
-                "grain_hint": _grain_signature(metric.get("name"), policy),
-                "dimension_evidence": dimension_evidence,
-                "lexical": lexical_confidence,
-            },
-            "match_evidence": {
-                "recall_channels": deepcopy(recall.get("recall_channels") or {}),
-                "core": {
-                    "score": round(core_score, 6),
-                    "floor": core_floor,
-                    "status": "pass" if core_score >= core_floor else "fail",
-                    "matched_text": core_evidence.get("matched_text"),
-                    "matched_core": core_evidence.get("matched_core"),
+        for resolved_constraints, dimension_resolutions, variant_evidence in constraint_variants:
+            candidate = {
+                "metric": name,
+                "status": "viable" if not conflicts else "infeasible",
+                "path": path,
+                "semantic_tier": semantic_tier,
+                "constraint_tier": constraint_tier,
+                "derived_tier": int(derived_evidence.get("tier") or 0),
+                "fulfillment_tier": fulfillment_tier,
+                "requires_confirmation": requires_confirmation,
+                "confidence": round(match_confidence, 6),
+                "lexical_confidence": lexical_confidence,
+                "confidence_detail": {
+                    "core": round(core_score, 6),
+                    "derived": round(float(derived_evidence.get("score") or 0.0), 6),
+                    "grain_hint": _grain_signature(metric.get("name"), policy),
+                    "dimension_evidence": variant_evidence,
+                    "lexical": lexical_confidence,
                 },
-                "constraint": deepcopy(scope_evidence),
-                "derived": {
-                    key: deepcopy(value)
-                    for key, value in derived_evidence.items()
-                    if key != "conflict"
+                "match_evidence": {
+                    "recall_channels": deepcopy(recall.get("recall_channels") or {}),
+                    "core": {
+                        "score": round(core_score, 6),
+                        "floor": core_floor,
+                        "status": "pass" if core_score >= core_floor else "fail",
+                        "matched_text": core_evidence.get("matched_text"),
+                        "matched_core": core_evidence.get("matched_core"),
+                    },
+                    "constraint": deepcopy(scope_evidence),
+                    "dimension_resolution": deepcopy(dimension_resolutions),
+                    "derived": {
+                        key: deepcopy(value)
+                        for key, value in derived_evidence.items()
+                        if key != "conflict"
+                    },
+                    "grain": {
+                        "target": next(iter(target_grains)) if len(target_grains) == 1 else None,
+                        "status": "available" if structural_available else "unavailable",
+                    },
                 },
-                "grain": {
-                    "target": next(iter(target_grains)) if len(target_grains) == 1 else None,
-                    "status": "available" if structural_available else "unavailable",
-                },
-            },
-            "constraints": resolved_constraints,
-            "grain": next(iter(target_grains)) if len(target_grains) == 1 else None,
-            "grain_checks": grain_checks,
-            "evidence": [f"recall:{channel}" for channel in recall.get("channels") or []]
-            + ["core_semantics_scored", "constraint_metadata_evaluated"],
-            "soft_conflicts": list(raw.get("soft_conflicts") or []),
-            "conflicts": sorted(set(conflicts)),
-            "_context_scope_possible": context_scope_possible,
-        }
-        (viable if not conflicts else rejected).append(candidate)
+                "dimension_resolution": deepcopy(dimension_resolutions),
+                "constraints": resolved_constraints,
+                "grain": next(iter(target_grains)) if len(target_grains) == 1 else None,
+                "grain_checks": grain_checks,
+                "evidence": [f"recall:{channel}" for channel in recall.get("channels") or []]
+                + ["core_semantics_scored", "constraint_metadata_evaluated"],
+                "soft_conflicts": list(raw.get("soft_conflicts") or []),
+                "conflicts": sorted(set(conflicts)),
+                "_context_scope_possible": context_scope_possible,
+            }
+            (viable if not conflicts else rejected).append(candidate)
 
     def rank(item: dict[str, Any]) -> tuple[Any, ...]:
         detail = item.get("confidence_detail") or {}
@@ -1421,6 +1467,7 @@ def _intent_candidate_packet(candidate: dict[str, Any]) -> dict[str, Any]:
             "conflicts",
             "object_override_allowed",
             "constraints",
+            "dimension_resolution",
         )
         if key in candidate
     }
@@ -2237,6 +2284,21 @@ def resolve_request_overlay(
                     "requirement_bindings": deepcopy(requirement_bindings),
                 }
                 if selected_intent is None and not requirement_only_resolution:
+                    composition_intent = intent_by_metric_ref.get(metric_ref)
+                    if not viable_candidates and composition_intent is not None:
+                        intent_case["activation"] = "deferred"
+                        intent_case["deferred_to_composition_id"] = composition_intent.get(
+                            "composition_id"
+                        )
+                        task_resolution["intent_resolutions"][metric_ref][
+                            "status"
+                        ] = "composition_deferred"
+                        task_resolution["metric_statuses"][metric_ref] = {
+                            "requested_metric": requested_name,
+                            "status": "composition_deferred",
+                            "binding": None,
+                        }
+                        continue
                     cases.append(intent_case)
                     task_resolution["resolution_cases"].append(intent_case)
                     task_resolution["metric_statuses"][metric_ref] = {

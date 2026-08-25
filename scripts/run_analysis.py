@@ -20,6 +20,7 @@ from dimension_domain_registry import (
 )
 from execution_runner import execute_plan
 from fact_contract import SCENE_FACTS_V2, merge_fetch_requests, project_scene_facts
+from ir_contract_guard import validate_analysis_input_contract
 from prepare_analysis import (
     PreparationError,
     normalize_analysis_input,
@@ -334,6 +335,7 @@ def main() -> int:
         state = existing or new_state(input_digest)
         normalize_input(raw_input)
         input_value = normalize_analysis_input(raw_input)
+        validate_analysis_input_contract(input_value)
         tasks = normalize_input(input_value)
         task_order = [task_id for task_id, _ in tasks]
         state["stages"]["input"] = {"status": "success", "task_count": len(tasks)}

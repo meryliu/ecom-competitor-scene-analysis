@@ -264,6 +264,8 @@
 
 `factor_id` 在同一目标内唯一且稳定；`factor_order`、`formula_fingerprint` 由编译器生成。公式 AST 必须恰好引用每个因子一次，顺序和乘除位置决定因子角色；声明角色与公式冲突时在取数前阻断。`literal` 和 `derived` 必须覆盖场景要求的全部时期角色。值不变或贡献为 0 不允许删除因子。当前公式归因只支持纯乘法或乘除组合；含加减的混合形态若没有匹配的现有算子，返回 `FORMULA_SHAPE_UNSUPPORTED`，不得改写用户公式。
 
+runner 在 Provider resolve 前执行归因 IR contract guard。目标及 metric 因子必须使用已声明的 `metric_ref`，`formula` 必须是对象 AST，每个 `factor_ref` 必须命中唯一 `factor_id`，literal 必须覆盖场景角色。`metric_change` 的规范角色固定为 `analysis/comparison`；目标局部的旧 `analysis_last_year` 仅可在没有冲突时归一为 `comparison`。同比派生可继续在任务级保留 `analysis_last_year`，不会被归因角色归一删除。结构错误使用 `ATTR-IR-000` 至 `ATTR-IR-006` 在远端调用前失败，不解析自由文本公式或模糊匹配指标名。
+
 归因算子仍由 `scenario + metric_object + target_semantics + formula shape + factor roles` 共同确定。例如同一乘除公式在 `metric_change` 与 `yoy_trend_change` 下分别路由到变化算子和同比趋势算子；公式形态不越权覆盖场景。
 
 测试或离线编译可以在目标中提供完整 `operator_contract`；正式执行由编译器查询内嵌归因内核，不接受模型自行构造的算子能力声明。

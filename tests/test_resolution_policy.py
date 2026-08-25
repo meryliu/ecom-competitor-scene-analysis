@@ -176,6 +176,135 @@ class ResolutionPolicyTests(unittest.TestCase):
         self.assertEqual(binding["source_metric"], "京东全国业务量")
         self.assertEqual(binding["mode"], "source_scoped_fact")
 
+    def test_generic_dimension_hint_resolves_unique_physical_value_domain(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {"全国业务量": {
+                "unit": "亿件", "metric_object": "volume",
+                "supported_grains": ["month"], "dimensions": ["TOP6平台"],
+                "aggregation_mode": "additive",
+            }},
+            "dimensions": {
+                "TOP4平台": {"aliases": [], "values": ["京东"]},
+                "TOP6平台": {"aliases": [], "values": ["京东", "拼多多"]},
+            },
+            "sheets": {},
+        }
+        request = {"metrics": ["全国业务量"], "contexts": [{
+            "task_id": "q", "query": "拼多多全国业务量", "periods": ["2026-06"],
+            "metrics": [{
+                "metric_ref": "m", "name": "全国业务量", "metric_object": "volume",
+                "unit": "待元信息解析", "consumers": [self._constraint_consumer()],
+            }],
+        }]}
+        consumer = request["contexts"][0]["metrics"][0]["consumers"][0]
+        consumer["semantic_text"] = "拼多多全国业务量"
+        consumer["metric_constraints"][0]["values"] = ["拼多多"]
+        result = resolve_request_overlay(index, request, self.policy)
+        binding = result["task_resolutions"]["q"]["requirement_bindings"]["scoped"]
+        self.assertEqual(binding["metric_constraints"][0]["source_dimension"], "TOP6平台")
+        decision = next(item for item in result["resolution_decisions"] if item["kind"] == "metric_constraint")
+        self.assertEqual(
+            decision["candidates"][0]["dimension_resolution"][0]["method"],
+            "value_domain_unique_after_metric_capability",
+        )
+
+    def test_ambiguous_physical_dimensions_require_confirmation(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {"全国业务量": {
+                "unit": "亿件", "metric_object": "volume",
+                "supported_grains": ["month"],
+                "dimensions": ["TOP4平台", "TOP6平台"],
+                "aggregation_mode": "additive",
+            }},
+            "dimensions": {
+                "TOP4平台": {"aliases": [], "values": ["拼多多"]},
+                "TOP6平台": {"aliases": [], "values": ["拼多多"]},
+            },
+            "sheets": {},
+        }
+        consumer = self._constraint_consumer()
+        consumer["semantic_text"] = "拼多多全国业务量"
+        consumer["metric_constraints"][0]["values"] = ["拼多多"]
+        request = {"metrics": ["全国业务量"], "contexts": [{
+            "task_id": "q", "query": "拼多多全国业务量", "periods": ["2026-06"],
+            "metrics": [{
+                "metric_ref": "m", "name": "全国业务量", "metric_object": "volume",
+                "unit": "待元信息解析", "consumers": [consumer],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        case = result["task_resolutions"]["q"]["resolution_cases"][0]
+        self.assertEqual(case["action"], "confirm")
+        self.assertEqual(
+            {item["constraints"][0]["source_dimension"] for item in case["candidates"]},
+            {"TOP4平台", "TOP6平台"},
+        )
+
+    def test_unique_domain_inference_is_generic_for_non_platform_dimension(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {"成交额": {
+                "unit": "亿元", "metric_object": "volume",
+                "supported_grains": ["month"], "dimensions": ["销售大区"],
+                "aggregation_mode": "additive",
+            }},
+            "dimensions": {"销售大区": {"aliases": [], "values": ["华东", "华南"]}},
+            "sheets": {},
+        }
+        consumer = {
+            "requirement_id": "regional", "requirement_type": "fact_observations",
+            "periods": ["2026-06"], "semantic_text": "华东成交额",
+            "metric_constraints": [{
+                "kind": "dimension_filter", "operator": "eq", "values": ["华东"],
+                "dimension_hint": "地区", "provenance": "model_inferred",
+            }],
+        }
+        request = {"metrics": ["成交额"], "contexts": [{
+            "task_id": "q", "query": "华东成交额", "periods": ["2026-06"],
+            "metrics": [{
+                "metric_ref": "m", "name": "成交额", "metric_object": "volume",
+                "unit": "待元信息解析", "consumers": [consumer],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        binding = result["task_resolutions"]["q"]["requirement_bindings"]["regional"]
+        self.assertEqual(binding["metric_constraints"][0]["source_dimension"], "销售大区")
+
+    def test_value_outside_supported_dimension_domains_blocks(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {"成交额": {
+                "unit": "亿元", "metric_object": "volume",
+                "supported_grains": ["month"], "dimensions": ["销售大区"],
+                "aggregation_mode": "additive",
+            }},
+            "dimensions": {"销售大区": {"aliases": [], "values": ["华东"]}},
+            "sheets": {},
+        }
+        consumer = {
+            "requirement_id": "regional", "requirement_type": "fact_observations",
+            "periods": ["2026-06"], "semantic_text": "海外成交额",
+            "metric_constraints": [{
+                "kind": "dimension_filter", "operator": "eq", "values": ["海外"],
+                "dimension_hint": "地区", "provenance": "model_inferred",
+            }],
+        }
+        request = {"metrics": ["成交额"], "contexts": [{
+            "task_id": "q", "query": "海外成交额", "periods": ["2026-06"],
+            "metrics": [{
+                "metric_ref": "m", "name": "成交额", "metric_object": "volume",
+                "unit": "待元信息解析", "consumers": [consumer],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        case = result["task_resolutions"]["q"]["resolution_cases"][0]
+        self.assertEqual(case["action"], "block")
+        self.assertIn(
+            "constraint_dimension_unavailable", case["rejected_candidates"][0]["conflicts"]
+        )
+
     def test_full_scoped_alias_strips_constraint_terms_before_core_scoring(self) -> None:
         index = {
             "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
@@ -1118,11 +1247,145 @@ class ResolutionPolicyTests(unittest.TestCase):
             }],
         }
         result = resolve_request_overlay(index, request, self.policy)
-        composition = result["task_resolutions"]["q"]["composition_resolutions"][0]
+        task = result["task_resolutions"]["q"]
+        composition = task["composition_resolutions"][0]
         self.assertEqual(composition["fallback_status"], "ready")
+        self.assertEqual(task["resolution_cases"], [])
+        self.assertEqual(task["metric_statuses"]["rate"]["status"], "composition_deferred")
+        self.assertEqual(
+            task["intent_resolutions"]["rate"]["status"], "composition_deferred"
+        )
         for status in composition["input_statuses"].values():
             self.assertEqual(status["status"], "bound")
             self.assertEqual(status["structural_capability"][0]["path"], "aggregate_fact")
+
+    def test_direct_metric_still_wins_over_registered_composition(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "综合结算TR": {
+                    "unit": "%", "metric_object": "ratio",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                    "aggregation_mode": "non_additive",
+                },
+                **{
+                    name: {
+                        "unit": "亿元", "metric_object": "volume",
+                        "supported_grains": ["month"], "dimensions": ["无"],
+                        "aggregation_mode": "additive",
+                    }
+                    for name in ("闭环电商广告收入", "闭环电商佣金收入", "结算GMV")
+                },
+            },
+            "dimensions": {},
+            "sheets": {},
+        }
+        consumers = [{
+            "requirement_id": "comprehensive_tr",
+            "requirement_type": "metric_compositions",
+            "periods": ["2026-07"],
+        }]
+        request = {
+            "metrics": ["综合结算TR", "闭环电商广告收入", "闭环电商佣金收入", "结算GMV"],
+            "composition_registry_hash": "registry",
+            "contexts": [{
+                "task_id": "q", "query": "综合结算TR", "periods": ["2026-07"],
+                "metrics": [{
+                    "metric_ref": "tr", "name": "综合结算TR",
+                    "metric_object": "ratio", "unit": "待元信息解析",
+                    "consumers": consumers,
+                }],
+                "composition_intents": [{
+                    "metric_ref": "tr", "requested_metric": "综合结算TR",
+                    "composition_id": "competitor_comprehensive_settlement_tr",
+                    "inputs": [
+                        {"role": "ad_revenue", "metric": "闭环电商广告收入"},
+                        {"role": "commission_revenue", "metric": "闭环电商佣金收入"},
+                        {"role": "settlement_gmv", "metric": "结算GMV"},
+                    ],
+                    "consumers": consumers,
+                }],
+            }],
+        }
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertEqual(task["metric_statuses"]["tr"]["status"], "bound")
+        self.assertEqual(task["metric_bindings"]["综合结算TR"], "综合结算TR")
+        self.assertEqual(task["resolution_cases"], [])
+
+    def test_direct_ambiguity_is_not_suppressed_by_registered_composition(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                **{
+                    name: {
+                        "aliases": ["综合结算TR"], "unit": "%",
+                        "metric_object": "ratio", "supported_grains": ["month"],
+                        "dimensions": ["无"], "aggregation_mode": "non_additive",
+                    }
+                    for name in ("平台综合结算TR", "行业综合结算TR")
+                },
+                **{
+                    name: {
+                        "unit": "亿元", "metric_object": "volume",
+                        "supported_grains": ["month"], "dimensions": ["无"],
+                        "aggregation_mode": "additive",
+                    }
+                    for name in ("闭环电商广告收入", "闭环电商佣金收入", "结算GMV")
+                },
+            },
+            "dimensions": {},
+            "sheets": {},
+        }
+        consumers = [{
+            "requirement_id": "comprehensive_tr",
+            "requirement_type": "metric_compositions",
+            "periods": ["2026-07"],
+        }]
+        request = {
+            "metrics": ["综合结算TR"],
+            "composition_registry_hash": "registry",
+            "contexts": [{
+                "task_id": "q", "query": "综合结算TR", "periods": ["2026-07"],
+                "metrics": [{
+                    "metric_ref": "tr", "name": "综合结算TR",
+                    "metric_object": "ratio", "unit": "待元信息解析",
+                    "consumers": consumers,
+                }],
+                "composition_intents": [{
+                    "metric_ref": "tr", "requested_metric": "综合结算TR",
+                    "composition_id": "competitor_comprehensive_settlement_tr",
+                    "inputs": [
+                        {"role": "ad_revenue", "metric": "闭环电商广告收入"},
+                        {"role": "commission_revenue", "metric": "闭环电商佣金收入"},
+                        {"role": "settlement_gmv", "metric": "结算GMV"},
+                    ],
+                    "consumers": consumers,
+                }],
+            }],
+        }
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertEqual(task["resolution_cases"][0]["action"], "confirm")
+        self.assertEqual(task["resolution_cases"][0]["kind"], "interpretation")
+
+    def test_unregistered_metric_without_direct_candidate_still_blocks(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {}, "dimensions": {}, "sheets": {},
+        }
+        request = {"metrics": ["自定义经营率"], "contexts": [{
+            "task_id": "q", "query": "自定义经营率", "periods": ["2026-07"],
+            "metrics": [{
+                "metric_ref": "rate", "name": "自定义经营率",
+                "metric_object": "ratio", "unit": "待元信息解析",
+                "consumers": [{"requirement_type": "fact_observations"}],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertEqual(task["metric_statuses"]["rate"]["status"], "not_executable")
+        self.assertEqual(task["resolution_cases"][0]["action"], "block")
 
     def test_multi_input_composition_requires_every_leaf_to_bind(self) -> None:
         metric_names = ("闭环电商广告收入", "闭环电商佣金收入", "支付GMV")
@@ -1167,16 +1430,21 @@ class ResolutionPolicyTests(unittest.TestCase):
             }],
         }
         ready = resolve_request_overlay(index, request, self.policy)
-        resolution = ready["task_resolutions"]["q"]["composition_resolutions"][0]
+        ready_task = ready["task_resolutions"]["q"]
+        resolution = ready_task["composition_resolutions"][0]
         self.assertEqual(resolution["fallback_status"], "ready")
+        self.assertEqual(ready_task["resolution_cases"], [])
         self.assertEqual(set(resolution["input_bindings"]), {
             "ad_revenue", "commission_revenue", "payment_gmv"
         })
 
         index["metrics"].pop("闭环电商佣金收入")
         blocked = resolve_request_overlay(index, request, self.policy)
-        resolution = blocked["task_resolutions"]["q"]["composition_resolutions"][0]
+        blocked_task = blocked["task_resolutions"]["q"]
+        resolution = blocked_task["composition_resolutions"][0]
         self.assertIn(resolution["fallback_status"], {"blocked", "confirm"})
+        self.assertEqual(blocked_task["resolution_cases"], [])
+        self.assertTrue(resolution["deferred_cases"])
         self.assertNotEqual(
             resolution["input_statuses"]["commission_revenue"]["status"], "bound"
         )

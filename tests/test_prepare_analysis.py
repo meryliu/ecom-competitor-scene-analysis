@@ -749,6 +749,65 @@ class PrepareAnalysisTests(unittest.TestCase):
         self.assertNotIn("resolution_blocks", prepared)
         self.assertFalse(any(item.get("mode") == "resolution_case" for item in decisions))
 
+    def test_missing_composition_leaf_activates_only_its_deferred_case(self) -> None:
+        ir = base_ir("综合结算TR", "ratio")
+        ir["analysis_task"]["periods"] = {"analysis": "2026年5月"}
+        ir["fact_observations"] = [{
+            "requirement_id": "tr", "metric_ref": "target",
+            "period_roles": ["analysis"], "view_id": "v",
+            "dimensions": {"平台": "京东"}, "dimension_refs": [],
+        }]
+        capabilities = source_index()
+        for name in ("闭环电商广告收入", "结算GMV"):
+            capabilities["metrics"][name] = {
+                "unit": "亿元", "additive": True, "dimensions": ["平台"]
+            }
+            capabilities["metric_bindings"][name] = name
+            capabilities["availability"]["month"]["metrics"][name] = {
+                "dimension": "平台"
+            }
+        missing_case = {
+            "case_id": "missing_commission", "action": "block",
+            "activation": "deferred", "kind": "composition_input",
+            "requested_term": "闭环电商佣金收入", "metric_ref": "target",
+            "composition_id": "competitor_comprehensive_settlement_tr",
+            "input_role": "commission_revenue", "candidates": [],
+        }
+        capabilities["metric_bindings"] = {
+            "闭环电商广告收入": "闭环电商广告收入", "结算GMV": "结算GMV"
+        }
+        capabilities["metric_statuses"] = {
+            "target": {"status": "composition_deferred"}
+        }
+        capabilities["composition_resolutions"] = [{
+                "metric_ref": "target",
+                "composition_id": "competitor_comprehensive_settlement_tr",
+                "direct_status": "composition_deferred",
+                "input_bindings": {
+                    "ad_revenue": "闭环电商广告收入", "settlement_gmv": "结算GMV"
+                },
+                "input_statuses": {
+                    "ad_revenue": {"status": "bound"},
+                    "commission_revenue": {"status": "not_found"},
+                    "settlement_gmv": {"status": "bound"},
+                },
+                "fallback_status": "blocked", "deferred_cases": [missing_case],
+        }]
+        capabilities["resolution_cases"] = []
+        prepared, decisions = prepare_analysis_ir(
+            ir, capabilities, self.compositions, self.derived
+        )
+        blocks = [
+            item["block"] for item in decisions
+            if item.get("mode") == "resolution_block"
+        ]
+        self.assertEqual(len(blocks), 1)
+        active = blocks[0]["resolution_cases"]
+        self.assertEqual([item["case_id"] for item in active], ["missing_commission"])
+        self.assertEqual(active[0]["activation"], "active")
+        self.assertEqual(active[0]["kind"], "composition_input")
+        self.assertEqual(prepared["resolution_blocks"], blocks)
+
     def test_task_filter_is_inherited_by_capability_and_physical_selector(self) -> None:
         ir = base_ir("支付GMV")
         ir["analysis_task"]["periods"] = {"analysis": "2026-06"}

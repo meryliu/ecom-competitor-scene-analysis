@@ -24,6 +24,7 @@ from dimension_domain_registry import (
 )
 from fact_contract import build_fact_demands
 from fast_query_admission import assess_query
+from ir_contract_guard import IRContractError, validate_analysis_ir_contract
 from prepare_analysis import normalize_analysis_ir
 from selector_context import SelectorContextError, apply_task_selector_context
 from time_rollup import normalize_period, overlap_days
@@ -207,7 +208,11 @@ class Compiler:
         dimension_set_registry: dict[str, Any] | None = None,
     ) -> None:
         try:
-            self.ir = apply_task_selector_context(normalize_analysis_ir(ir))
+            self.ir = normalize_analysis_ir(ir)
+            validate_analysis_ir_contract(self.ir)
+            self.ir = apply_task_selector_context(self.ir)
+        except IRContractError as exc:
+            raise CompileError(f"{exc.code}: {exc}") from exc
         except SelectorContextError as exc:
             raise CompileError(str(exc)) from exc
         self.registry = registry

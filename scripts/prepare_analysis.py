@@ -8,6 +8,11 @@ import re
 from copy import deepcopy
 from typing import Any
 
+from ir_contract_guard import (
+    IRContractError,
+    normalize_attribution_period_roles,
+    validate_analysis_ir_contract,
+)
 from source_capability import (
     evaluate_direct_capability,
     metric_aggregation_eligibility,
@@ -64,9 +69,7 @@ def normalize_analysis_ir(ir: dict[str, Any]) -> dict[str, Any]:
             )
             for role, value in target["periods"].items()
         }
-        for role, value in target["periods"].items():
-            task.setdefault("periods", {}).setdefault(role, value)
-    return normalized
+    return normalize_attribution_period_roles(normalized)
 
 
 def normalize_analysis_input(value: dict[str, Any]) -> dict[str, Any]:
@@ -1085,7 +1088,11 @@ def prepare_analysis_ir(
             f"analysis_task.periods uses reserved internal roles: {reserved_roles}",
         )
     try:
-        prepared = apply_task_selector_context(normalize_analysis_ir(ir))
+        prepared = normalize_analysis_ir(ir)
+        validate_analysis_ir_contract(prepared)
+        prepared = apply_task_selector_context(prepared)
+    except IRContractError as exc:
+        raise PreparationError(exc.code, str(exc), exc.details) from exc
     except SelectorContextError as exc:
         raise PreparationError("SELECTOR_CONTEXT_INVALID", str(exc)) from exc
     _apply_business_intent_selection(prepared, index)

@@ -73,6 +73,8 @@
 
 用户明确给出归因公式时，公式因子按原顺序完整声明为 `factors`，每项使用稳定 `factor_id` 和 `kind=metric|literal|derived`；公式关系写入只引用 `factor_id` 的 `formula` AST。显式常量不是可省略的校准项：使用 `values_by_period_role` 声明各时期角色值，即使各期相同、最终贡献为 0，也必须参与执行并保留在结果中。派生子表达式使用 `expressions_by_period_role`。`decomposition` 可写 `formula`，由编译器结合场景、目标对象、目标语义、公式形态和因子角色解析已有归因算子；不能把公式形态直接替代场景判断。
 
+`metric_change` 归因内部只使用 `analysis/comparison`；若用户要求同比归因，`comparison` 就是去年同期，不为归因目标额外创建 `analysis_last_year`。兼容输入仅在目标没有 `comparison` 时把其 `analysis_last_year` 确定性归一为 `comparison`。同比数值派生与同比归因可以并存：前者继续使用 `analysis/analysis_last_year`，后者使用 `analysis/comparison`。一个归因算子内不同角色不得指向同一物理时期。
+
 同一指标同时要求水平和同比时只声明一个核心指标，例如 `线上化率`；水平写入 `fact_observations`，同比写入引用同一 `metric_ref` 的 `derived_requirements`。不要额外声明“线上化率同比变化”等来源式指标名。Resolve 可以将源侧预计算同比仅绑定到派生 requirement，不会替换水平事实。
 
 标准年、季、月粒度降级不由模型创建 `input_adaptations`。runner 先检查目标粒度直接事实；缺失且指标可聚合时，按最近细粒度和完整覆盖规则自动生成适配。只有用户明确给出非标准输入转换时才在 IR 中声明适配。
@@ -118,7 +120,7 @@
 - `dimensions={}` 且 `dimension_refs=["TOP6平台"]` 表示按当前源表 `TOP6平台` 的全部成员逐平台计算。
 - 如果命名集合只作为整体范围，需求不添加该 `dimension_ref`，并通过集合聚合节点形成整体值。
 - 对源表已存在的范围维度直接使用物理维度名，不再把范围名称写成另一维度的逻辑值；只有注册表中实际存在的其他命名集合才保留用户原词并由 Provider/编译器解析。
-- Query 只有“京东”等维度值时，可把维度名写成模型候选；Provider 使用实时结构元信息反向确认。不得维护静态“值属于哪个维度”映射。
+- Query 只有维度值时，可把维度名写成逻辑 hint；Resolve 先在候选指标支持的物理维度中匹配规范名/别名，再用实时枚举域反向确认。唯一域自动绑定，多域命中要求确认，无命中阻断。该顺序适用于平台、地区、类目等全部维度，不得维护静态“值属于哪个维度”映射。
 - Query 中的包含、排除、多个成员、交集过滤或维度别名都使用同一 `metric_constraints` 结构；不要为具体平台或具体指标增加专用规则。现成完整口径事实优先于基础指标加维度；基础指标回退必须由当前指标支持维度、枚举和可加性共同证明。
 - “分别”“各平台”“每个平台”等表述必须添加相应 `dimension_ref`。
 

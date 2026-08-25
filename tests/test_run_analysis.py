@@ -156,6 +156,216 @@ class RunAnalysisTests(unittest.TestCase):
             self.assertEqual(answer["tasks"][0]["resolution_cases"][0]["case_id"], "resolution_case_1")
             self.assertFalse((work_dir / "fetch-request.json").exists())
 
+    def test_registered_composition_fallback_runs_end_to_end(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_path = root / "input.json"
+            work_dir = root / "run"
+            ir = simple_ir()
+            ir["analysis_task"].update({
+                "query": "2026年5月综合结算TR",
+                "analysis_goal": "返回综合结算TR",
+                "metrics": [{
+                    "metric_id": "target", "name": "综合结算TR",
+                    "metric_object": "ratio", "unit": "rate",
+                }],
+            })
+            ir["fact_observations"] = [{
+                "requirement_id": "tr_fact", "metric_ref": "target",
+                "period_roles": ["analysis"], "view_id": "overall",
+                "dimension_refs": [],
+            }]
+            input_path.write_text(
+                json.dumps(ir, ensure_ascii=False), encoding="utf-8"
+            )
+
+            leaf_metrics = (
+                "闭环电商广告收入", "闭环电商佣金收入", "结算GMV"
+            )
+            source_binding = {
+                "schema_version": "source_binding/1.0",
+                "provider_id": "test", "source_id": "source",
+                "config_hash": "config", "revision": 1300,
+                "schema_hash": "schema", "freshness": "live",
+                "resolution_policy_hash": "policy",
+                "business_intent_policy_hash": "intent-policy",
+                "resolution_engine_version": "2.10.0",
+            }
+            composition_resolution = {
+                "metric_ref": "target", "requested_metric": "综合结算TR",
+                "composition_id": "competitor_comprehensive_settlement_tr",
+                "direct_status": "composition_deferred",
+                "input_bindings": {
+                    "ad_revenue": "闭环电商广告收入",
+                    "commission_revenue": "闭环电商佣金收入",
+                    "settlement_gmv": "结算GMV",
+                },
+                "input_statuses": {
+                    "ad_revenue": {"status": "bound", "binding": "闭环电商广告收入"},
+                    "commission_revenue": {"status": "bound", "binding": "闭环电商佣金收入"},
+                    "settlement_gmv": {"status": "bound", "binding": "结算GMV"},
+                },
+                "fallback_status": "ready", "deferred_cases": [],
+            }
+            capabilities = {
+                "schema_version": "resolved_capabilities/1.0",
+                "provider": {"provider_id": "test", "contract_version": "1.0"},
+                "source": source_binding,
+                "metric_bindings": {name: name for name in leaf_metrics},
+                "dimension_bindings": {}, "metric_dimension_bindings": {},
+                "task_metric_dimension_bindings": {"default": {}},
+                "metrics": {
+                    name: {
+                        "unit": "亿元", "metric_object": "volume",
+                        "additive": True, "dimensions": ["无"],
+                        "supported_grains": ["month"],
+                    }
+                    for name in leaf_metrics
+                },
+                "dimensions": {},
+                "availability": {
+                    "month": {
+                        "periods": ["2026-05"],
+                        "metrics": {
+                            name: {"dimension": "无"} for name in leaf_metrics
+                        },
+                    }
+                },
+                "task_resolutions": {"default": {
+                    "metric_bindings": {name: name for name in leaf_metrics},
+                    "requirement_bindings": {},
+                    "metric_statuses": {"target": {
+                        "requested_metric": "综合结算TR",
+                        "status": "composition_deferred", "binding": None,
+                    }},
+                    "intent_resolutions": {"target": {
+                        "status": "composition_deferred", "selected_candidate": None,
+                    }},
+                    "composition_resolutions": [composition_resolution],
+                    "resolution_cases": [],
+                }},
+                "resolution_cases": [], "resolution_decisions": [],
+                "resolution_policy": {"sha256": "policy", "engine_version": "2.10.0"},
+                "business_intent_policy": {"sha256": "intent-policy"},
+            }
+            fetched_metrics: set[str] = set()
+            values = {
+                "闭环电商广告收入": 573.0,
+                "闭环电商佣金收入": 87.0,
+                "结算GMV": 7734.0,
+            }
+
+            class Gateway:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+                def resolve(self, request):
+                    intents = request["contexts"][0]["composition_intents"]
+                    assert intents[0]["composition_id"] == "competitor_comprehensive_settlement_tr"
+                    return capabilities
+
+                def fetch(self, request):
+                    facts = []
+                    bindings = []
+                    for index, demand in enumerate(request["fact_demands"], start=1):
+                        metric = demand["metric"]
+                        fetched_metrics.add(metric)
+                        fact_id = stable_id("fact", f"composition-{index}")
+                        facts.append({
+                            "fact_id": fact_id, "metric_ref": demand["metric_ref"],
+                            "metric": metric, "metric_object": demand["metric_object"],
+                            "component": demand.get("component"),
+                            "period": demand["period"], "dimensions": {},
+                            "value": values[metric], "unit": "亿元",
+                            "definition": metric, "missing": False,
+                            "raw_missing": False, "normalization_reason": "unchanged",
+                            "value_derived_from_components": False,
+                            "source_request_id": request["request_id"],
+                            "source_ref": {"revision": 1300}, "coverage": "full",
+                        })
+                        bindings.extend(
+                            dict(binding, fact_id=fact_id)
+                            for binding in demand["consumer_bindings"]
+                        )
+                    return {
+                        "schema_version": "scene_facts/2.0",
+                        "facts": facts, "bindings": bindings,
+                        "source": {
+                            "revision": 1300, "schema_hash": "schema",
+                            "freshness": "live", "cache_status": "miss",
+                        },
+                    }
+
+            argv = [
+                "run_analysis.py", "--input", str(input_path),
+                "--work-dir", str(work_dir),
+            ]
+            with patch.object(sys, "argv", argv), patch.object(
+                run_analysis, "FeishuCompetitorGateway", Gateway
+            ):
+                self.assertEqual(run_analysis.main(), 0)
+
+            prepared = json.loads(
+                (work_dir / "tasks" / "default" / "prepared-ir.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            request = json.loads(
+                (work_dir / "fetch-request.json").read_text(encoding="utf-8")
+            )
+            answer = json.loads(
+                (work_dir / "answer-payload.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(prepared["fact_observations"], [])
+            self.assertEqual(
+                prepared["metric_compositions"][0]["composition_id"],
+                "competitor_comprehensive_settlement_tr",
+            )
+            self.assertEqual(
+                {item["metric"] for item in request["fact_demands"]},
+                set(leaf_metrics),
+            )
+            self.assertEqual(fetched_metrics, set(leaf_metrics))
+            self.assertEqual(answer["status"], "success")
+            derived = answer["tasks"][0]["derived_results"][0]
+            self.assertEqual(
+                derived["derived_metric_id"],
+                "competitor_comprehensive_settlement_tr",
+            )
+            self.assertAlmostEqual(derived["value"], (573.0 + 87.0) / 7734.0)
+
+    def test_attribution_ir_guard_blocks_before_provider_resolve(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_path = root / "input.json"
+            work_dir = root / "run"
+            ir = simple_ir()
+            ir["analysis_task"]["metrics"].append({
+                "metric_id": "input", "name": "MAC", "metric_object": "volume", "unit": "万人"
+            })
+            ir["analysis_task"]["periods"]["comparison"] = "2025-05"
+            ir["attribution_targets"] = [{
+                "target_id": "formula", "metric_ref": "payment",
+                "scenario": "metric_change", "periods": {
+                    "analysis": "2026-05", "comparison": "2025-05"
+                },
+                "factors": [{"factor_id": "input", "kind": "metric", "metric_ref": "input"}],
+                "formula": "MAC",
+            }]
+            input_path.write_text(json.dumps(ir, ensure_ascii=False), encoding="utf-8")
+
+            class Gateway:
+                def __init__(self, *args, **kwargs):
+                    raise AssertionError("Provider must not be initialized for malformed attribution IR")
+
+            argv = ["run_analysis.py", "--input", str(input_path), "--work-dir", str(work_dir)]
+            with patch.object(sys, "argv", argv), patch.object(
+                run_analysis, "FeishuCompetitorGateway", Gateway
+            ):
+                self.assertEqual(run_analysis.main(), 2)
+            state = json.loads((work_dir / "run-state.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["error"]["code"], "ATTR-IR-002")
+
     def test_bundle_continues_unaffected_task_while_other_waits(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

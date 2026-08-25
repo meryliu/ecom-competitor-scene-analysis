@@ -4,6 +4,7 @@
 
 ## 固定组件
 
+- `scripts/ir_contract_guard.py`：在 Provider 调用前校验归因 IR 的结构引用、公式 AST 和场景时期角色，不读取源元信息。
 - `scripts/compile_plan.py`：把 `analysis_ir/1.0` 编译成可校验计划、事实槽位和唯一 Provider 请求。
 - `scripts/dimension_domain_registry.py`：读取业务集合注册表，将命名集合解析为实时源表中的具体维度成员。
 - `scripts/data_gateway.py`：定义 provider-neutral 的 resolve/fetch 与 source binding 契约。
@@ -28,7 +29,7 @@
      --resume auto
    ```
 
-3. runner 先校验单任务/bundle 输入协议，再通过 Gateway resolve 一次逻辑能力并固定 source binding。编译器统一传播目标过滤上下文并完成公式因子、维度冲突和 selector grain 校验；每个计划存在 `ERROR` 时不取数。Gateway 在同一 revision 下批量读取唯一物理事实，直接输出 `scene_facts/2.0`。
+3. runner 先校验单任务/bundle 输入协议及归因 IR 结构契约，再通过 Gateway resolve 一次逻辑能力并固定 source binding。`metric_change` 在此阶段归一为 `analysis/comparison`；同比派生所需的 `analysis_last_year` 保持独立。编译器统一传播目标过滤上下文并完成公式因子、维度冲突和 selector grain 校验；每个计划存在 `ERROR` 时不取数。Gateway 在同一 revision 下批量读取唯一物理事实，直接输出 `scene_facts/2.0`。
 4. runner 按 bindings 为每个 task 投影逻辑事实，再按 DAG 波次运行事实、输入适配、组合/通用派生、自定义计算和归因。适配结果在波次之间作为共享中间事实注入，下游不重复计算。
 5. `run-state.json` 在每个阶段原子落盘。成功 facts checkpoint 后的本地失败自动恢复，不再次取数；真实 fetch attempt 只追加不覆盖。
 6. 单独调试执行器时可运行：
@@ -112,4 +113,4 @@ Provider 输出的根对象为：
 
 ## 性能和审计
 
-resolve 首轮刷新并固定数据源级共享原始结构索引，随后只在内存创建 policy-versioned 请求 overlay；fetch 不做第二次索引刷新，只按坐标批量读取单元格并最终校验 revision。候选计算不增加飞书调用，精确路径不输出候选；非标准路径每 case 最多三个候选。兼容 selectors 在 Provider 前求并集，同一物理事实只读取并保存一次。记录 `raw_bytes`、唯一物理事实数、各 task 逻辑绑定数、阶段耗时、config hash、revision、schema hash、policy hash、缓存状态和 freshness。跨进程 singleflight 防止并发重建，数据源级限流避免并行 run 触发飞书频控。完整 capabilities 每个 run 只落一份诊断产物，正常模型上下文只读取顶层答案。
+IR contract guard 是纯内存线性扫描，不发起远端调用。resolve 首轮刷新并固定数据源级共享原始结构索引，随后只在内存创建 policy-versioned 请求 overlay；维度唯一域推断仅扫描当前候选指标支持的维度及其已缓存枚举。fetch 不做第二次索引刷新，只按坐标批量读取单元格并最终校验 revision。候选计算不增加飞书调用，精确路径不输出候选；非标准路径每 case 最多三个候选。兼容 selectors 在 Provider 前求并集，同一物理事实只读取并保存一次。记录 `raw_bytes`、唯一物理事实数、各 task 逻辑绑定数、阶段耗时、config hash、revision、schema hash、policy hash、缓存状态和 freshness。跨进程 singleflight 防止并发重建，数据源级限流避免并行 run 触发飞书频控。完整 capabilities 每个 run 只落一份诊断产物，正常模型上下文只读取顶层答案。
