@@ -209,6 +209,78 @@ class NormalizeFactsTests(unittest.TestCase):
         self.assertEqual({row["view_id"] for row in normalized}, {"overall", "douyin_share"})
         self.assertEqual({row["physical_fact_id"] for row in normalized}, {"physical_1"})
 
+    @staticmethod
+    def _logical_binding_rows() -> list[dict]:
+        base = {
+            "physical_fact_id": "physical_1",
+            "metric": "支付GMV",
+            "metric_object": "volume",
+            "view_id": "platform",
+            "period": "2026-06",
+            "period_role": "analysis",
+            "dimensions": {"TOP6平台": "拼多多"},
+            "value": 3915.0,
+            "unit": "亿元",
+            "definition": "支付GMV",
+            "additive": True,
+            "missing": False,
+            "raw_missing": False,
+            "normalization_reason": "unchanged",
+            "value_derived_from_components": False,
+            "source_request_id": "request_1",
+            "source_ref": {"revision": 1300, "row": 1, "column": "B"},
+        }
+        return [
+            {**base, "fact_id": "logical_display", "binding_id": "display", "metric_ref": "display_gmv"},
+            {**base, "fact_id": "logical_attribution", "binding_id": "attribution", "metric_ref": "gmv"},
+        ]
+
+    def test_metric_ref_selects_exact_logical_binding(self) -> None:
+        store = FactStore(self._logical_binding_rows())
+        self.assertEqual(
+            store.unique_value({
+                "metric_ref": "gmv",
+                "metric": "支付GMV",
+                "view_id": "platform",
+                "period_role": "analysis",
+                "dimensions": {"TOP6平台": "拼多多"},
+                "dimensions_exact": True,
+            }),
+            3915.0,
+        )
+
+    def test_legacy_selector_collapses_equivalent_logical_bindings(self) -> None:
+        store = FactStore(self._logical_binding_rows())
+        self.assertEqual(
+            store.unique_value({
+                "metric": "支付GMV",
+                "view_id": "platform",
+                "period_role": "analysis",
+                "dimensions": {"TOP6平台": "拼多多"},
+                "dimensions_exact": True,
+            }),
+            3915.0,
+        )
+
+    def test_same_physical_fact_with_conflicting_source_data_is_rejected(self) -> None:
+        changes = (
+            {"value": 3916.0},
+            {"unit": "万元"},
+            {"source_ref": {"revision": 1301, "row": 1, "column": "B"}},
+        )
+        for change in changes:
+            with self.subTest(change=change):
+                rows = self._logical_binding_rows()
+                rows[1] = {**rows[1], **change}
+                with self.assertRaisesRegex(ExecutionError, "conflicting fields"):
+                    FactStore(rows).unique_value({"metric": "支付GMV", "period_role": "analysis"})
+
+    def test_distinct_physical_facts_are_not_collapsed(self) -> None:
+        rows = self._logical_binding_rows()
+        rows[1] = {**rows[1], "physical_fact_id": "physical_2"}
+        with self.assertRaisesRegex(ExecutionError, "got 2"):
+            FactStore(rows).unique_value({"metric": "支付GMV", "period_role": "analysis"})
+
     def test_iso_week_rollup_expression_applies_overlap_weights(self) -> None:
         rows = []
         for role, value in (("w05", 1000.0), ("w06", 1000.0), ("w09", 1000.0)):
@@ -499,6 +571,120 @@ class NormalizeFactsTests(unittest.TestCase):
         self.assertEqual(constant["analysis_value"], constant["comparison_value"])
         self.assertAlmostEqual(constant["contribution_value"], 0.0)
 
+    def test_display_and_attribution_bindings_share_physical_target_fact(self) -> None:
+        ir = {
+            "ir_version": "analysis_ir/1.0",
+            "analysis_task": {
+                "query": "show and attribute target",
+                "analysis_goal": "show target and factor contributions",
+                "metrics": [
+                    {"metric_id": "target", "name": "target_metric", "metric_object": "volume", "unit": "u"},
+                    {"metric_id": "display_target", "name": "target_metric", "metric_object": "volume", "unit": "u"},
+                    {"metric_id": "input_a", "name": "input_a", "metric_object": "volume", "unit": "u"},
+                    {"metric_id": "input_b", "name": "input_b", "metric_object": "volume", "unit": "u"},
+                ],
+                "periods": {"analysis": "2026-06", "comparison": "2025-06"},
+                "scope": "entity_x",
+                "filters": [],
+            },
+            "views": [{"view_id": "entity_view"}],
+            "dimension_trees": [],
+            "input_adaptations": [],
+            "fact_observations": [{
+                "requirement_id": "display",
+                "metric_ref": "display_target",
+                "period_roles": ["analysis", "comparison"],
+                "view_id": "entity_view",
+                "dimensions": {"entity": "entity_x"},
+                "dimension_refs": ["entity"],
+            }],
+            "metric_compositions": [],
+            "derived_requirements": [],
+            "custom_calculations": [],
+            "attribution_targets": [{
+                "target_id": "formula_target",
+                "metric_ref": "target",
+                "metric_object": "volume",
+                "scenario": "metric_change",
+                "target_semantics": "absolute_delta",
+                "decomposition": "formula",
+                "view_id": "entity_view",
+                "dimensions": {"entity": "entity_x"},
+                "factors": [
+                    {"factor_id": "factor_a", "metric_ref": "input_a"},
+                    {"factor_id": "factor_b", "metric_ref": "input_b"},
+                ],
+                "formula": {
+                    "op": "multiply",
+                    "args": [{"factor_ref": "factor_a"}, {"factor_ref": "factor_b"}],
+                },
+                "criticality": "required",
+            }],
+            "output_requirements": [],
+            "clarifications": [],
+        }
+        plan, report = compile_and_validate(
+            ir,
+            ROOT / "references" / "derived-metric-registry.json",
+            ROOT / "references" / "metric-composition-registry.json",
+        )
+        self.assertTrue(report["valid"], report)
+        values = {
+            ("target_metric", "analysis"): 12.0,
+            ("target_metric", "comparison"): 4.0,
+            ("input_a", "analysis"): 2.0,
+            ("input_a", "comparison"): 1.0,
+            ("input_b", "analysis"): 6.0,
+            ("input_b", "comparison"): 4.0,
+        }
+        physical_facts: dict[tuple[str, str], dict] = {}
+        bindings = []
+        for slot in plan["fetch_requests"][0]["fact_slots"]:
+            identity = (slot["metric"], slot["period_role"])
+            physical_fact_id = f"physical_{slot['metric']}_{slot['period_role']}"
+            physical_facts.setdefault(identity, {
+                "fact_id": physical_fact_id,
+                "metric": slot["metric"],
+                "period": slot["period"],
+                "dimensions": {"entity": "entity_x"},
+                "value": values[identity],
+                "unit": "u",
+                "definition": slot["metric"],
+                "additive": True,
+                "missing": False,
+                "source_ref": {"revision": 1300},
+            })
+            bindings.append({
+                "binding_id": f"binding_{slot['fact_slot_id']}",
+                "fact_id": physical_fact_id,
+                "task_id": "q",
+                "fact_slot_id": slot["fact_slot_id"],
+                "period_role": slot["period_role"],
+                "view_id": slot["view_id"],
+                "metric_ref": slot["metric_ref"],
+                "metric": slot["metric"],
+                "metric_object": slot["metric_object"],
+                "unit": slot["unit"],
+            })
+        rows = project_scene_facts({
+            "schema_version": "scene_facts/2.0",
+            "facts": list(physical_facts.values()),
+            "bindings": bindings,
+        }, "q")
+        target_rows = [row for row in rows if row["metric"] == "target_metric"]
+        self.assertEqual(len(target_rows), 4)
+        self.assertEqual(
+            {row["physical_fact_id"] for row in target_rows},
+            {"physical_target_metric_analysis", "physical_target_metric_comparison"},
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = execute_plan(
+                plan, rows, root / "manifest.json", root / "events.jsonl"
+            )
+        self.assertEqual(manifest["status"], "success")
+        self.assertEqual(manifest["attribution_results"][0]["status"], "success")
+
     def test_identical_fact_from_multiple_slots_is_deduplicated(self) -> None:
         rows = normalize_facts(
             [fact("share_slot"), fact("attribution_slot")],
@@ -519,6 +705,38 @@ class NormalizeFactsTests(unittest.TestCase):
         pdd = {**fact("slot", 3.0), "fact_id": "pdd", "dimensions": {"平台": "拼多多"}}
         store = FactStore(
             normalize_facts([jd, pdd], {"analysis": "2026-05"}),
+            {"domain_test": {"dimension": "平台", "members": ["京东", "拼多多"]}},
+        )
+        self.assertEqual(
+            store.aggregate_value(
+                {"metric": "支付GMV", "view_id": "platform", "period_role": "analysis"},
+                "domain_test",
+            ),
+            5.0,
+        )
+
+    def test_collection_aggregate_counts_equivalent_physical_fact_once(self) -> None:
+        jd = {
+            **self._logical_binding_rows()[0],
+            "dimensions": {"平台": "京东"},
+            "value": 2.0,
+        }
+        duplicate = {
+            **jd,
+            "fact_id": "logical_duplicate",
+            "binding_id": "duplicate",
+            "metric_ref": "aggregate_input",
+        }
+        pdd = {
+            **jd,
+            "fact_id": "logical_pdd",
+            "physical_fact_id": "physical_2",
+            "binding_id": "pdd",
+            "dimensions": {"平台": "拼多多"},
+            "value": 3.0,
+        }
+        store = FactStore(
+            [jd, duplicate, pdd],
             {"domain_test": {"dimension": "平台", "members": ["京东", "拼多多"]}},
         )
         self.assertEqual(
@@ -592,6 +810,7 @@ class NormalizeFactsTests(unittest.TestCase):
             row = fact("share", float(index))
             row.update({
                 "fact_id": f"fact_{index}",
+                "metric_ref": "payment",
                 "dimensions": {"TOP6平台": platform},
             })
             rows.append(row)

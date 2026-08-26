@@ -51,7 +51,7 @@ NORMALIZATION_REASONS = {
     "unchanged",
 }
 REFERENCE_STORAGE_VERSION = "2.0"
-REFERENCE_EXECUTOR_VERSIONS = {"1.3.0", "1.4.0", "1.5.0", "1.6.0", "1.7.0", "1.8.0", "1.8.1", "1.9.0"}
+REFERENCE_EXECUTOR_VERSIONS = {"1.3.0", "1.4.0", "1.5.0", "1.6.0", "1.7.0", "1.8.0", "1.8.1", "1.9.0", "1.10.0"}
 
 
 def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -1304,7 +1304,7 @@ class Validator:
         ]
         compiled_view_ids = {slot.get("view_id") for slot in compiled_fact_requirements}
         executor_version = str((self.document.get("executor") or {}).get("version") or "")
-        require_projected_identity = executor_version == "1.9.0"
+        require_projected_identity = executor_version in {"1.9.0", "1.10.0"}
         logical_fact_ids: set[str] = set()
         fact_count = 0
         missing_count = 0

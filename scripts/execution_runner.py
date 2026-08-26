@@ -20,7 +20,7 @@ from typing import Any, Callable, Iterable
 from fact_contract import SCENE_FACTS_V2, project_scene_facts
 
 EXECUTOR_NAME = "scene-analysis-lightweight-executor"
-EXECUTOR_VERSION = "1.9.0"
+EXECUTOR_VERSION = "1.10.0"
 STORAGE_SCHEMA_VERSION = "2.0"
 RUNNABLE_HANDLERS = {"fact_artifact", "derived", "attribution"}
 PERIOD_VALUE_FIELDS = {
@@ -658,7 +658,7 @@ def normalize_facts(
 
 
 def selector_matches(row: dict[str, Any], selector: dict[str, Any], parent: dict[str, Any] | None = None) -> bool:
-    for key in ("metric", "view_id", "period", "period_role", "unit"):
+    for key in ("metric_ref", "metric", "view_id", "period", "period_role", "unit"):
         if key in selector and row.get(key) != selector[key]:
             return False
     dimensions = row.get("dimensions") or {}
@@ -675,6 +675,30 @@ def selector_matches(row: dict[str, Any], selector: dict[str, Any], parent: dict
 
 
 class FactStore:
+    _PHYSICAL_EQUIVALENCE_FIELDS = (
+        "physical_fact_id",
+        "metric",
+        "metric_object",
+        "view_id",
+        "period",
+        "period_role",
+        "dimensions",
+        "component",
+        "value",
+        "numerator",
+        "denominator",
+        "unit",
+        "missing",
+        "raw_missing",
+        "normalization_reason",
+        "value_derived_from_components",
+        "definition",
+        "additive",
+        "aggregation",
+        "source_request_id",
+        "source_ref",
+    )
+
     def __init__(
         self,
         rows: list[dict[str, Any]],
@@ -687,7 +711,7 @@ class FactStore:
             self._index_row(index, row)
 
     def _index_row(self, index: int, row: dict[str, Any]) -> None:
-        for key in ("metric", "view_id", "period", "period_role", "unit"):
+        for key in ("metric_ref", "metric", "view_id", "period", "period_role", "unit"):
             if row.get(key) is not None:
                 self.indexes.setdefault((key, canonical_json(row[key])), set()).add(index)
         for key, value in (row.get("dimensions") or {}).items():
@@ -710,7 +734,7 @@ class FactStore:
         if not isinstance(selector, dict):
             raise ExecutionError("fact selector must be an object")
         index_keys: list[tuple[str, str]] = []
-        for key in ("metric", "view_id", "period", "period_role", "unit"):
+        for key in ("metric_ref", "metric", "view_id", "period", "period_role", "unit"):
             if key in selector:
                 index_keys.append((key, canonical_json(selector[key])))
         selected_dimensions = selector.get("dimensions") or {}
@@ -731,6 +755,74 @@ class FactStore:
         candidate_indexes = range(len(self.rows)) if candidates is None else sorted(candidates)
         return [self.rows[index] for index in candidate_indexes if selector_matches(self.rows[index], selector, parent)]
 
+    @classmethod
+    def _collapse_equivalent_physical_rows(
+        cls,
+        rows: list[dict[str, Any]],
+        selector: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        collapsed: list[dict[str, Any]] = []
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            physical_fact_id = row.get("physical_fact_id")
+            if not isinstance(physical_fact_id, str) or not physical_fact_id:
+                collapsed.append(row)
+                continue
+            grouped.setdefault(physical_fact_id, []).append(row)
+        for physical_fact_id in sorted(grouped):
+            group = grouped[physical_fact_id]
+            representative = min(
+                group,
+                key=lambda row: (
+                    str(row.get("binding_id") or ""),
+                    str(row.get("fact_id") or ""),
+                ),
+            )
+            conflicts = sorted({
+                field
+                for row in group
+                for field in cls._PHYSICAL_EQUIVALENCE_FIELDS
+                if row.get(field) != representative.get(field)
+            })
+            if conflicts:
+                raise ExecutionError(
+                    "logical facts sharing physical_fact_id have conflicting fields "
+                    f"{conflicts}: physical_fact_id={physical_fact_id}, selector={selector}"
+                )
+            collapsed.append(representative)
+        return collapsed
+
+    def one_fact(
+        self,
+        selector: dict[str, Any],
+        *,
+        parent: dict[str, Any] | None = None,
+        allow_missing: bool = False,
+    ) -> dict[str, Any]:
+        return self._one_fact_from_rows(
+            self.select(selector, parent), selector, allow_missing=allow_missing
+        )
+
+    @classmethod
+    def _one_fact_from_rows(
+        cls,
+        rows: list[dict[str, Any]],
+        selector: dict[str, Any],
+        *,
+        allow_missing: bool = False,
+    ) -> dict[str, Any]:
+        matches = cls._collapse_equivalent_physical_rows(rows, selector)
+        if len(matches) != 1:
+            raise ExecutionError(
+                f"selector must match exactly one fact, got {len(matches)}: {selector}"
+            )
+        row = matches[0]
+        if row.get("missing") and not allow_missing:
+            raise ExecutionError(
+                f"selector must match exactly one non-missing fact, got 0: {selector}"
+            )
+        return row
+
     def unique_value(
         self,
         selector: dict[str, Any],
@@ -738,10 +830,7 @@ class FactStore:
         field: str = "value",
         parent: dict[str, Any] | None = None,
     ) -> float:
-        matches = [row for row in self.select(selector, parent) if not row.get("missing")]
-        if len(matches) != 1:
-            raise ExecutionError(f"selector must match exactly one non-missing fact, got {len(matches)}: {selector}")
-        value = matches[0].get(field)
+        value = self.one_fact(selector, parent=parent).get(field)
         if value is None:
             raise ExecutionError(f"selected fact field {field} is null: {selector}")
         try:
@@ -780,6 +869,7 @@ class FactStore:
             row for row in self.select(selector)
             if str((row.get("dimensions") or {}).get(dimension)) in requested
         ]
+        selected = self._collapse_equivalent_physical_rows(selected, selector)
         if not selected:
             raise ExecutionError("selected set denominator has no usable facts")
         covered = {
@@ -922,9 +1012,13 @@ def bind_groups(
             selected = selector_for_period(selector, role, periods)
             if metric_object == "ratio":
                 matches = store.select(selected, child_parent)
-                non_missing = [row for row in matches if not row.get("missing")]
-                if len(non_missing) == 1:
-                    row = non_missing[0]
+                if matches:
+                    row = store._one_fact_from_rows(
+                        matches, selected, allow_missing=True
+                    )
+                else:
+                    row = None
+                if row is not None and not row.get("missing"):
                     numerator = row.get("numerator")
                     denominator = row.get("denominator")
                     try:
@@ -932,11 +1026,9 @@ def bind_groups(
                         item[f"{role}_denominator"] = float(denominator)
                     except (TypeError, ValueError) as exc:
                         raise ExecutionError(f"ratio group components must be numeric: {selected}") from exc
-                elif len(non_missing) > 1:
-                    raise ExecutionError(f"selector must match exactly one non-missing fact, got {len(non_missing)}: {selected}")
-                elif len(matches) == 1 and matches[0].get("normalization_reason") == "zero_denominator":
-                    numerator = matches[0].get("numerator")
-                    denominator = matches[0].get("denominator")
+                elif row is not None and row.get("normalization_reason") == "zero_denominator":
+                    numerator = row.get("numerator")
+                    denominator = row.get("denominator")
                     if numerator not in (0, 0.0) or denominator not in (0, 0.0):
                         raise ExecutionError(f"zero-denominator structural fact must be 0/0: {selected}")
                     item[f"{role}_numerator"] = 0.0

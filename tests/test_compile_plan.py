@@ -261,9 +261,33 @@ class CompilePlanTests(unittest.TestCase):
             binding["factors"][2]["values_by_period_role"],
             {"analysis": 2.0, "comparison": 1.0},
         )
+        self.assertEqual(binding["metric"]["selector"]["metric_ref"], "target")
+        self.assertEqual(
+            [factor["selector"]["metric_ref"] for factor in binding["factors"][:2]],
+            ["input_a", "input_b"],
+        )
         slots = plan["fetch_requests"][0]["fact_slots"]
         self.assertTrue(all(slot["selector_dimensions"] == {"entity": "entity_x"} for slot in slots))
         self.assertTrue(all("entity" in slot["dimension_refs"] for slot in slots))
+
+    def test_compiled_expression_fact_preserves_logical_metric_ref(self) -> None:
+        ir = base_ir()
+        ir["analysis_task"]["metrics"] = [
+            {"metric_id": "input", "name": "shared_metric", "metric_object": "volume", "unit": "u"},
+        ]
+        ir["custom_calculations"] = [{
+            "requirement_id": "copy_input",
+            "definition_source": "user_query",
+            "expression": {"fact": {"metric_ref": "input", "period_role": "analysis"}},
+            "unit": "u",
+            "view_id": "platform_view",
+            "dimensions": {},
+            "dimension_refs": [],
+        }]
+        plan, report = self.compile(ir)
+        self.assertTrue(report["valid"], report)
+        node = next(node for node in plan["nodes"] if node["type"] == "custom_calculation")
+        self.assertEqual(node["execution"]["expression"]["fact"]["metric_ref"], "input")
 
     def test_yoy_division_formula_selects_scenario_specific_operator(self) -> None:
         ir = base_ir()

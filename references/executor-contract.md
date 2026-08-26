@@ -85,7 +85,9 @@ python3 scripts/execution_runner.py \
 }
 ```
 
-`execution_runtime.periods` 是唯一时期角色映射。`period_role` 可根据 `period` 补充；两者同时存在时必须一致。Provider 投影事实必须满足 `fact_id=stable_id(physical_fact_id,binding_id)`；同一物理事实绑定到不同视角时具有不同逻辑 ID。编译计划产生的事实必须携带事实槽位的 `view_id`，该字段参与索引和选择器匹配。`dimensions` 可以包含任意动态字段；旧事实将维度保存在顶层字段时，可用通用 `execution_runtime.dimension_fields` 数组迁移。
+`execution_runtime.periods` 是唯一时期角色映射。`period_role` 可根据 `period` 补充；两者同时存在时必须一致。Provider 投影事实必须满足 `fact_id=stable_id(physical_fact_id,binding_id)`；同一物理事实绑定到不同逻辑需求时具有不同逻辑 ID。编译计划产生的事实选择器必须优先携带 `metric_ref`，并携带事实槽位的 `view_id`；两者均参与索引和选择器匹配。`dimensions` 可以包含任意动态字段；旧事实将维度保存在顶层字段时，可用通用 `execution_runtime.dimension_fields` 数组迁移。
+
+执行器不得在 Fact Contract 层全局去重逻辑事实。仅当旧计划的 selector 缺少 `metric_ref`、匹配到多条逻辑记录时，可在消费点按相同且非空的 `physical_fact_id` 折叠；折叠前必须核对指标、对象、视角、时期、维度、组件、值、分子分母、单位、缺失状态、定义、可加性、聚合方式和来源引用完全一致。不同物理事实，或任一计算/来源字段冲突，必须继续阻断。聚合也只按该规则消除同一物理事实的重复绑定，不得按数值相等合并事实。
 
 执行器保留源端 `missing` 为 `raw_missing`，并按固定优先级重算标准状态：
 
@@ -100,7 +102,7 @@ python3 scripts/execution_runner.py \
 事实选择器默认把 `dimensions` 作为子集条件；选择大盘或其他固定粒度事实时必须设置 `dimensions_exact=true`，避免整体事实与分组事实同时匹配：
 
 ```json
-{"metric": "metric_ref", "view_id": "view_ref", "dimensions": {}, "dimensions_exact": true}
+{"metric_ref": "logical_metric_ref", "metric": "metric_name", "view_id": "view_ref", "dimensions": {}, "dimensions_exact": true}
 ```
 
 ## 运行时配置
@@ -261,11 +263,11 @@ python3 scripts/execution_runner.py \
 
 ## 输出
 
-执行器 `1.9.0` 支持 `inline` 和 `reference` 两种存储。CLI 默认 `auto`：标准事实超过 1000 行或存在父分组扇出时选择 `reference`，否则选择 `inline`；可显式传入 `--storage-mode`。引用模式的主文件是 `execution_manifest/2.0`，至少包含：
+执行器 `1.10.0` 支持 `inline` 和 `reference` 两种存储。CLI 默认 `auto`：标准事实超过 1000 行或存在父分组扇出时选择 `reference`，否则选择 `inline`；可显式传入 `--storage-mode`。引用模式的主文件是 `execution_manifest/2.0`，至少包含：
 
 ```json
 {
-  "executor": {"name": "scene-analysis-lightweight-executor", "version": "1.9.0"},
+  "executor": {"name": "scene-analysis-lightweight-executor", "version": "1.10.0"},
   "storage": {"mode": "reference", "schema_version": "2.0", "artifact_root": "execution-result.json.artifacts"},
   "plan_hash": "sha256",
   "facts_hash": "sha256",

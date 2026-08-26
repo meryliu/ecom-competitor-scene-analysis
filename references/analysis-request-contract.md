@@ -71,6 +71,8 @@
 4. `custom_calculations`：仅当用户明确给出操作数和运算关系时使用，`definition_source=user_query`。
 5. `attribution_targets`：仅当用户明确要求原因、贡献、拉动或拖累量化时创建。归因与派生并行；“同比增速贡献”通常同时需要同比派生和贡献归因，不能互相替代。
 
+纯归因请求只声明 `attribution_targets` 及其公式输入，不要为了给归因提供目标值而重复增加 `fact_observations`；编译器会从归因目标生成事实需求。只有用户同时明确要求独立展示该事实水平时，才另外声明 `fact_observations`。这是 IR 精简规则，不改变 Resolve、Prepare、Provider 或 Fact Contract 的职责。
+
 用户明确给出归因公式时，公式因子按原顺序完整声明为 `factors`，每项使用稳定 `factor_id` 和 `kind=metric|literal|derived`；公式关系写入只引用 `factor_id` 的 `formula` AST。显式常量不是可省略的校准项：使用 `values_by_period_role` 声明各时期角色值，即使各期相同、最终贡献为 0，也必须参与执行并保留在结果中。派生子表达式使用 `expressions_by_period_role`。`decomposition` 可写 `formula`，由编译器结合场景、目标对象、目标语义、公式形态和因子角色解析已有归因算子；不能把公式形态直接替代场景判断。
 
 `metric_change` 归因内部只使用 `analysis/comparison`；若用户要求同比归因，`comparison` 就是去年同期，不为归因目标额外创建 `analysis_last_year`。兼容输入仅在目标没有 `comparison` 时把其 `analysis_last_year` 确定性归一为 `comparison`。同比数值派生与同比归因可以并存：前者继续使用 `analysis/analysis_last_year`，后者使用 `analysis/comparison`。一个归因算子内不同角色不得指向同一物理时期。

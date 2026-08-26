@@ -32,7 +32,7 @@ from validate_execution import Validator, reject_duplicate_keys
 
 
 COMPILER_NAME = "scene-analysis-plan-compiler"
-COMPILER_VERSION = "1.7.0"
+COMPILER_VERSION = "1.8.0"
 IR_VERSION = "analysis_ir/1.0"
 DEFAULT_RESIDUAL_TOLERANCE = 1e-8
 ALLOWED_CRITICALITIES = {"core", "required", "optional"}
@@ -577,6 +577,7 @@ class Compiler:
     def _fact_selector(
         metric: str,
         *,
+        metric_ref: str | None = None,
         view_id: str | None,
         dimensions: dict[str, Any] | None = None,
         exact: bool = True,
@@ -585,6 +586,8 @@ class Compiler:
             "metric": metric,
             "dimensions": deepcopy(dimensions or {}),
         }
+        if metric_ref is not None:
+            selector["metric_ref"] = metric_ref
         if view_id is not None:
             selector["view_id"] = view_id
         if exact:
@@ -736,10 +739,11 @@ class Compiler:
             if not isinstance(fact, dict):
                 raise CompileError("expression fact must be an object")
             transformed = deepcopy(fact)
-            metric_ref = transformed.pop("metric_ref", None)
+            metric_ref = transformed.get("metric_ref")
             if metric_ref is None:
                 raise CompileError("IR expression fact requires metric_ref")
             metric = self.metric(metric_ref)
+            transformed["metric_ref"] = str(metric_ref)
             transformed["metric"] = metric["name"]
             period_role = require_nonempty_string(transformed.get("period_role"), "expression.fact.period_role")
             self.period(period_role)
@@ -836,6 +840,7 @@ class Compiler:
                     raise CompileError("derived requirement dimensions must be an object")
             selector.update(self._fact_selector(
                 metric["name"],
+                metric_ref=metric_ref,
                 view_id=requirement.get("view_id"),
                 dimensions=self._expression_dimensions(dimensions or {}),
             ))
@@ -947,6 +952,7 @@ class Compiler:
             input_expressions[input_role] = self._bind_fact_domain(
                 self._fact_selector(
                     base_metric["name"],
+                    metric_ref=input_ref,
                     view_id=requirement.get("view_id"),
                     dimensions=self._expression_dimensions(dimensions),
                 ) | {"period_role": role},
@@ -1072,6 +1078,7 @@ class Compiler:
         fact_slot_ids.append(slot_id)
         selector = self._fact_selector(
             metric["name"],
+            metric_ref=metric_ref,
             view_id=requirement.get("view_id"),
             dimensions={},
         ) | {"period_role": role}
@@ -1082,6 +1089,7 @@ class Compiler:
                 {
                     "aggregate": {
                         "selector": {
+                            "metric_ref": metric_ref,
                             "metric": metric["name"],
                             "view_id": requirement.get("view_id"),
                             "period_role": role,
@@ -1463,6 +1471,7 @@ class Compiler:
                 expression = self._bind_fact_domain(
                     self._fact_selector(
                         source_metric["name"],
+                        metric_ref=source_metric_ref,
                         view_id=requirement.get("view_id"),
                         dimensions=self._expression_dimensions(dimensions),
                     ) | {"period_role": source_role},
@@ -2084,10 +2093,20 @@ class Compiler:
         selector_dimensions = self._expression_dimensions(dimensions)
         if include_overall:
             parent_selector = coverage.get("parent_selector") if isinstance(coverage, dict) else None
+            if isinstance(parent_selector, dict):
+                parent_selector = deepcopy(parent_selector)
+                target_metric_ref = str(target["metric_ref"])
+                supplied_metric_ref = parent_selector.get("metric_ref")
+                if supplied_metric_ref not in (None, target_metric_ref):
+                    raise CompileError(
+                        "coverage.parent_selector.metric_ref conflicts with attribution target"
+                    )
+                parent_selector["metric_ref"] = target_metric_ref
             binding["metric"] = {
                 "name": metric["name"],
-                "selector": deepcopy(parent_selector) if isinstance(parent_selector, dict) else self._fact_selector(
-                    metric["name"], view_id=view_id, dimensions=selector_dimensions
+                "selector": parent_selector if isinstance(parent_selector, dict) else self._fact_selector(
+                    metric["name"], metric_ref=str(target["metric_ref"]),
+                    view_id=view_id, dimensions=selector_dimensions
                 ),
             }
         factors = target.get("factors")
@@ -2111,6 +2130,7 @@ class Compiler:
                     factor_dimensions = factor.get("dimensions") or {}
                     item["selector"] = self._fact_selector(
                         factor_metric["name"],
+                        metric_ref=str(factor["metric_ref"]),
                         view_id=view_id,
                         dimensions=self._expression_dimensions(factor_dimensions),
                     )
@@ -2147,7 +2167,8 @@ class Compiler:
         if has_groups:
             binding["groups"] = {
                 "selector": self._fact_selector(
-                    metric["name"], view_id=view_id, dimensions=selector_dimensions
+                    metric["name"], metric_ref=str(target["metric_ref"]),
+                    view_id=view_id, dimensions=selector_dimensions
                 ),
                 "group_dimensions": group_dimensions,
             }

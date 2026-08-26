@@ -330,7 +330,7 @@ runner 在 Provider resolve 前执行归因 IR contract guard。目标及 metric
 9. 生成 `requirement_compilation`，确保每项需求都有节点、阻断或 clarification。
 10. 运行现有计划校验器后输出计划。
 
-编译器生成的事实引用必须包含 `view_id`，并用 `dimensions` 与 `dimensions_exact=true` 固定粒度。分组归因仅在部分覆盖或显式要求整体值时绑定独立大盘事实。
+编译器生成的事实引用必须包含逻辑 `metric_ref` 和 `view_id`，并用 `dimensions` 与 `dimensions_exact=true` 固定粒度。`metric_ref` 用于在同一物理事实服务多个逻辑需求时优先选择对应绑定；它不改变 Provider 的物理取数身份。分组归因仅在部分覆盖或显式要求整体值时绑定独立大盘事实。
 
 Prepare 在事实能力判断前形成统一过滤上下文：`analysis_task.filters` 中可确定性下推的 `eq/in` 条件先规范化为任务级 `selector_dimensions`，再传播到需求、归因目标、每个 metric 因子、derived 因子的事实叶子和所有时期角色；局部维度只可补充不冲突的约束。Compile 使用同一幂等规范化逻辑并验证所有物理事实槽位均继承任务选择器。`selector_dimensions` 的每个键必须进入物理 `dimension_refs`。标量过滤不得自动转成逐成员 fanout，只有显式 `group_dimensions`/父级展开才生成分组输出；无法下推的过滤操作必须在 Prepare 阻断，不能作为无效审计字段继续执行。
 
@@ -356,7 +356,7 @@ Prepare 在事实能力判断前形成统一过滤上下文：`analysis_task.fil
   },
   "compiler": {
     "name": "scene-analysis-plan-compiler",
-    "version": "1.7.0",
+    "version": "1.8.0",
     "source_ir_version": "analysis_ir/1.0",
     "source_ir_sha256": "...",
     "timings": {
