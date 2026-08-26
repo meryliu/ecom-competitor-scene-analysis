@@ -2,6 +2,18 @@
 
 本文件是所有正常竞品分析请求的模型侧入口。业务复杂度不改变入口：模型只生成语义 IR，`run_analysis.py` 内部编译后决定 `fast_fact`、`fast_derived`、`standard` 或 `orchestrated`。
 
+## 0. 可旁路 Query Policy
+
+在生成 IR 前，按用户显式独立问题保留不可变原始 Query，并遵循 [query-understanding/application-contract.md](query-understanding/application-contract.md) 调用本地选择器。选择器只返回相关规则及依赖，不调用 Provider、候选引擎或飞书。
+
+- `no_match`：直接从原始 Query 生成本契约规定的基础 IR。
+- `selected`：在临时语义帧中应用规则；规则可重复判断，但动作以 `(task_id, rule_id, action_id, target_scope_fingerprint)` 去重。依赖规则仍须独立满足适用条件。
+- `fallback_raw`、命令失败、超时或不可解析：按 task 丢弃全部增强中间状态，标记本请求不再尝试 Policy，并从原始 Query 生成基础 IR。Policy 故障不得产生业务 `blocked` 或 `waiting_confirmation`。
+
+增强候选 IR 必须经本地应用校验器确认后才能提交。校验器返回 `commit_pending_confirmation` 表示现有业务参数预检将产生正常业务确认，不属于 Policy 故障；`commit_clarification` 表示 GMV 等规则正常发现用户缺少会改变结果的信息，可直接询问。多个 task 分别提交、澄清或回退，互不影响。
+
+`analysis_task.query` 始终保存原始 Query，不保存改写文案。规则产生的业务默认以可读说明进入 `analysis_task.assumptions`；技术 rule ID、Policy hash、失败码和耗时只留在 `/workspace/runtime` 的 Policy packet 与 validation 产物中。Query Policy 不写入现有候选引擎的任何策略注册表。
+
 ## 1. 生成最小 IR
 
 不要手写执行计划、事实坐标、DAG、标准聚合 AST、派生基础指标或算子能力。单问题使用：

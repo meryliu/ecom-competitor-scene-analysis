@@ -67,6 +67,42 @@ class CompilePlanTests(unittest.TestCase):
         self.assertEqual(len(request["fact_demands"]), 1)
         self.assertNotIn("natural_language_query", request)
 
+    def test_yoy_derived_and_attribution_share_last_year_period(self) -> None:
+        ir = base_ir()
+        ir["analysis_task"]["periods"]["comparison"] = "2025-05"
+        ir["derived_requirements"] = [{
+            "requirement_id": "payment_yoy",
+            "metric_ref": "payment",
+            "metric_object": "volume",
+            "derived_metric_id": "yoy_growth",
+            "definition_status": "registered",
+            "view_id": "platform_view",
+            "criticality": "core",
+        }]
+        ir["attribution_targets"] = [{
+            "target_id": "payment_attr",
+            "metric_ref": "payment",
+            "metric_object": "volume",
+            "scenario": "metric_change",
+            "target_semantics": "absolute_delta",
+            "decomposition": "formula",
+            "periods": {"analysis": "2026-05", "comparison": "2025-05"},
+            "view_id": "platform_view",
+            "factors": [
+                {"factor_id": "settlement", "kind": "metric", "metric_ref": "settlement"},
+                {"factor_id": "rate", "kind": "metric", "metric_ref": "rate"},
+            ],
+            "formula": {
+                "op": "multiply",
+                "args": [{"factor_ref": "settlement"}, {"factor_ref": "rate"}],
+            },
+            "criticality": "core",
+        }]
+        plan, report = self.compile(ir)
+        self.assertTrue(report["valid"], report)
+        self.assertEqual(plan["execution_runtime"]["periods"]["analysis_last_year"], "2025-05")
+        self.assertEqual(plan["execution_runtime"]["periods"]["comparison"], "2025-05")
+
     def test_derived_metric_object_cannot_override_metric_declaration(self) -> None:
         ir = base_ir()
         ir["derived_requirements"] = [{

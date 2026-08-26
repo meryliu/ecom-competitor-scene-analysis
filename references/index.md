@@ -23,5 +23,6 @@
 - [metric-composition-specs.md](metric-composition-specs.md)
 - [output-contract.md](output-contract.md)
 - [resolution-policy-registry.json](resolution-policy-registry.json)
+- `query-understanding/`：Query Policy 应用契约、维护 SOP、运行索引、版本清单和独立规则卡
 - [source-resolution-policy.md](source-resolution-policy.md)
 - [validation-contract.md](validation-contract.md)

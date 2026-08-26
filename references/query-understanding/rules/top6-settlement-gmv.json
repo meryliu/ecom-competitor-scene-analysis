@@ -1,0 +1,28 @@
+{
+  "schema_version": "query_policy_rule/1.0",
+  "policy_version": "query-policy/1.0.0",
+  "rule_id": "top6-settlement-gmv",
+  "name": "TOP6 合计大盘结算 GMV",
+  "version": "1.0.0",
+  "priority": 60,
+  "routing": {"terms": ["TOP6", "大盘", "结算GMV", "结算率"]},
+  "applicability": {
+    "all": ["TOP6合计大盘结算GMV"],
+    "none": ["用户已指定不同的分析范围或拆解思路"]
+  },
+  "actions": [
+    {
+      "action_id": "expand_top6_settlement_performance",
+      "op": "expand_sub_queries",
+      "idempotency": "application_key",
+      "instructions": [
+        "大盘结算GMV指标值、同比增速和TOP6各平台占比",
+        "大盘支付GMV指标值、同比增速和TOP6各平台占比",
+        "大盘结算率指标值、同比增速和各平台结算率"
+      ]
+    }
+  ],
+  "user_explicit_protection": ["用户指定的视角、拆解思路和输出范围"],
+  "boundaries": ["三部分结构仅适用于TOP6合计大盘结算GMV"],
+  "source_ref": {"heading_path": "局部场景规则/TOP6 合计大盘结算 GMV", "block_id": "doxcnksqam4I8bQ5Ex61cY3poce"}
+}

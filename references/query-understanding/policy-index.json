@@ -1,0 +1,38 @@
+{
+  "schema_version": "query_policy_index/1.0",
+  "policy_version": "query-policy/1.0.0",
+  "source_revision": 100,
+  "global_invariants": [
+    "user_explicit_over_default",
+    "narrowest_applicable_scope",
+    "incremental_rewrite_only",
+    "examples_do_not_expand_scope",
+    "runtime_failure_falls_back_to_raw_query"
+  ],
+  "always_rule_ids": ["user-explicit-priority"],
+  "active_rule_ids": [
+    "user-explicit-priority",
+    "terminology-disambiguation",
+    "single-platform-payment-gmv-attribution",
+    "top6-payment-gmv-performance",
+    "single-platform-settlement-gmv",
+    "top6-settlement-gmv",
+    "jd-commission",
+    "gmv-defaults"
+  ],
+  "routing": {
+    "订单价|单价|平均单价|客单价|用户平均单价|用户单均价|MAC单价": ["terminology-disambiguation"],
+    "电商大盘GMV": ["terminology-disambiguation", "top6-payment-gmv-performance"],
+    "支付GMV": ["single-platform-payment-gmv-attribution", "top6-payment-gmv-performance", "gmv-defaults"],
+    "结算GMV": ["single-platform-settlement-gmv", "top6-settlement-gmv", "gmv-defaults"],
+    "京东闭环电商佣金收入|闭环电商佣金收入": ["jd-commission"],
+    "GMV": ["gmv-defaults"]
+  },
+  "limits": {
+    "max_selected_rules": 8,
+    "max_dependency_depth": 4,
+    "max_application_rounds": 8,
+    "max_expanded_requirements": 20,
+    "max_packet_bytes": 8192
+  }
+}

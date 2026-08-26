@@ -1,0 +1,40 @@
+{
+  "schema_version": "query_policy_rule/1.0",
+  "policy_version": "query-policy/1.0.0",
+  "rule_id": "terminology-disambiguation",
+  "name": "术语消歧",
+  "version": "1.0.0",
+  "priority": 80,
+  "routing": {"terms": ["订单价", "单价", "平均单价", "客单价", "用户平均单价", "用户单均价", "MAC单价", "电商大盘GMV"]},
+  "applicability": {"all": ["用户没有给出更明确或冲突的业务口径"]},
+  "actions": [
+    {
+      "action_id": "default_order_price_to_payment",
+      "op": "set_default",
+      "idempotency": "application_key",
+      "when_terms": ["订单价", "单价", "平均单价"],
+      "field": "metric",
+      "value": "支付订单价"
+    },
+    {
+      "action_id": "default_customer_price_to_mac",
+      "op": "set_default",
+      "idempotency": "application_key",
+      "when_terms": ["客单价", "用户平均单价", "用户单均价", "MAC单价"],
+      "field": "metric",
+      "value": "MAC订单价"
+    },
+    {
+      "action_id": "default_ecommerce_market_to_top6",
+      "op": "set_default",
+      "idempotency": "application_key",
+      "when_terms": ["电商大盘GMV"],
+      "field": "business_scope",
+      "value": "TOP6合计",
+      "scope": "GMV only"
+    }
+  ],
+  "user_explicit_protection": ["更明确的订单价口径", "用户明确指定的 GMV 范围"],
+  "boundaries": ["TOP6 合计默认不外推到非 GMV 指标"],
+  "source_ref": {"heading_path": "全局约定/术语消歧", "block_id": "doxcnvnHHSdpLDzHVJmUoOzwY5d"}
+}

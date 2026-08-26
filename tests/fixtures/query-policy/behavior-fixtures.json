@@ -1,0 +1,18 @@
+{
+  "schema_version": "query_policy_fixtures/1.0",
+  "policy_version": "query-policy/1.0.0",
+  "cases": [
+    {"case_id": "term-payment-order-price", "kind": "positive", "query": "看一下京东8月订单价", "expected_rules": ["terminology-disambiguation"], "expected_contains": ["支付订单价"]},
+    {"case_id": "term-explicit-protection", "kind": "negative", "query": "看一下京东8月结算订单价", "expected_rules": ["user-explicit-priority"], "forbidden_contains": ["支付订单价"]},
+    {"case_id": "gmv-all-missing", "kind": "positive", "query": "看一下GMV", "expected_rules": ["gmv-defaults"], "expected_contains": ["支付GMV"], "expected_clarifications": ["平台或TOP6大盘", "时间周期"]},
+    {"case_id": "settlement-platform-missing", "kind": "positive", "query": "看一下8月结算GMV", "expected_rules": ["gmv-defaults", "top6-settlement-gmv"], "expected_contains": ["TOP6平台合计大盘", "结算GMV", "支付GMV", "结算率"]},
+    {"case_id": "single-payment-attribution", "kind": "positive", "query": "分析8月京东支付GMV下滑原因", "expected_rules": ["single-platform-payment-gmv-attribution"], "expected_contains": ["MAC", "MAC月单量", "MAC订单价", "自然月总天数/30"]},
+    {"case_id": "single-payment-no-attribution", "kind": "negative", "query": "看一下8月京东支付GMV表现", "forbidden_rules": ["single-platform-payment-gmv-attribution"]},
+    {"case_id": "single-settlement-performance", "kind": "positive", "query": "看一下8月京东结算GMV表现", "expected_rules": ["single-platform-settlement-gmv"], "expected_sub_queries": ["结算GMV指标值及同比增速", "支付GMV归因", "结算率指标值及同比增速"]},
+    {"case_id": "single-settlement-explicit-output", "kind": "negative", "query": "只看8月京东结算GMV，不做归因和结算率分析", "expected_rules": ["user-explicit-priority"], "forbidden_contains": ["支付GMV归因", "结算率"]},
+    {"case_id": "top6-payment-performance", "kind": "positive", "query": "看一下8月电商大盘GMV表现", "expected_rules": ["terminology-disambiguation", "top6-payment-gmv-performance"], "expected_sub_queries": ["指标值", "同比增速", "TOP6各平台占比"]},
+    {"case_id": "top6-settlement-performance", "kind": "positive", "query": "看一下8月大盘结算GMV表现", "expected_rules": ["top6-settlement-gmv"], "expected_contains": ["大盘结算GMV", "大盘支付GMV", "大盘结算率"]},
+    {"case_id": "jd-single-unspecified", "kind": "positive", "query": "看一下8月京东闭环电商佣金收入", "expected_rules": ["jd-commission"], "expected_sub_queries": ["闭环电商佣金收入，平台为京东", "京东闭环电商佣金收入（3P佣金）"]},
+    {"case_id": "jd-multi-platform", "kind": "negative", "query": "对比京东和抖音8月闭环电商佣金收入", "expected_rules": ["jd-commission"], "forbidden_contains": ["额外增加京东3P佣金口径"]}
+  ]
+}

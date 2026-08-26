@@ -18,17 +18,19 @@ description: WHEN 用户需要基于竞品飞书宏观表格做竞品事实查�
 
 先区分任务类型，不要把业务复杂度当成文档加载条件：
 
-- **正常分析请求**：用户要查询或分析竞品数据。无论最终档位是 `fast_fact`、`fast_derived`、`standard` 还是 `orchestrated`，都以 [references/analysis-request-contract.md](references/analysis-request-contract.md) 作为唯一人工查询契约，生成 IR 并调用统一 runner。只有命中相应业务语义时才额外读取机器注册表，执行档位由编译器决定。
+- **正常分析请求**：用户要查询或分析竞品数据。无论最终档位是 `fast_fact`、`fast_derived`、`standard` 还是 `orchestrated`，都以 [references/analysis-request-contract.md](references/analysis-request-contract.md) 作为唯一人工查询契约；先执行其中的可旁路 Query Policy 增强，再生成 IR 并调用统一 runner。只有命中相应业务语义时才额外读取机器注册表，执行档位由编译器决定。
 - **诊断或维护**：用户明确要求定位错误、修改协议/代码/注册定义，或统一 runner 返回结构化失败后需要修复。此时才按“诊断路由”读取详细契约或源码。
 
 正常分析不得预读 `scripts/`、`tests/`、完整执行契约或校验契约。不要通过检查实现代码来确认能力；以编译结果、结构化状态和 runner 产物为准。
 
 ## 正常分析
 
-1. 读取统一分析请求契约，从 Query 生成精简 `analysis_ir/1.0`；同一轮多个独立问题生成一个 `analysis_bundle/1.0`。
-2. 只声明用户要求的业务指标、时期、范围、派生和归因目标。不要为标准指标组合补写基础指标，不要为年/季/月粒度降级手写 `input_adaptations` 或计算 AST；统一 runner 根据源表能力生成这些执行细节。
-3. 统一 runner 在 Provider 调用前先执行任务级业务参数预检，再执行原有归因 IR 严格校验。预检只使用当前 task 的 Query、结构化 IR 和请求级确认补丁；明确“同比/环比”且时期唯一时可确定性补齐，存在多个会改变结果的时期、场景、公式或拆解维度解释时返回 `waiting_confirmation`，不得从未结构化历史对话补充指标或范围。完整参数不改写，非法版本、引用、AST 和冲突补丁仍按原错误码 fail-fast。之后按需求生成有界候选。每个需求分别保留核心指标语义、时间粒度提示、注册派生意图和可选 `metric_constraints`；核心度量词（如订单量、订单价、GMV）不得被当成派生词剥离，时间粒度词不参与派生得分。无约束需求保留既有候选路径；有约束需求联合完整短语、核心指标、维度元信息子集及按需派生假设召回，再以核心语义硬门、约束满足、派生履约、粒度与可加性分层排序，维度或派生证据不能挽救错误核心指标。完整语义置信度与原始词面分分别记录，完整口径候选不能被词面 TopK 提前丢弃。Resolve 只判断逻辑可得性，不读取物理坐标；完整口径事实优先。维度回退先在当前指标支持的物理维度中匹配规范名/别名，再按实时枚举域唯一性绑定；该规则适用于所有维度，多个可行物理维度必须确认，不维护值到维度的静态映射。binding 按需求隔离，不覆盖共享指标。若旧路径没有可行候选且拒绝原因包含核心语义门槛失败，才在同一请求内用当前 Query 提取一次保守核心提示并重评；成功绑定不走回退，不继承历史指标，不增加 Provider 调用。Prepare 再校验实际事实块、时期、维度和值域覆盖，并仅对同指标成员关系、用户显式公式或注册定义生成安全 AST；两个独立指标不得仅凭名称自动相减。模型推断单位不硬过滤也不加分，Prepare 用源元信息纠正；权威单位声明及 Compile/Execution 单位校验保持严格。其余粒度上卷、组合和源侧派生行为遵循 [references/fact-resolution.md](references/fact-resolution.md)。
-4. 只运行一次统一入口：
+1. 读取统一分析请求契约。对用户显式独立问题分别保留不可变原始 Query，在 `/workspace/runtime` 的 task 目录运行 `scripts/select_query_policy.py`。`no_match`、`fallback_raw`、超时、命令失败或输出不可解析时，本 task 禁止再次尝试 Policy，直接从原始 Query 生成 IR。
+2. `selected` 时只读取返回的有界规则包和 [references/query-understanding/application-contract.md](references/query-understanding/application-contract.md)，在临时语义帧中应用规则并生成候选 IR，再运行 `scripts/validate_query_policy_application.py`。只有 `commit|commit_pending_confirmation` 才提交候选 IR；`commit_clarification` 询问规则正常产生的业务问题；`fallback_raw` 按 task 丢弃全部默认、展开、assumptions、clarifications 和 action 记录，从原始 Query 生成一次基础 IR。Query Policy 故障不得成为 `blocked`、`waiting_confirmation` 或非零分析状态。
+3. 从提交后的语义生成精简 `analysis_ir/1.0`；同一轮多个独立问题生成一个 `analysis_bundle/1.0`。`analysis_task.query` 必须保留原始 Query；规则只补缺失语义，用户明确指标、平台、时期、视角、拆解、口径和输出优先。
+4. 只声明用户要求或通过 Query Policy 正常补充的业务指标、时期、范围、派生和归因目标。不要为标准指标组合补写基础指标，不要为年/季/月粒度降级手写 `input_adaptations` 或计算 AST；统一 runner 根据源表能力生成这些执行细节。
+5. 统一 runner 在 Provider 调用前先执行任务级业务参数预检，再执行原有归因 IR 严格校验。预检只使用当前 task 的 Query、结构化 IR 和请求级确认补丁；明确“同比/环比”且时期唯一时可确定性补齐，存在多个会改变结果的时期、场景、公式或拆解维度解释时返回 `waiting_confirmation`，不得从未结构化历史对话补充指标或范围。完整参数不改写，非法版本、引用、AST 和冲突补丁仍按原错误码 fail-fast。之后按需求生成有界候选。每个需求分别保留核心指标语义、时间粒度提示、注册派生意图和可选 `metric_constraints`；核心度量词（如订单量、订单价、GMV）不得被当成派生词剥离，时间粒度词不参与派生得分。无约束需求保留既有候选路径；有约束需求联合完整短语、核心指标、维度元信息子集及按需派生假设召回，再以核心语义硬门、约束满足、派生履约、粒度与可加性分层排序，维度或派生证据不能挽救错误核心指标。完整语义置信度与原始词面分分别记录，完整口径候选不能被词面 TopK 提前丢弃。Resolve 只判断逻辑可得性，不读取物理坐标；完整口径事实优先。维度回退先在当前指标支持的物理维度中匹配规范名/别名，再按实时枚举域唯一性绑定；该规则适用于所有维度，多个可行物理维度必须确认，不维护值到维度的静态映射。binding 按需求隔离，不覆盖共享指标。若旧路径没有可行候选且拒绝原因包含核心语义门槛失败，才在同一请求内用当前 Query 提取一次保守核心提示并重评；成功绑定不走回退，不继承历史指标，不增加 Provider 调用。Prepare 再校验实际事实块、时期、维度和值域覆盖，并仅对同指标成员关系、用户显式公式或注册定义生成安全 AST；两个独立指标不得仅凭名称自动相减。模型推断单位不硬过滤也不加分，Prepare 用源元信息纠正；权威单位声明及 Compile/Execution 单位校验保持严格。其余粒度上卷、组合和源侧派生行为遵循 [references/fact-resolution.md](references/fact-resolution.md)。
+6. 只运行一次统一分析入口：
 
 ```bash
 python3 scripts/run_analysis.py \
@@ -36,8 +38,8 @@ python3 scripts/run_analysis.py \
   --work-dir <run-directory>
 ```
 
-5. 成功执行后只读取顶层精简 `answer-payload.json` 组织业务答案。任务目录保留完整公式、事实、`fact_capability_plan` 和 canonical selectors，正常成功路径不要读取。
-6. 同一输入重跑默认使用 `--resume auto` 复用已校验 facts checkpoint；只有明确要求忽略 checkpoint 时使用 `--fresh`。
+7. 成功执行后只读取顶层精简 `answer-payload.json` 组织业务答案。任务目录保留完整公式、事实、`fact_capability_plan` 和 canonical selectors，正常成功路径不要读取。
+8. 同一输入重跑默认使用 `--resume auto` 复用已校验 facts checkpoint；只有明确要求忽略 checkpoint 时使用 `--fresh`。
 
 编译器根据实际 IR 自动选择四种执行档位；模型不预选档位，也不单独调用 `compile_plan.py`、`run_fetch.py`、`run_fast_query.py` 或 `validate_execution.py`。Provider 直接生成 `scene_facts/2.0`，runner 内部完成编译、需求合并、一次取数、计算和校验。
 
@@ -49,6 +51,7 @@ python3 scripts/run_analysis.py \
 3. NEVER 把缓存、运行产物或正式交付产物写到 `/workspace/runtime` 之外。
 4. NEVER 在正常分析路径读取大量中间产物或源码来替代 `answer-payload.json`。
 5. NEVER 修改竞品飞书源表、发布看板或执行生产变更。
+6. NEVER 因 Query Policy 资源、依赖、应用或校验故障阻断正常分析；必须按 task 原子回退原始 Query。
 
 ## 结果处理
 
@@ -95,6 +98,8 @@ python3 scripts/run_analysis.py \
 - 数据源 URL、Sheet 角色或 stale 策略维护：[references/data-sources/competitor-macro/source-guide.md](references/data-sources/competitor-macro/source-guide.md)
 - 计划或最终质量错误：[references/validation-contract.md](references/validation-contract.md)
 - 归因内核升级：[references/attribution-engine-integration.md](references/attribution-engine-integration.md)
+- Query Policy 规则、依赖、应用或回退：[references/query-understanding/application-contract.md](references/query-understanding/application-contract.md)
+- 飞书 Query Policy 高频更新、编译和 Review：[references/query-understanding/maintenance-sop.md](references/query-understanding/maintenance-sop.md)
 
 先看顶层结果、`run-state.json` 和结构化错误，再读取对应契约；只有契约和产物无法解释问题，或用户明确要求修改实现时，才检查相关脚本和测试。源码按组件定向读取，不遍历整个项目。
 
@@ -105,6 +110,7 @@ python3 scripts/run_analysis.py \
 - 命名集合：[references/dimension-set-registry.json](references/dimension-set-registry.json)
 - 非标准名称与源结构的解析决策逻辑：[references/resolution-policy-registry.json](references/resolution-policy-registry.json)
 - 复合语义到可执行业务意图的有限展开：[references/business-intent-policy-registry.json](references/business-intent-policy-registry.json)
+- Query 理解业务补充规则：[references/query-understanding/policy-manifest.json](references/query-understanding/policy-manifest.json) 与 `references/query-understanding/rules/`
 - 指标组合：[references/metric-composition-registry.json](references/metric-composition-registry.json)
 - 派生指标：[references/derived-metric-registry.json](references/derived-metric-registry.json)
 - 数据源连接与 Sheet 角色：[references/data-sources/competitor-macro/source-config.json](references/data-sources/competitor-macro/source-config.json)

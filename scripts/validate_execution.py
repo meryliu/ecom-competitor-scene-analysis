@@ -655,9 +655,6 @@ class Validator:
                     self.add("EXEC-003", "ERROR", "$.execution_runtime.periods", "periods 必须是时期角色到实际时期的对象", "改为 JSON 对象")
                 elif isinstance(runtime.get("periods"), dict):
                     runtime_periods = runtime["periods"]
-                    values = [str(value) for value in runtime_periods.values()]
-                    if len(values) != len(set(values)):
-                        self.add("EXEC-012", "ERROR", "$.execution_runtime.periods", "不同时期角色不能映射到同一个时期", "提供唯一的时期角色映射")
                 dimension_fields = runtime.get("dimension_fields")
                 if dimension_fields is not None and (
                     not isinstance(dimension_fields, list)
@@ -823,6 +820,10 @@ class Validator:
                                 self.add("EXEC-020", "ERROR", f"{path}.binding.periods.{role}", "归因绑定缺少必需时期角色", "补齐时期映射", node_id=node_id)
                             elif role in runtime_periods and str(periods[role]) != str(runtime_periods[role]):
                                 self.add("EXEC-021", "ERROR", f"{path}.binding.periods.{role}", "归因绑定时期与 execution_runtime 不一致", "统一使用 execution_runtime.periods", node_id=node_id)
+                        if all(role in periods for role in roles):
+                            role_periods = [str(periods[role]) for role in roles]
+                            if len(role_periods) != len(set(role_periods)):
+                                self.add("EXEC-012", "ERROR", f"{path}.binding.periods", "同一归因算子的时期角色不能映射到同一个时期", "为归因角色提供不同物理时期", node_id=node_id)
                     has_factors = isinstance(source.get("factors"), list) and bool(source.get("factors"))
                     has_groups = isinstance(source.get("groups"), (dict, list)) and bool(source.get("groups"))
                     if not has_factors and not has_groups:

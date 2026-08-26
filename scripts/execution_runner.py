@@ -524,9 +524,9 @@ def normalize_facts(
     periods: dict[str, str],
     dimension_fields: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    if len({str(value) for value in periods.values()}) != len(periods):
-        raise ExecutionError("execution_runtime.periods must map roles to unique period values")
-    period_to_role = {str(value): str(role) for role, value in periods.items()}
+    period_to_roles: dict[str, list[str]] = {}
+    for role, value in periods.items():
+        period_to_roles.setdefault(str(value), []).append(str(role))
     normalized: list[dict[str, Any]] = []
     seen_ids: dict[str, int] = {}
     for index, raw in enumerate(rows):
@@ -543,19 +543,25 @@ def normalize_facts(
         row["dimensions"] = dimensions
         period = row.get("period")
         supplied_role = row.get("period_role")
-        mapped_role = period_to_role.get(str(period)) if period is not None else None
-        if supplied_role is not None and mapped_role is not None and str(supplied_role) != mapped_role:
-            raise ExecutionError(
-                f"facts[{index}] period_role {supplied_role!r} conflicts with period {period!r} mapped to {mapped_role!r}"
-            )
-        if supplied_role is not None and str(supplied_role) in periods and period is not None:
-            expected_period = str(periods[str(supplied_role)])
-            if str(period) != expected_period:
+        if supplied_role is not None:
+            role = str(supplied_role)
+            if role not in periods:
+                raise ExecutionError(
+                    f"facts[{index}] period_role {supplied_role!r} is missing from execution_runtime.periods"
+                )
+            expected_period = str(periods[role])
+            if period is not None and str(period) != expected_period:
                 raise ExecutionError(
                     f"facts[{index}] period {period!r} conflicts with period_role {supplied_role!r} mapped to {expected_period!r}"
                 )
-        if supplied_role is None and mapped_role is not None:
-            row["period_role"] = mapped_role
+        elif period is not None:
+            matching_roles = period_to_roles.get(str(period), [])
+            if len(matching_roles) == 1:
+                row["period_role"] = matching_roles[0]
+            elif len(matching_roles) > 1:
+                raise ExecutionError(
+                    f"facts[{index}] period {period!r} maps to multiple roles; period_role is required"
+                )
         numerator = row.get("numerator")
         denominator = row.get("denominator")
         raw_missing = row.get("raw_missing", row.get("missing"))
@@ -1176,6 +1182,8 @@ def validate_period_mapping(binding_periods: Any, runtime_periods: dict[str, str
                 f"binding period {role!r}={binding_value!r} conflicts with execution_runtime value {runtime_value!r}"
             )
         resolved[role] = runtime_periods[role]
+    if len({str(value) for value in resolved.values()}) != len(resolved):
+        raise ExecutionError("attribution binding roles must map to unique period values")
     return resolved
 
 

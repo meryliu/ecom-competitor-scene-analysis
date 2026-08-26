@@ -1,0 +1,50 @@
+{
+  "schema_version": "query_policy_rule/1.0",
+  "policy_version": "query-policy/1.0.0",
+  "rule_id": "gmv-defaults",
+  "name": "GMV 缺失信息与默认口径",
+  "version": "1.0.0",
+  "priority": 90,
+  "routing": {"terms": ["GMV", "支付GMV", "结算GMV"]},
+  "applicability": {"all": ["Query存在GMV口径、平台或时间缺失"]},
+  "actions": [
+    {
+      "action_id": "default_metric_to_payment_gmv",
+      "op": "set_default",
+      "idempotency": "application_key",
+      "order": 1,
+      "when": "只说GMV，未说明支付或结算",
+      "field": "metric",
+      "value": "支付GMV"
+    },
+    {
+      "action_id": "clarify_payment_platform_and_time",
+      "op": "clarify",
+      "idempotency": "application_key",
+      "order": 2,
+      "when": "支付GMV的平台和时间均缺失",
+      "missing_fields": ["platform_scope", "period"],
+      "questions": ["要看哪家平台或TOP6大盘？", "具体时间周期是什么？"]
+    },
+    {
+      "action_id": "default_missing_platform_to_top6",
+      "op": "set_default",
+      "idempotency": "application_key",
+      "order": 2,
+      "when": "支付GMV或结算GMV只缺平台且时间明确",
+      "field": "platform_scope",
+      "value": "TOP6平台合计大盘"
+    },
+    {
+      "action_id": "clarify_payment_time",
+      "op": "clarify",
+      "idempotency": "application_key",
+      "order": 2,
+      "when": "支付GMV只缺时间且平台明确",
+      "missing_fields": ["period"],
+      "questions": ["具体时间周期是什么？"]
+    }
+  ],
+  "boundaries": ["按行判断适用范围", "先确定GMV子口径，再处理平台和时间", "只缺时间的规则不自动外推到结算GMV或其他指标"],
+  "source_ref": {"heading_path": "例外与澄清/GMV 缺失信息与默认口径", "block_id": "doxcnfyYk1T2wRHJYtY87E559Xg"}
+}

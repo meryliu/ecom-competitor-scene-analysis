@@ -1,0 +1,35 @@
+{
+  "schema_version": "query_policy_rule/1.0",
+  "policy_version": "query-policy/1.0.0",
+  "rule_id": "jd-commission",
+  "name": "京东闭环电商佣金收入口径",
+  "version": "1.0.0",
+  "priority": 85,
+  "routing": {"terms": ["京东", "闭环电商佣金收入", "3P佣金", "可比口径"]},
+  "applicability": {"all": ["京东", "闭环电商佣金收入"]},
+  "actions": [
+    {
+      "action_id": "expand_jd_dual_commission_scope",
+      "op": "expand_sub_queries",
+      "idempotency": "application_key",
+      "when": "只查询京东且未指定口径",
+      "instructions": ["闭环电商佣金收入，平台为京东", "京东闭环电商佣金收入（3P佣金）"]
+    },
+    {
+      "action_id": "normalize_multi_platform_commission",
+      "op": "rewrite",
+      "idempotency": "application_key",
+      "when": "多平台查询中包含京东",
+      "instruction": "统一查询闭环电商佣金收入，不额外增加京东3P佣金口径"
+    },
+    {
+      "action_id": "preserve_explicit_commission_scope",
+      "op": "preserve",
+      "idempotency": "application_key",
+      "when": "用户明确可比口径或3P佣金",
+      "fields": ["business_definition"]
+    }
+  ],
+  "boundaries": ["不扩展到京东GMV、结算率或其他指标"],
+  "source_ref": {"heading_path": "例外与澄清/京东闭环电商佣金收入口径", "block_id": "doxcnd5qQBwnoRZg1cH3Ek9Q0Lg"}
+}

@@ -1,0 +1,20 @@
+{
+  "schema_version": "query_policy_rule/1.0",
+  "policy_version": "query-policy/1.0.0",
+  "rule_id": "user-explicit-priority",
+  "name": "用户明确表达优先",
+  "version": "1.0.0",
+  "priority": 100,
+  "routing": {"always_evaluate_with_selected_rules": true},
+  "applicability": {"all": ["存在默认规则可能修改用户表达"]},
+  "actions": [
+    {
+      "action_id": "preserve_explicit_slots",
+      "op": "preserve",
+      "idempotency": "application_key",
+      "fields": ["metric", "platform", "time", "view", "decomposition", "business_definition", "output_requirements"]
+    }
+  ],
+  "boundaries": ["默认规则只补充用户未明确指定的部分"],
+  "source_ref": {"heading_path": "全局约定/用户明确表达优先", "block_id": "doxcnoJtWRGgYAxD58ubp8kyPLd"}
+}

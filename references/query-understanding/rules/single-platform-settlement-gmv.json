@@ -1,0 +1,25 @@
+{
+  "schema_version": "query_policy_rule/1.0",
+  "policy_version": "query-policy/1.0.0",
+  "rule_id": "single-platform-settlement-gmv",
+  "name": "单个平台结算 GMV",
+  "version": "1.0.0",
+  "priority": 60,
+  "routing": {"terms": ["结算GMV", "结算率", "表现", "归因"]},
+  "applicability": {
+    "all": ["单个平台", "结算GMV表现或归因"],
+    "none": ["用户已指定不同的分析范围或拆解思路"]
+  },
+  "actions": [
+    {
+      "action_id": "expand_single_platform_settlement",
+      "op": "expand_sub_queries",
+      "idempotency": "application_key",
+      "instructions": ["该平台结算GMV指标值及同比增速", "该平台支付GMV归因", "该平台结算率指标值及同比增速"]
+    }
+  ],
+  "relations": {"depends_on": ["single-platform-payment-gmv-attribution"]},
+  "user_explicit_protection": ["用户指定的视角、拆解思路和输出范围"],
+  "boundaries": ["不声明结算GMV、支付GMV和结算率之间的计算关系", "依赖规则仍须独立满足适用条件"],
+  "source_ref": {"heading_path": "局部场景规则/单个平台结算 GMV", "block_id": "doxcn4Wc2wEZYDdnVvwy6YAy7xh"}
+}

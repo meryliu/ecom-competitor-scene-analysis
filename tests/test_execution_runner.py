@@ -44,6 +44,33 @@ def fact(slot_id: str, value: float = 1.0) -> dict:
 
 
 class NormalizeFactsTests(unittest.TestCase):
+    def test_explicit_roles_can_share_one_physical_period_across_requirements(self) -> None:
+        rows = [
+            {**fact("last_year_yoy"), "period": "2025-05", "period_role": "analysis_last_year"},
+            {**fact("comparison_attr"), "period": "2025-05", "period_role": "comparison"},
+        ]
+        normalized = normalize_facts(
+            rows,
+            {
+                "analysis": "2026-05",
+                "analysis_last_year": "2025-05",
+                "comparison": "2025-05",
+            },
+        )
+        self.assertEqual(
+            [item["period_role"] for item in normalized],
+            ["analysis_last_year", "comparison"],
+        )
+
+    def test_shared_physical_period_requires_explicit_role(self) -> None:
+        row = {**fact("ambiguous"), "period": "2025-05"}
+        row.pop("period_role")
+        with self.assertRaisesRegex(ExecutionError, "maps to multiple roles"):
+            normalize_facts(
+                [row],
+                {"analysis_last_year": "2025-05", "comparison": "2025-05"},
+            )
+
     def test_six_registered_tr_compositions_execute_with_shared_facts(self) -> None:
         definitions = (
             ("ad_payment", "广告支付TR", "competitor_ad_payment_tr"),

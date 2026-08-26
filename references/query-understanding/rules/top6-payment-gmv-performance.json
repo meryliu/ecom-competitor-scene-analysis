@@ -1,0 +1,30 @@
+{
+  "schema_version": "query_policy_rule/1.0",
+  "policy_version": "query-policy/1.0.0",
+  "rule_id": "top6-payment-gmv-performance",
+  "name": "TOP6 合计大盘支付 GMV 表现",
+  "version": "1.0.0",
+  "priority": 60,
+  "routing": {"terms": ["电商大盘GMV", "TOP6", "支付GMV", "表现"]},
+  "applicability": {
+    "any": ["电商大盘GMV", "明确TOP6合计大盘支付GMV"],
+    "all_for_expansion": ["表现", "用户未限定输出"]
+  },
+  "actions": [
+    {
+      "action_id": "default_top6_payment_scope",
+      "op": "set_default",
+      "idempotency": "application_key",
+      "field": "business_scope",
+      "value": "TOP6合计大盘支付GMV"
+    },
+    {
+      "action_id": "expand_top6_payment_performance",
+      "op": "expand_sub_queries",
+      "idempotency": "application_key",
+      "instructions": ["指标值", "同比增速", "TOP6各平台占比"]
+    }
+  ],
+  "boundaries": ["输出组合不用于单个平台、结算GMV或其他指标"],
+  "source_ref": {"heading_path": "局部场景规则/TOP6 合计大盘支付 GMV 表现", "block_id": "doxcngGBNZd9gA1Qq6YyOkAEr7c"}
+}
