@@ -27,7 +27,7 @@ description: WHEN 用户需要基于竞品飞书宏观表格做竞品事实查�
 
 1. 读取统一分析请求契约，从 Query 生成精简 `analysis_ir/1.0`；同一轮多个独立问题生成一个 `analysis_bundle/1.0`。
 2. 只声明用户要求的业务指标、时期、范围、派生和归因目标。不要为标准指标组合补写基础指标，不要为年/季/月粒度降级手写 `input_adaptations` 或计算 AST；统一 runner 根据源表能力生成这些执行细节。
-3. 统一 runner 先在 Provider 调用前校验归因 IR 的指标引用、公式 AST、因子引用和场景时期角色，再按需求生成有界候选。每个需求分别保留核心指标语义、时间粒度提示、注册派生意图和可选 `metric_constraints`；核心度量词（如订单量、订单价、GMV）不得被当成派生词剥离，时间粒度词不参与派生得分。无约束需求保留既有候选路径；有约束需求联合完整短语、核心指标、维度元信息子集及按需派生假设召回，再以核心语义硬门、约束满足、派生履约、粒度与可加性分层排序，维度或派生证据不能挽救错误核心指标。完整语义置信度与原始词面分分别记录，完整口径候选不能被词面 TopK 提前丢弃。Resolve 只判断逻辑可得性，不读取物理坐标；完整口径事实优先。维度回退先在当前指标支持的物理维度中匹配规范名/别名，再按实时枚举域唯一性绑定；该规则适用于所有维度，多个可行物理维度必须确认，不维护值到维度的静态映射。binding 按需求隔离，不覆盖共享指标。若旧路径没有可行候选且拒绝原因包含核心语义门槛失败，才在同一请求内用当前 Query 提取一次保守核心提示并重评；成功绑定不走回退，不继承历史指标，不增加 Provider 调用。Prepare 再校验实际事实块、时期、维度和值域覆盖，并仅对同指标成员关系、用户显式公式或注册定义生成安全 AST；两个独立指标不得仅凭名称自动相减。模型推断单位不硬过滤也不加分，Prepare 用源元信息纠正；权威单位声明及 Compile/Execution 单位校验保持严格。其余粒度上卷、组合和源侧派生行为遵循 [references/fact-resolution.md](references/fact-resolution.md)。
+3. 统一 runner 在 Provider 调用前先执行任务级业务参数预检，再执行原有归因 IR 严格校验。预检只使用当前 task 的 Query、结构化 IR 和请求级确认补丁；明确“同比/环比”且时期唯一时可确定性补齐，存在多个会改变结果的时期、场景、公式或拆解维度解释时返回 `waiting_confirmation`，不得从未结构化历史对话补充指标或范围。完整参数不改写，非法版本、引用、AST 和冲突补丁仍按原错误码 fail-fast。之后按需求生成有界候选。每个需求分别保留核心指标语义、时间粒度提示、注册派生意图和可选 `metric_constraints`；核心度量词（如订单量、订单价、GMV）不得被当成派生词剥离，时间粒度词不参与派生得分。无约束需求保留既有候选路径；有约束需求联合完整短语、核心指标、维度元信息子集及按需派生假设召回，再以核心语义硬门、约束满足、派生履约、粒度与可加性分层排序，维度或派生证据不能挽救错误核心指标。完整语义置信度与原始词面分分别记录，完整口径候选不能被词面 TopK 提前丢弃。Resolve 只判断逻辑可得性，不读取物理坐标；完整口径事实优先。维度回退先在当前指标支持的物理维度中匹配规范名/别名，再按实时枚举域唯一性绑定；该规则适用于所有维度，多个可行物理维度必须确认，不维护值到维度的静态映射。binding 按需求隔离，不覆盖共享指标。若旧路径没有可行候选且拒绝原因包含核心语义门槛失败，才在同一请求内用当前 Query 提取一次保守核心提示并重评；成功绑定不走回退，不继承历史指标，不增加 Provider 调用。Prepare 再校验实际事实块、时期、维度和值域覆盖，并仅对同指标成员关系、用户显式公式或注册定义生成安全 AST；两个独立指标不得仅凭名称自动相减。模型推断单位不硬过滤也不加分，Prepare 用源元信息纠正；权威单位声明及 Compile/Execution 单位校验保持严格。其余粒度上卷、组合和源侧派生行为遵循 [references/fact-resolution.md](references/fact-resolution.md)。
 4. 只运行一次统一入口：
 
 ```bash
@@ -54,7 +54,7 @@ python3 scripts/run_analysis.py \
 
 - `success`：直接输出通过质量闸门的结果、口径和必要质量说明。
 - `partial_success`：输出已保留的有效结果并明确未完成范围；归因残差超阈值时同时保留 rows、summary、残差、warning 和边界信息。若 `model_completion` 给出的成功 facts、唯一公式和校验条件足够，可做低风险补算并披露口径，但不得把节点、任务或顶层状态包装成 `success`。
-- `waiting_confirmation`：只针对会改变结果的指标、维度、时期、范围、分母或公式候选向用户澄清。
+- `waiting_confirmation`：只针对会改变结果的指标、维度、时期、范围、分母、归因场景、公式或拆解维度候选向用户澄清。业务参数 case 使用当前 Query/IR 的 `context_fingerprint`，旧 case 不得跨请求复用。
 - `blocked` 或命令退出码非零：读取 `run-state.json` 定位阶段，再进入诊断路由；不得猜测结果。
 - Provider 返回 `resolution_patch` 时按补丁更新 IR 后重跑，保持需求 ID 稳定并复用未变化事实。
 
@@ -111,4 +111,4 @@ python3 scripts/run_analysis.py \
 
 指标、物理维度、别名、单位、定义和可聚合性只使用源表元信息，Skill 不维护第二份副本。`TOP6平台` 等源表范围维度直接使用其实时成员，不在命名集合注册表维护同义逻辑集合。归因只在 Query 明确要求原因、贡献、拉动或拖累量化时创建，并与派生需求独立。
 
-`waiting_confirmation` 时只读取顶层 `resolution_cases`，把用户选中的 `candidate_id` 连同 case 中的 `case_id`、`source_revision`、`schema_hash`、`resolution_policy_hash`、`resolution_engine_version` 及适用的业务意图 policy hash、语义/组合指纹写入对应任务 IR 的 `resolution_patches` 后重跑。补丁只对该请求生效；不得写入策略注册表、集合注册表或共享结构索引。Gateway 返回的任务级 capability 是 Bundle 中同名指标的权威绑定；组合叶子 case 只有在 prepare 确认直接路径不可用后才从 deferred 激活。
+`waiting_confirmation` 时只读取顶层 `resolution_cases`。Provider case 把用户选中的 `candidate_id` 连同 `case_id`、source revision、schema/policy hash、引擎版本及适用的语义/组合指纹写入对应任务 IR 的 `resolution_patches`；`kind=business_parameter` 的 case 写入 `case_id`、`candidate_id` 和 `context_fingerprint`，候选要求自由值时再写 `value`。补丁只对该请求生效并保持需求 ID 稳定；不得写入策略注册表、集合注册表或共享结构索引。Gateway 返回的任务级 capability 是 Bundle 中同名指标的权威绑定；组合叶子 case 只有在 prepare 确认直接路径不可用后才从 deferred 激活。

@@ -109,7 +109,9 @@ def _formula_factor_refs(expression: Any, path: str) -> list[str]:
     return refs
 
 
-def validate_analysis_ir_contract(ir: dict[str, Any]) -> None:
+def validate_analysis_ir_contract(
+    ir: dict[str, Any], *, validate_periods: bool = True
+) -> None:
     """Validate source-independent attribution invariants before Provider resolve."""
     if not isinstance(ir, dict) or ir.get("ir_version") != "analysis_ir/1.0":
         raise IRContractError(
@@ -147,25 +149,34 @@ def validate_analysis_ir_contract(ir: dict[str, Any]) -> None:
         periods = target.get("periods") if isinstance(target.get("periods"), dict) else {}
         effective_periods = {role: periods.get(role, task_periods.get(role)) for role in roles}
         missing_roles = [role for role, value in effective_periods.items() if value is None]
-        if missing_roles:
+        if validate_periods and missing_roles:
             raise IRContractError(
                 "ATTR-IR-005",
                 f"{path} is missing attribution period roles: {missing_roles}",
                 {"path": path, "missing_roles": missing_roles},
             )
-        seen_periods: dict[str, str] = {}
-        for role, value in effective_periods.items():
-            period = str(value)
-            if period in seen_periods:
-                raise IRContractError(
-                    "ATTR-IR-006",
-                    f"{path} maps multiple roles to period {period}",
-                    {"path": path, "roles": [seen_periods[period], role], "period": period},
-                )
-            seen_periods[period] = role
+        if validate_periods:
+            seen_periods: dict[str, str] = {}
+            for role, value in effective_periods.items():
+                period = str(value)
+                if period in seen_periods:
+                    raise IRContractError(
+                        "ATTR-IR-006",
+                        f"{path} maps multiple roles to period {period}",
+                        {"path": path, "roles": [seen_periods[period], role], "period": period},
+                    )
+                seen_periods[period] = role
 
         factors = target.get("factors")
         if factors in (None, []):
+            if "formula" in target:
+                refs = _formula_factor_refs(target.get("formula"), f"{path}.formula")
+                if refs:
+                    raise IRContractError(
+                        "ATTR-IR-004",
+                        f"{path}.formula references factors but factors are missing",
+                        {"path": path, "unknown_factor_refs": sorted(set(refs))},
+                    )
             continue
         if not isinstance(factors, list):
             raise IRContractError("ATTR-IR-000", f"{path}.factors must be an array")

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from _vendor.ecom_competitor_source import error_json
+from business_parameter_preflight import preflight_business_parameters
 from compile_plan import compile_and_validate, load_json
 from data_gateway import DataGateway, SOURCE_BINDING_V1, build_resolve_request, load_source_config
 from dimension_domain_registry import (
@@ -333,12 +334,100 @@ def main() -> int:
                 atomic_write_json(archive, existing)
             existing = None
         state = existing or new_state(input_digest)
-        normalize_input(raw_input)
-        input_value = normalize_analysis_input(raw_input)
-        validate_analysis_input_contract(input_value)
-        tasks = normalize_input(input_value)
-        task_order = [task_id for task_id, _ in tasks]
-        state["stages"]["input"] = {"status": "success", "task_count": len(tasks)}
+        raw_tasks = normalize_input(raw_input)
+        task_order = [task_id for task_id, _ in raw_tasks]
+        state["stages"]["input"] = {"status": "success", "task_count": len(raw_tasks)}
+
+        preflight_started = time.perf_counter()
+        tasks: list[tuple[str, dict[str, Any]]] = []
+        task_answers_by_id: dict[str, dict[str, Any]] = {}
+        prepared_bundle: list[dict[str, Any]] = []
+        preflight_records: list[dict[str, Any]] = []
+        for task_id, raw_ir in raw_tasks:
+            task_dir = args.work_dir / "tasks" / _task_name(task_id)
+            task_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                preflight = preflight_business_parameters(raw_ir)
+                prepared_ir = normalize_analysis_input(preflight["analysis_ir"])
+                cases = list(preflight.get("resolution_cases") or [])
+                preflight_records.append({
+                    "task_id": task_id,
+                    "status": preflight.get("status"),
+                    "resolution_cases": deepcopy(cases),
+                })
+                if preflight.get("status") == "waiting_confirmation":
+                    answer = task_resolution_answer(
+                        task_id, cases, status="waiting_confirmation"
+                    )
+                    atomic_write_json(task_dir / "answer-payload.json", answer)
+                    task_answers_by_id[task_id] = answer
+                    prepared_bundle.append({
+                        "task_id": task_id,
+                        "analysis_ir": prepared_ir,
+                        "source_resolution": cases,
+                    })
+                    continue
+                validate_analysis_input_contract(prepared_ir)
+                tasks.append((task_id, prepared_ir))
+            except Exception:
+                # Structural IR and stale/invalid business patches retain the
+                # existing fail-fast input contract. Only emitted business
+                # resolution cases are converted to waiting_confirmation.
+                raise
+        preflight_ms = round((time.perf_counter() - preflight_started) * 1000, 3)
+        preflight_path = args.work_dir / "business-preflight.json"
+        atomic_write_json(preflight_path, {
+            "schema_version": "business_parameter_preflight_bundle/1.0",
+            "tasks": preflight_records,
+            "timing_ms": preflight_ms,
+        })
+        state["artifacts"]["business_preflight"] = artifact_record(preflight_path)
+        waiting_preflight = sum(
+            answer.get("status") == "waiting_confirmation"
+            for answer in task_answers_by_id.values()
+        )
+        state["stages"]["business_preflight"] = {
+            "status": "success" if len(tasks) == len(raw_tasks) else (
+                "waiting_confirmation"
+                if waiting_preflight == len(raw_tasks)
+                else "partial_success"
+            ),
+            "task_count": len(raw_tasks),
+            "runnable_task_count": len(tasks),
+            "waiting_confirmation_task_count": waiting_preflight,
+            "blocked_task_count": len(raw_tasks) - len(tasks) - waiting_preflight,
+        }
+        state["timings_ms"]["business_preflight"] = preflight_ms
+
+        if not tasks:
+            prepared_path = args.work_dir / "prepared-input.json"
+            atomic_write_json(prepared_path, {
+                "schema_version": "prepared_analysis_bundle/1.0",
+                "tasks": prepared_bundle,
+            })
+            state["artifacts"]["prepared_input"] = artifact_record(prepared_path)
+            blocked_count = len(raw_tasks) - waiting_preflight
+            terminal_status = (
+                "waiting_confirmation"
+                if waiting_preflight and blocked_count == 0
+                else "blocked"
+            )
+            answer_document = {
+                "schema_version": "analysis_bundle_answer/1.0" if len(raw_tasks) > 1 else "analysis_answer/1.0",
+                "status": terminal_status,
+                "source_revision": None,
+                "fetch_reused": False,
+                "tasks": [task_answers_by_id[task_id] for task_id in task_order],
+                "workflow_duration_ms": round((time.perf_counter() - workflow_started) * 1000, 3),
+            }
+            answer_path = args.work_dir / "answer-payload.json"
+            atomic_write_json(answer_path, answer_document)
+            state["artifacts"]["answer"] = artifact_record(answer_path)
+            state["status"] = terminal_status
+            state["timings_ms"]["workflow"] = answer_document["workflow_duration_ms"]
+            atomic_write_json(state_path, state)
+            print(json.dumps({"status": terminal_status, "answer": str(answer_path), "fetch_reused": False}, ensure_ascii=False))
+            return 0
 
         derived_registry = load_json(args.derived_registry)
         composition_registry = load_json(args.composition_registry)
@@ -378,8 +467,6 @@ def main() -> int:
         compile_started = time.perf_counter()
         compiled: list[tuple[str, dict[str, Any], dict[str, Any], Path]] = []
         requests: list[tuple[str, dict[str, Any]]] = []
-        task_answers_by_id: dict[str, dict[str, Any]] = {}
-        prepared_bundle: list[dict[str, Any]] = []
         resolution_cases_by_task: dict[str, list[dict[str, Any]]] = {}
         if capabilities is not None:
             for case in capabilities.get("resolution_cases") or []:
@@ -482,12 +569,12 @@ def main() -> int:
             answer.get("status") == "waiting_confirmation"
             for answer in task_answers_by_id.values()
         )
-        blocked_count = len(tasks) - len(compiled) - waiting_count
+        blocked_count = len(raw_tasks) - len(compiled) - waiting_count
         state["stages"]["compile"] = {
-            "status": "success" if len(compiled) == len(tasks) else (
-                "waiting_confirmation" if waiting_count == len(tasks) else "partial_success"
+            "status": "success" if len(compiled) == len(raw_tasks) else (
+                "waiting_confirmation" if waiting_count == len(raw_tasks) else "partial_success"
             ),
-            "task_count": len(tasks),
+            "task_count": len(raw_tasks),
             "compiled_task_count": len(compiled),
             "waiting_confirmation_task_count": waiting_count,
             "blocked_task_count": blocked_count,
@@ -500,7 +587,7 @@ def main() -> int:
                 else "blocked"
             )
             answer_document = {
-                "schema_version": "analysis_bundle_answer/1.0" if len(tasks) > 1 else "analysis_answer/1.0",
+                "schema_version": "analysis_bundle_answer/1.0" if len(raw_tasks) > 1 else "analysis_answer/1.0",
                 "status": terminal_status,
                 "source_revision": source_binding.get("revision") if args.response_file is None else None,
                 "fetch_reused": False,
@@ -593,7 +680,7 @@ def main() -> int:
                 "dimension_set_registry_hash": dimension_registry_digest,
             }
             atomic_write_json(state_path, state)
-            if payload.get("schema_version") != SCENE_FACTS_V2 and len(tasks) > 1:
+            if payload.get("schema_version") != SCENE_FACTS_V2 and len(raw_tasks) > 1:
                 raise ValueError("bundle execution requires scene_facts/2.0 bindings")
 
         execute_started = time.perf_counter()
@@ -654,7 +741,7 @@ def main() -> int:
         else:
             workflow_status = "blocked"
         answer_document = {
-            "schema_version": "analysis_bundle_answer/1.0" if len(tasks) > 1 else "analysis_answer/1.0",
+            "schema_version": "analysis_bundle_answer/1.0" if len(raw_tasks) > 1 else "analysis_answer/1.0",
             "status": workflow_status,
             "source_revision": next(iter(revisions)),
             "fetch_reused": reuse,

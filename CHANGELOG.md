@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add a task-local attribution business-parameter preflight before Provider resolution.
+- Deterministically fill explicit同比/环比 period roles and return bounded confirmation cases for ambiguous periods, scenarios, formulas, or grouping inputs.
+- Preserve fail-fast structural IR errors, Provider boundaries, unit behavior, and complete-request execution hashes.
+
 ## 1.2.0 - 2026-08-25
 
 - 注册广告、佣金和综合支付/结算 TR 六个同周期组合指标。

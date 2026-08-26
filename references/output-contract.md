@@ -176,3 +176,5 @@
 - 最终：`success`、`partial_success`、`waiting_confirmation`、`blocked`。
 
 存在会改变结果的指标、维度、周期、分母或公式歧义时，优先由 Provider 元信息匹配；只有多个候选或置信度不足才向用户澄清，并列出候选、证据和受影响的事实槽位。
+
+Provider 前的业务参数预检复用 `analysis_task_resolution/1.0` 和顶层 `resolution_cases`。每个业务 case 使用 `kind=business_parameter`、`origin=business_parameter_preflight`、`parameter_code`、`target_id`、`requested_field`、`context_fingerprint` 及最多三个 `candidates`；自由输入候选声明 `requires_value=true`。业务 case 不携带 source revision 或物理候选，不进入 Provider。参数完整时不向 IR 或最终答案增加 case。

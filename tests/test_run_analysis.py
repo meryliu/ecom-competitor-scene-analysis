@@ -116,6 +116,129 @@ class RunAnalysisTests(unittest.TestCase):
             "resolution_policy": {"sha256": "policy", "engine_version": "1.0.0"},
         }
 
+    @staticmethod
+    def _ambiguous_attribution_ir() -> dict:
+        ir = simple_ir()
+        ir["analysis_task"]["query"] = "2026年5月支付GMV变化归因"
+        ir["attribution_targets"] = [{
+            "target_id": "payment_attr",
+            "metric_ref": "payment",
+            "metric_object": "volume",
+            "scenario": "metric_change",
+            "target_semantics": "absolute_delta",
+            "decomposition": "dimension",
+            "group_dimensions": ["平台"],
+        }]
+        return ir
+
+    def test_business_parameter_waiting_stops_before_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_path = root / "input.json"
+            work_dir = root / "run"
+            input_path.write_text(
+                json.dumps(self._ambiguous_attribution_ir(), ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            class Gateway:
+                def __init__(self, *args, **kwargs):
+                    raise AssertionError("business parameter clarification must precede Provider")
+
+            argv = ["run_analysis.py", "--input", str(input_path), "--work-dir", str(work_dir)]
+            with patch.object(sys, "argv", argv), patch.object(
+                run_analysis, "FeishuCompetitorGateway", Gateway
+            ):
+                self.assertEqual(run_analysis.main(), 0)
+            answer = json.loads((work_dir / "answer-payload.json").read_text(encoding="utf-8"))
+            self.assertEqual(answer["status"], "waiting_confirmation")
+            case_codes = {
+                item["parameter_code"]
+                for item in answer["tasks"][0]["resolution_cases"]
+            }
+            self.assertIn("ATTRIBUTION_COMPARISON_PERIOD_MISSING", case_codes)
+            self.assertFalse((work_dir / "resolved-capabilities.json").exists())
+
+    def test_invalid_formula_remains_fail_fast_instead_of_business_clarification(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_path = root / "input.json"
+            work_dir = root / "run"
+            ir = simple_ir()
+            ir["analysis_task"]["query"] = "2026年5月支付GMV同比变化归因"
+            ir["attribution_targets"] = [{
+                "target_id": "payment_attr",
+                "metric_ref": "payment",
+                "metric_object": "volume",
+                "scenario": "metric_change",
+                "target_semantics": "absolute_delta",
+                "decomposition": "formula",
+                "factors": [{"factor_id": "payment", "kind": "metric", "metric_ref": "payment"}],
+                "formula": "payment",
+            }]
+            input_path.write_text(json.dumps(ir, ensure_ascii=False), encoding="utf-8")
+
+            class Gateway:
+                def __init__(self, *args, **kwargs):
+                    raise AssertionError("invalid AST must fail before Provider")
+
+            argv = ["run_analysis.py", "--input", str(input_path), "--work-dir", str(work_dir)]
+            with patch.object(sys, "argv", argv), patch.object(
+                run_analysis, "FeishuCompetitorGateway", Gateway
+            ):
+                self.assertEqual(run_analysis.main(), 2)
+            state = json.loads((work_dir / "run-state.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["status"], "failed")
+            self.assertEqual(state["error"]["code"], "ATTR-IR-002")
+            self.assertFalse((work_dir / "answer-payload.json").exists())
+
+    def test_bundle_resolves_only_tasks_that_pass_business_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_path = root / "input.json"
+            work_dir = root / "run"
+            bundle = {
+                "schema_version": "analysis_bundle/1.0",
+                "tasks": [
+                    {"task_id": "needs_period", "analysis_ir": self._ambiguous_attribution_ir()},
+                    {"task_id": "ready", "analysis_ir": simple_ir()},
+                ],
+            }
+            input_path.write_text(json.dumps(bundle, ensure_ascii=False), encoding="utf-8")
+            provider_case = {
+                "case_id": "provider_case",
+                "action": "confirm",
+                "kind": "query_metric",
+                "requested_term": "支付GMV",
+                "task_ids": ["ready"],
+                "candidates": [{"candidate_id": "payment", "metric": "支付GMV"}],
+            }
+
+            class Gateway:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+                def resolve(self, request):
+                    self_contexts = request.get("contexts") or []
+                    if [item.get("task_id") for item in self_contexts] != ["ready"]:
+                        raise AssertionError(f"unexpected Provider contexts: {self_contexts}")
+                    return RunAnalysisTests._gateway_capabilities([provider_case])
+
+                def fetch(self, request):
+                    raise AssertionError("both tasks should be waiting")
+
+            argv = ["run_analysis.py", "--input", str(input_path), "--work-dir", str(work_dir)]
+            with patch.object(sys, "argv", argv), patch.object(
+                run_analysis, "FeishuCompetitorGateway", Gateway
+            ):
+                self.assertEqual(run_analysis.main(), 0)
+            answer = json.loads((work_dir / "answer-payload.json").read_text(encoding="utf-8"))
+            self.assertEqual(answer["status"], "waiting_confirmation")
+            self.assertEqual(
+                {item["task_id"]: item["status"] for item in answer["tasks"]},
+                {"needs_period": "waiting_confirmation", "ready": "waiting_confirmation"},
+            )
+
     def test_all_ambiguous_tasks_wait_for_confirmation_without_fetch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

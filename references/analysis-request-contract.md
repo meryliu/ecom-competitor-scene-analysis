@@ -59,6 +59,8 @@
 
 用户可使用非标准业务表述；不要为了迎合当前源表名称改写 Query 或预先枚举别名。Gateway 会基于当前 revision 生成候选。收到 `waiting_confirmation` 时只向用户展示 case 的逻辑候选和证据，确认后把所选候选写入该任务的 `resolution_patches`，保持原 requirement ID 后重跑。
 
+runner 在 Provider 前执行本地业务参数预检。它只读取当前 task 的 Query、IR、显式 assumptions 和当前请求的确认补丁，不读取未结构化历史对话。明确“同比”时可由分析期唯一推导去年同期，明确“环比/上期”时可唯一推导上一期；完整字段不重新解释或改写。缺少分析期、比较关系不明确、归因场景/公式/拆解维度存在多个合理解释时返回 `kind=business_parameter` 的 `resolution_case`。模型推断单位和“待元信息解析”不属于业务缺参，不触发该预检。
+
 单任务根对象只使用 `ir_version=analysis_ir/1.0`；bundle 根对象只使用 `schema_version=analysis_bundle/1.0`，且每个 `analysis_ir` 自身仍声明 `ir_version`。两种版本字段不得互换或同时出现；runner 在能力解析和取数前以 `INPUT_PROTOCOL_INVALID` 阻断错误协议。
 
 ## 2. 需求分类
@@ -82,6 +84,8 @@
 标准年、季、月粒度降级不由模型创建 `input_adaptations`。runner 先检查目标粒度直接事实；缺失且指标可聚合时，按最近细粒度和完整覆盖规则自动生成适配。只有用户明确给出非标准输入转换时才在 IR 中声明适配。
 
 存在多个合理指标、分母、范围或公式时写入 blocking clarification；不要用推测公式兜底。
+
+业务参数确认补丁使用 `kind=business_parameter`，至少包含 `case_id`、`candidate_id` 和 case 原样给出的 `context_fingerprint`；候选声明 `requires_value=true` 时再提供 `value`。Query 或结构化目标变化会令旧 fingerprint 失效。业务补丁由预检消费，不进入 Provider；指标、维度和源结构确认仍使用原 Provider patch 字段。
 
 各类需求项只填写与 Query 有关的字段：
 

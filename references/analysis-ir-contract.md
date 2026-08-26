@@ -264,7 +264,9 @@
 
 `factor_id` 在同一目标内唯一且稳定；`factor_order`、`formula_fingerprint` 由编译器生成。公式 AST 必须恰好引用每个因子一次，顺序和乘除位置决定因子角色；声明角色与公式冲突时在取数前阻断。`literal` 和 `derived` 必须覆盖场景要求的全部时期角色。值不变或贡献为 0 不允许删除因子。当前公式归因只支持纯乘法或乘除组合；含加减的混合形态若没有匹配的现有算子，返回 `FORMULA_SHAPE_UNSUPPORTED`，不得改写用户公式。
 
-runner 在 Provider resolve 前执行归因 IR contract guard。目标及 metric 因子必须使用已声明的 `metric_ref`，`formula` 必须是对象 AST，每个 `factor_ref` 必须命中唯一 `factor_id`，literal 必须覆盖场景角色。`metric_change` 的规范角色固定为 `analysis/comparison`；目标局部的旧 `analysis_last_year` 仅可在没有冲突时归一为 `comparison`。同比派生可继续在任务级保留 `analysis_last_year`，不会被归因角色归一删除。结构错误使用 `ATTR-IR-000` 至 `ATTR-IR-006` 在远端调用前失败，不解析自由文本公式或模糊匹配指标名。
+runner 在 Provider resolve 前先调用 `scripts/business_parameter_preflight.py`，再执行归因 IR contract guard。预检是 task-local、纯内存的业务完整性层：只对 `attribution_targets` 中缺失且可由当前 Query/IR 唯一确定的时期角色、`target_semantics` 或拆解类型做确定性补齐；多个合理解释生成不超过三个候选的 `kind=business_parameter` resolution case。它不读取源元信息、不参与指标/维度候选评分、不校验推断单位，也不从历史对话补充范围。
+
+目标及 metric 因子必须使用已声明的 `metric_ref`，`formula` 必须是对象 AST，每个 `factor_ref` 必须命中唯一 `factor_id`，literal 必须覆盖场景角色。`metric_change` 的规范角色固定为 `analysis/comparison`；目标局部的旧 `analysis_last_year` 仅可在没有冲突时归一为 `comparison`。同比派生可继续在任务级保留 `analysis_last_year`，不会被归因角色归一删除。结构错误使用 `ATTR-IR-000` 至 `ATTR-IR-006` 在远端调用前失败，不得被业务预检改写为澄清，不解析自由文本公式或模糊匹配指标名。
 
 归因算子仍由 `scenario + metric_object + target_semantics + formula shape + factor roles` 共同确定。例如同一乘除公式在 `metric_change` 与 `yoy_trend_change` 下分别路由到变化算子和同比趋势算子；公式形态不越权覆盖场景。
 
@@ -390,6 +392,8 @@ Prepare 在事实能力判断前形成统一过滤上下文：`analysis_task.fil
 ## 重编译和性能字段
 
 竞品 Provider 的指标、维度或 Schema 解析结果使用根级 `resolution_patches` 更新 IR 后确定性重编译。每项包含 `case_id`、`candidate_id`、`source_revision`、`schema_hash`、`resolution_policy_hash`、`resolution_engine_version` 和指标语义 fingerprint；组合叶子 case 还包含 `task_id`、`metric_ref`、`composition_id`、`input_role` 和 `composition_registry_hash`。patch 是请求级确认，不得修改逻辑指标/维度、全局注册表或共享索引；版本、语义或组合定义字段不匹配时返回 stale case。保持未变化的 `requirement_id`、事实槽位 ID 和节点 ID 稳定，复用请求 hash 未变化的成功事实，不重新理解 Query。
+
+业务参数 case 使用同一根级 `resolution_patches`，但固定 `kind=business_parameter`，通过 `case_id + candidate_id + context_fingerprint` 校验；`requires_value=true` 的候选额外携带 `value`。预检消费并从送往 Provider 的 IR 中移除该补丁，只保留补齐后的结构化字段。完整 IR 不写入预检诊断字段，因此编译输入、节点 ID 和 fetch request hash 不变。
 
 prepare 阶段可生成根级 `resolution_blocks`。每项绑定 `requirement_id`、`criticality` 和 active resolution cases；`core` case 暂停任务确认，`required`/`optional` case 由 compiler 物化为对应的 blocked requirement node，使其他独立需求继续执行。
 
