@@ -74,6 +74,66 @@ class BusinessIntentPolicyTests(unittest.TestCase):
         )
         self.assertIn("growth_ratio_metric", [item["intent_id"] for item in hypotheses])
 
+    def test_vague_performance_keeps_a_lower_ratio_alternative(self) -> None:
+        hypotheses = generate_metric_hypotheses(
+            {"query": "社零大盘中哪些类目表现较好"},
+            {
+                "name": "社零大盘",
+                "metric_object": "volume",
+                "metric_object_provenance": "model_inferred",
+                "consumers": [{
+                    "requirement_type": "fact_observations",
+                    "breakdown_dimensions": ["类目"],
+                    "semantic_text": "社零大盘中各类目表现",
+                }],
+            },
+            self.policy,
+        )
+        declared = next(item for item in hypotheses if item["intent_id"] == "declared_metric")
+        alternative = next(
+            item for item in hypotheses
+            if item["intent_id"] == "performance_growth_alternative"
+        )
+        self.assertEqual(declared["semantic_role"], "primary")
+        self.assertEqual(alternative["semantic_role"], "compatible_alternative")
+        self.assertEqual(alternative["metric_object"], "ratio")
+        self.assertIn("社零大盘同比增速", alternative["requested_terms"])
+
+    def test_vague_performance_alternative_does_not_require_breakdown(self) -> None:
+        hypotheses = generate_metric_hypotheses(
+            {"query": "线上社零表现怎么样"},
+            {
+                "name": "线上社零",
+                "metric_object": "volume",
+                "metric_object_provenance": "model_inferred",
+                "consumers": [{
+                    "requirement_type": "fact_observations",
+                    "semantic_text": "线上社零表现",
+                }],
+            },
+            self.policy,
+        )
+        self.assertIn(
+            "performance_growth_alternative",
+            [item["intent_id"] for item in hypotheses],
+        )
+
+    def test_explicit_volume_does_not_expand_performance_to_growth(self) -> None:
+        hypotheses = generate_metric_hypotheses(
+            {"query": "线上社零规模表现"},
+            {
+                "name": "线上社零",
+                "metric_object": "volume",
+                "metric_object_provenance": "user_explicit",
+                "consumers": [{
+                    "requirement_type": "fact_observations",
+                    "semantic_text": "线上社零规模表现",
+                }],
+            },
+            self.policy,
+        )
+        self.assertEqual([item["intent_id"] for item in hypotheses], ["declared_metric"])
+
     def test_attribution_consumer_does_not_expand_alternative_intents(self) -> None:
         hypotheses = generate_metric_hypotheses(
             {"query": "支付GMV涨幅贡献"},

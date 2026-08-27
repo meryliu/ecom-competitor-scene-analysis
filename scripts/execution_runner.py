@@ -523,7 +523,22 @@ def normalize_facts(
     rows: list[dict[str, Any]],
     periods: dict[str, str],
     dimension_fields: list[str] | None = None,
+    fact_requirements: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
+    slots: dict[str, dict[str, Any]] = {}
+    for index, raw_slot in enumerate(fact_requirements or []):
+        if not isinstance(raw_slot, dict):
+            raise ExecutionError(
+                f"analysis_task.fact_requirements[{index}] must be an object"
+            )
+        slot_id = raw_slot.get("fact_slot_id")
+        if not isinstance(slot_id, str) or not slot_id:
+            raise ExecutionError(
+                f"analysis_task.fact_requirements[{index}].fact_slot_id is required"
+            )
+        if slot_id in slots and slots[slot_id] != raw_slot:
+            raise ExecutionError(f"duplicate fact slot has conflicting metadata: {slot_id}")
+        slots[slot_id] = raw_slot
     period_to_roles: dict[str, list[str]] = {}
     for role, value in periods.items():
         period_to_roles.setdefault(str(value), []).append(str(role))
@@ -543,7 +558,45 @@ def normalize_facts(
         row["dimensions"] = dimensions
         period = row.get("period")
         supplied_role = row.get("period_role")
-        if supplied_role is not None:
+        raw_slot_ids = row.get("fact_slot_ids") or []
+        if not isinstance(raw_slot_ids, list) or not all(
+            isinstance(slot_id, str) and slot_id for slot_id in raw_slot_ids
+        ):
+            raise ExecutionError(f"facts[{index}].fact_slot_ids must be a string list")
+        declared_slot_ids = set(raw_slot_ids)
+        if row.get("fact_slot_id") is not None:
+            declared_slot_ids.add(row["fact_slot_id"])
+        row_slots = [slots[slot_id] for slot_id in declared_slot_ids if slot_id in slots]
+        if row_slots:
+            slot_periods = {
+                (slot.get("period_role"), slot.get("period")) for slot in row_slots
+            }
+            if len(slot_periods) != 1:
+                raise ExecutionError(
+                    f"facts[{index}] references fact slots with conflicting periods"
+                )
+            expected_role, expected_period = next(iter(slot_periods))
+            if not isinstance(expected_role, str) or not expected_role:
+                raise ExecutionError(
+                    f"facts[{index}] references a fact slot without period_role"
+                )
+            if not isinstance(expected_period, str) or not expected_period:
+                raise ExecutionError(
+                    f"facts[{index}] references a fact slot without period"
+                )
+            if supplied_role is not None and str(supplied_role) != expected_role:
+                raise ExecutionError(
+                    f"facts[{index}] period_role {supplied_role!r} conflicts with "
+                    f"fact slot role {expected_role!r}"
+                )
+            if period is not None and str(period) != expected_period:
+                raise ExecutionError(
+                    f"facts[{index}] period {period!r} conflicts with "
+                    f"fact slot period {expected_period!r}"
+                )
+            row["period_role"] = expected_role
+            row["period"] = expected_period
+        elif supplied_role is not None:
             role = str(supplied_role)
             if role not in periods:
                 raise ExecutionError(
@@ -664,8 +717,20 @@ def normalize_facts(
 
 
 def selector_matches(row: dict[str, Any], selector: dict[str, Any], parent: dict[str, Any] | None = None) -> bool:
+    raw_slot_ids = row.get("fact_slot_ids") or []
+    if not isinstance(raw_slot_ids, list):
+        raise ExecutionError("fact row fact_slot_ids must be a list")
+    row_slot_ids = set(raw_slot_ids)
+    if row.get("fact_slot_id") is not None:
+        row_slot_ids.add(row["fact_slot_id"])
+    if "fact_slot_id" in selector and selector["fact_slot_id"] not in row_slot_ids:
+        return False
     for key in ("metric_ref", "metric", "view_id", "period", "period_role", "unit"):
         if key in selector and row.get(key) != selector[key]:
+            return False
+    if "fact_slot_ids" in selector:
+        slot_ids = selector["fact_slot_ids"]
+        if not isinstance(slot_ids, list) or not row_slot_ids.intersection(slot_ids):
             return False
     dimensions = row.get("dimensions") or {}
     selected_dimensions = selector.get("dimensions") or {}
@@ -720,6 +785,16 @@ class FactStore:
         for key in ("metric_ref", "metric", "view_id", "period", "period_role", "unit"):
             if row.get(key) is not None:
                 self.indexes.setdefault((key, canonical_json(row[key])), set()).add(index)
+        raw_slot_ids = row.get("fact_slot_ids") or []
+        if not isinstance(raw_slot_ids, list):
+            raise ExecutionError("fact row fact_slot_ids must be a list")
+        slot_ids = set(raw_slot_ids)
+        if row.get("fact_slot_id") is not None:
+            slot_ids.add(row["fact_slot_id"])
+        for slot_id in slot_ids:
+            self.indexes.setdefault(
+                ("fact_slot_id", canonical_json(slot_id)), set()
+            ).add(index)
         for key, value in (row.get("dimensions") or {}).items():
             self.indexes.setdefault((f"dimension:{key}", canonical_json(value)), set()).add(index)
 
@@ -740,9 +815,20 @@ class FactStore:
         if not isinstance(selector, dict):
             raise ExecutionError("fact selector must be an object")
         index_keys: list[tuple[str, str]] = []
-        for key in ("metric_ref", "metric", "view_id", "period", "period_role", "unit"):
+        for key in ("fact_slot_id", "metric_ref", "metric", "view_id", "period", "period_role", "unit"):
             if key in selector:
                 index_keys.append((key, canonical_json(selector[key])))
+        slot_ids = selector.get("fact_slot_ids")
+        slot_candidates: set[int] | None = None
+        if slot_ids is not None:
+            if not isinstance(slot_ids, list) or not slot_ids or not all(
+                isinstance(item, str) and item for item in slot_ids
+            ):
+                raise ExecutionError("selector.fact_slot_ids must be a non-empty string list")
+            slot_candidates = set().union(*(
+                self.indexes.get(("fact_slot_id", canonical_json(slot_id)), set())
+                for slot_id in slot_ids
+            ))
         selected_dimensions = selector.get("dimensions") or {}
         if not isinstance(selected_dimensions, dict):
             raise ExecutionError("selector.dimensions must be an object")
@@ -752,7 +838,9 @@ class FactStore:
         if any(not matching for matching in matching_sets):
             return []
         matching_sets.sort(key=len)
-        candidates: set[int] | None = set(matching_sets[0]) if matching_sets else None
+        candidates: set[int] | None = set(matching_sets[0]) if matching_sets else slot_candidates
+        if candidates is not None and slot_candidates is not None:
+            candidates.intersection_update(slot_candidates)
         for matching in matching_sets[1:]:
             assert candidates is not None
             candidates.intersection_update(matching)
@@ -908,12 +996,24 @@ def period_roles_for_scenario(scenario: str) -> list[str]:
     raise ExecutionError(f"unsupported scenario: {scenario!r}")
 
 
-def selector_for_period(selector: dict[str, Any], role: str, periods: dict[str, str]) -> dict[str, Any]:
+def selector_for_period(
+    selector: dict[str, Any],
+    role: str,
+    periods: dict[str, str],
+    fact_slot_ids_by_period_role: dict[str, list[str]] | None = None,
+) -> dict[str, Any]:
     output = deepcopy(selector)
     if role not in periods:
         raise ExecutionError(f"period role {role!r} is missing from binding.periods")
     output["period"] = periods[role]
     output["period_role"] = role
+    if fact_slot_ids_by_period_role is not None:
+        slot_ids = fact_slot_ids_by_period_role.get(role)
+        if not isinstance(slot_ids, list) or not slot_ids:
+            raise ExecutionError(
+                f"fact slot scope is missing period role {role!r}"
+            )
+        output["fact_slot_ids"] = list(slot_ids)
     return output
 
 
@@ -930,7 +1030,10 @@ def bind_metric_values(
     result: dict[str, Any] = {
         key: value
         for key, value in config.items()
-        if key not in {"selector", "values_by_period_role", "expressions_by_period_role"}
+        if key not in {
+            "selector", "values_by_period_role", "expressions_by_period_role",
+            "fact_slot_ids_by_period_role",
+        }
     }
     values_by_role = config.get("values_by_period_role")
     if isinstance(values_by_role, dict):
@@ -967,8 +1070,9 @@ def bind_metric_values(
                 result[PERIOD_VALUE_FIELDS[role]] = literal
         return result
     selector = config.get("selector") or {"metric": config.get("name")}
+    slot_scope = config.get("fact_slot_ids_by_period_role")
     for role in roles:
-        selected = selector_for_period(selector, role, periods)
+        selected = selector_for_period(selector, role, periods, slot_scope)
         if components:
             result[f"{role}_numerator"] = store.unique_value(selected, field="numerator", parent=parent)
             result[f"{role}_denominator"] = store.unique_value(selected, field="denominator", parent=parent)
@@ -993,6 +1097,7 @@ def bind_groups(
     sparse_policy: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     selector = config.get("selector") or {}
+    slot_scope = config.get("fact_slot_ids_by_period_role")
     keys = config.get("group_dimensions")
     if not isinstance(keys, list) or not keys or not all(isinstance(key, str) and key for key in keys):
         raise ExecutionError("binding.groups.group_dimensions must be a non-empty string list")
@@ -1015,7 +1120,7 @@ def bind_groups(
         item: dict[str, Any] = {"name": group_name(dimensions, keys), "dimensions": child_parent}
         structural_absence_periods: list[str] = []
         for role in roles:
-            selected = selector_for_period(selector, role, periods)
+            selected = selector_for_period(selector, role, periods, slot_scope)
             if metric_object == "ratio":
                 matches = store.select(selected, child_parent)
                 if matches:
@@ -1173,15 +1278,10 @@ def validate_period_mapping(binding_periods: Any, runtime_periods: dict[str, str
     for role in roles:
         if role not in binding_periods:
             raise ExecutionError(f"period role {role!r} is missing from binding.periods")
-        if role not in runtime_periods:
-            raise ExecutionError(f"period role {role!r} is missing from execution_runtime.periods")
         binding_value = str(binding_periods[role])
-        runtime_value = str(runtime_periods[role])
-        if binding_value != runtime_value:
-            raise ExecutionError(
-                f"binding period {role!r}={binding_value!r} conflicts with execution_runtime value {runtime_value!r}"
-            )
-        resolved[role] = runtime_periods[role]
+        if not binding_value:
+            raise ExecutionError(f"binding period {role!r} must be non-empty")
+        resolved[role] = binding_value
     if len({str(value) for value in resolved.values()}) != len(resolved):
         raise ExecutionError("attribution binding roles must map to unique period values")
     return resolved
@@ -1399,6 +1499,11 @@ def materialize_intermediate_facts(
         }
         materialized.append({
             "fact_id": f"intermediate_{sha256_value(identity)[:20]}",
+            "fact_slot_id": target.get("fact_slot_id"),
+            "fact_slot_ids": deepcopy(
+                target.get("fact_slot_ids")
+                or ([target["fact_slot_id"]] if target.get("fact_slot_id") else [])
+            ),
             "metric_ref": target["metric_ref"],
             "metric": target["metric"],
             "metric_object": target.get("metric_object"),
@@ -2054,7 +2159,12 @@ def execute_plan(
         )
     normalize_started = time.perf_counter()
     logical_facts = wide_facts_to_long(fact_input)
-    normalized = normalize_facts(logical_facts, periods, dimension_fields)
+    normalized = normalize_facts(
+        logical_facts,
+        periods,
+        dimension_fields,
+        (plan.get("analysis_task") or {}).get("fact_requirements") or [],
+    )
     normalize_ms = round((time.perf_counter() - normalize_started) * 1000, 3)
     total_fetch_ms, fetch_timing_complete, fetch_attempts = aggregate_fetch_timing(plan)
     performance_metrics = {

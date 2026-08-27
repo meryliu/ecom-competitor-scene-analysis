@@ -613,10 +613,8 @@ def fetch_facts_from_index(
         fact_id = stable_id("fact", fact_identity)
         fact = {
                 "fact_id": fact_id,
-                "metric_ref": demand.get("metric_ref", demand.get("metric")),
-                "metric": demand.get("metric", cell["metric"]),
+                "metric": cell["metric"],
                 "source_metric_name": cell["metric"],
-                "metric_object": demand.get("metric_object"),
                 "component": demand.get("component"),
                 "scope": demand.get("scope"),
                 "filters": deepcopy(demand.get("filters") or []),

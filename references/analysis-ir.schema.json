@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "analysis_ir/1.0",
+  "title": "Competitor analysis semantic IR",
+  "type": "object",
+  "required": ["ir_version", "analysis_task", "attribution_targets"],
+  "properties": {
+    "ir_version": {"const": "analysis_ir/1.0"},
+    "analysis_task": {
+      "type": "object",
+      "required": ["metrics", "periods"],
+      "properties": {
+        "query": {"type": "string"},
+        "metrics": {"type": "array", "items": {"type": "object"}},
+        "periods": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    },
+    "fact_observations": {"type": "array", "items": {"type": "object"}},
+    "metric_compositions": {"type": "array", "items": {"type": "object"}},
+    "derived_requirements": {"type": "array", "items": {"type": "object"}},
+    "custom_calculations": {"type": "array", "items": {"type": "object"}},
+    "attribution_targets": {"type": "array", "items": {"type": "object"}}
+  }
+}

@@ -988,6 +988,18 @@ def legacy_main() -> int:
         ir = load_json(args.input)
         if ir.get("attribution_targets"):
             raise FastQueryFallback("ATTRIBUTION_REQUIRES_ORCHESTRATION", "attribution targets are not eligible for fast execution")
+        if any(
+            isinstance(item, dict) and item.get("resolution_intent") is not None
+            for collection in (
+                "fact_observations", "metric_compositions", "derived_requirements",
+                "attribution_targets",
+            )
+            for item in ir.get(collection) or []
+        ):
+            raise FastQueryFallback(
+                "RESOLUTION_INTENT_REQUIRES_PREPARE",
+                "path-neutral requirements must run through Gateway and Prepare",
+            )
         plan, plan_report = compile_and_validate(
             ir, args.derived_registry, dimension_set_registry_path=args.dimension_set_registry
         )

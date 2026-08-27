@@ -131,6 +131,36 @@ class IRContractGuardTests(unittest.TestCase):
         ir["attribution_targets"][0]["periods"]["comparison"] = "2026-06"
         self.assert_contract_code(ir, "ATTR-IR-006")
 
+    def test_resolution_intent_accepts_path_neutral_share(self) -> None:
+        ir = valid_ir()
+        ir["fact_observations"] = [{
+            "requirement_id": "share", "metric_ref": "target",
+            "period_roles": ["analysis"], "semantic_text": "抖音快递占比",
+            "resolution_intent": {
+                "operation": "share_level", "output_metric_object": "ratio",
+                "operands": {
+                    "numerator": {"concept_ref": "target"},
+                    "denominator": {"concept_ref": "target", "scope_kind": "market_total"},
+                },
+            },
+        }]
+        validate_analysis_ir_contract(ir)
+
+    def test_resolution_intent_rejects_resolved_composition_on_same_requirement(self) -> None:
+        ir = valid_ir()
+        ir["metric_compositions"] = [{
+            "requirement_id": "share", "metric_ref": "target",
+            "period_roles": ["analysis"], "composition_id": "registered",
+            "resolution_intent": {
+                "operation": "share_level", "output_metric_object": "ratio",
+                "operands": {
+                    "numerator": {"concept_ref": "target"},
+                    "denominator": {"concept_ref": "target"},
+                },
+            },
+        }]
+        self.assert_contract_code(ir, "RESOLUTION-IR-002")
+
 
 if __name__ == "__main__":
     unittest.main()

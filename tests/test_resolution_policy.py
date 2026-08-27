@@ -86,6 +86,390 @@ class ResolutionPolicyTests(unittest.TestCase):
             self.assertEqual(_strip_derived_tokens(label, self.policy), "支付gmv")
             self.assertEqual(_grain_signature(label, self.policy), grain)
 
+    def test_source_alias_is_equivalent_core_evidence_with_breakdown(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "限额以上企业零售额增速": {
+                    "aliases": ["社零大盘"], "unit": "%", "metric_object": "ratio",
+                    "supported_grains": ["month"], "dimensions": ["类目"],
+                    "aggregation_mode": "non_additive",
+                },
+            },
+            "dimensions": {"类目": {"aliases": [], "values": []}},
+            "sheets": {},
+        }
+        request = {"metrics": ["社零大盘"], "contexts": [{
+            "task_id": "q", "query": "社零大盘中哪些类目表现较好",
+            "periods": ["2026-07"], "metrics": [{
+                "metric_ref": "retail", "name": "社零大盘",
+                "metric_object": "volume", "metric_object_provenance": "model_inferred",
+                "unit": "待元信息解析", "consumers": [{
+                    "requirement_id": "category", "requirement_type": "fact_observations",
+                    "periods": ["2026-07"], "breakdown_dimensions": ["类目"],
+                }],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertEqual(
+            task["metric_bindings"]["社零大盘"], "限额以上企业零售额增速"
+        )
+        selected = task["intent_resolutions"]["retail"]["selected_candidate"]
+        self.assertEqual(selected["confidence_detail"]["core"], 1.0)
+
+    def test_contextual_breakdown_recall_cannot_rescue_wrong_core_metric(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "订单量": {
+                    "aliases": ["各类目表现"], "unit": "万单", "metric_object": "volume",
+                    "supported_grains": ["month"], "dimensions": ["类目"],
+                    "aggregation_mode": "additive",
+                },
+            },
+            "dimensions": {"类目": {"aliases": [], "values": []}},
+            "sheets": {},
+        }
+        request = {"metrics": ["广告收入"], "contexts": [{
+            "task_id": "q", "query": "广告收入中哪些类目表现较好",
+            "periods": ["2026-07"], "metrics": [{
+                "metric_ref": "revenue", "name": "广告收入", "metric_object": "volume",
+                "metric_object_provenance": "model_inferred", "unit": "待元信息解析",
+                "consumers": [{
+                    "requirement_id": "category", "requirement_type": "fact_observations",
+                    "periods": ["2026-07"], "breakdown_dimensions": ["类目"],
+                    "semantic_text": "广告收入中各类目表现",
+                }],
+            }],
+        }]}
+        task = resolve_request_overlay(index, request, self.policy)["task_resolutions"]["q"]
+        self.assertNotEqual(
+            (task["metric_statuses"].get("revenue") or {}).get("binding"), "订单量"
+        )
+
+    def test_single_breakdown_performance_requirement_uses_scoped_ratio_fact(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "限额以上企业零售额增速": {
+                    "aliases": ["社零分类目同比增速", "分类目同比"],
+                    "unit": "%", "metric_object": "ratio",
+                    "supported_grains": ["month"], "dimensions": ["社零类目"],
+                    "aggregation_mode": "non_additive",
+                },
+            },
+            "dimensions": {
+                "社零类目": {"aliases": ["类目", "品类"], "values": ["家电"]},
+            },
+            "sheets": {},
+        }
+        request = {"metrics": ["社零大盘"], "contexts": [{
+            "task_id": "q", "query": "社零大盘中哪些类目表现较好",
+            "periods": ["2026-07"], "metrics": [{
+                "metric_ref": "retail", "name": "社零大盘",
+                "metric_object": "volume", "metric_object_provenance": "model_inferred",
+                "unit": "待元信息解析", "consumers": [{
+                    "requirement_id": "category", "requirement_type": "fact_observations",
+                    "periods": ["2026-07"], "breakdown_dimensions": ["类目"],
+                    "semantic_text": "社零大盘中各类目表现",
+                }],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertEqual(
+            task["metric_bindings"]["社零大盘"], "限额以上企业零售额增速"
+        )
+        selected = task["intent_resolutions"]["retail"]["selected_candidate"]
+        self.assertEqual(selected["semantic_role"], "compatible_alternative")
+        self.assertEqual(selected["metric_object"], "ratio")
+        self.assertEqual(selected["confidence_detail"]["core"], 1.0)
+
+    def test_primary_breakdown_fact_outranks_compatible_ratio_fact(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "社零大盘": {
+                    "aliases": ["社零"], "unit": "亿元", "metric_object": "volume",
+                    "supported_grains": ["month"], "dimensions": ["社零类目"],
+                    "aggregation_mode": "additive",
+                },
+                "限额以上企业零售额增速": {
+                    "aliases": ["社零分类目同比增速", "分类目同比"],
+                    "unit": "%", "metric_object": "ratio",
+                    "supported_grains": ["month"], "dimensions": ["社零类目"],
+                    "aggregation_mode": "non_additive",
+                },
+            },
+            "dimensions": {"社零类目": {"aliases": ["类目"], "values": ["家电"]}},
+            "sheets": {},
+        }
+        request = {"metrics": ["社零大盘"], "contexts": [{
+            "task_id": "q", "query": "社零大盘中哪些类目表现较好",
+            "periods": ["2026-07"], "metrics": [{
+                "metric_ref": "retail", "name": "社零大盘",
+                "metric_object": "volume", "metric_object_provenance": "model_inferred",
+                "unit": "待元信息解析", "consumers": [{
+                    "requirement_id": "category", "requirement_type": "fact_observations",
+                    "periods": ["2026-07"], "breakdown_dimensions": ["类目"],
+                    "semantic_text": "社零大盘中各类目表现",
+                }],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertEqual(task["metric_bindings"]["社零大盘"], "社零大盘")
+        decision = next(
+            item for item in result["resolution_decisions"]
+            if item.get("kind") == "interpretation"
+        )
+        by_metric = {item["metric"]: item for item in decision["candidates"]}
+        self.assertEqual(set(by_metric), {"社零大盘", "限额以上企业零售额增速"})
+        self.assertLess(
+            by_metric["社零大盘"]["semantic_tier"],
+            by_metric["限额以上企业零售额增速"]["semantic_tier"],
+        )
+
+    def test_category_scoped_growth_does_not_replace_market_total_without_breakdown(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {"限额以上企业零售额增速": {
+                "aliases": ["社零分类目同比增速"], "unit": "%",
+                "metric_object": "ratio", "supported_grains": ["month"],
+                "dimensions": ["社零类目"], "aggregation_mode": "non_additive",
+            }},
+            "dimensions": {"社零类目": {"aliases": ["类目"], "values": ["家电"]}},
+            "sheets": {},
+        }
+        request = {"metrics": ["社零大盘"], "contexts": [{
+            "task_id": "q", "query": "社零大盘表现怎么样",
+            "periods": ["2026-07"], "metrics": [{
+                "metric_ref": "retail", "name": "社零大盘",
+                "metric_object": "volume", "metric_object_provenance": "model_inferred",
+                "unit": "待元信息解析", "consumers": [{
+                    "requirement_id": "level", "requirement_type": "fact_observations",
+                    "periods": ["2026-07"], "breakdown_dimensions": [],
+                    "semantic_text": "社零大盘表现",
+                }],
+            }],
+        }]}
+        task = resolve_request_overlay(index, request, self.policy)["task_resolutions"]["q"]
+        self.assertNotIn("社零大盘", task["metric_bindings"])
+
+    def test_complete_scoped_fact_stays_above_generic_selector_candidate(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "京东闭环电商佣金收入（3P佣金）": {
+                    "aliases": [], "unit": "亿元", "metric_object": "volume",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                    "aggregation_mode": "additive",
+                },
+                "闭环电商佣金收入": {
+                    "aliases": [], "unit": "亿元", "metric_object": "volume",
+                    "supported_grains": ["month"], "dimensions": ["平台"],
+                    "aggregation_mode": "additive",
+                },
+            },
+            "dimensions": {
+                "无": {"aliases": [], "values": []},
+                "平台": {"aliases": [], "values": ["京东"]},
+            },
+            "sheets": {},
+        }
+        request = {"metrics": ["京东闭环电商佣金收入（3P佣金）"], "contexts": [{
+            "task_id": "q", "query": "京东闭环电商佣金收入（3P佣金）",
+            "periods": ["2026-07"], "metrics": [{
+                "metric_ref": "commission", "name": "京东闭环电商佣金收入（3P佣金）",
+                "metric_object": "volume", "metric_object_provenance": "user_explicit",
+                "unit": "亿元", "consumers": [{
+                    "requirement_id": "level", "requirement_type": "fact_observations",
+                    "periods": ["2026-07"], "breakdown_dimensions": [],
+                }],
+            }],
+        }]}
+        task = resolve_request_overlay(index, request, self.policy)["task_resolutions"]["q"]
+        self.assertEqual(
+            task["metric_bindings"]["京东闭环电商佣金收入（3P佣金）"],
+            "京东闭环电商佣金收入（3P佣金）",
+        )
+
+    def test_requirement_local_share_does_not_poison_market_level(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "邮政快递揽收量": {
+                    "aliases": ["大盘快递", "快递总量"], "unit": "亿件",
+                    "metric_object": "volume", "supported_grains": ["week"],
+                    "dimensions": ["无"], "aggregation_mode": "additive",
+                },
+                "抖音包裹量": {
+                    "aliases": ["抖音快递量"], "unit": "亿件",
+                    "metric_object": "volume", "supported_grains": ["week"],
+                    "dimensions": ["无"], "aggregation_mode": "additive",
+                },
+                "抖音包裹市占率-同比增速": {
+                    "unit": "pp", "metric_object": "ratio",
+                    "supported_grains": ["week"], "dimensions": ["无"],
+                    "aggregation_mode": "non_additive",
+                },
+            },
+            "dimensions": {"无": {"aliases": [], "values": []}},
+            "sheets": {},
+        }
+        share_intent = {
+            "operation": "share_level", "output_metric_object": "ratio",
+            "operands": {
+                "numerator": {"concept_ref": "express", "metric_constraints": [{
+                    "kind": "dimension_filter", "operator": "eq",
+                    "dimension_hint": "平台", "values": ["抖音"],
+                    "provenance": "user_explicit",
+                }]},
+                "denominator": {"concept_ref": "express", "scope_kind": "market_total"},
+            },
+        }
+        level = {
+            "requirement_id": "market_level", "requirement_type": "fact_observations",
+            "periods": ["2026-W33"], "breakdown_dimensions": [],
+        }
+        trend = {
+            "requirement_id": "market_trend", "requirement_type": "derived_requirements",
+            "derived_metric_id": "yoy_trend_change",
+            "allowed_metric_objects": ["volume", "ratio"],
+            "periods": ["2026-W33", "2025-W33", "2026-07", "2025-07"],
+            "breakdown_dimensions": [],
+        }
+        share = {
+            "requirement_id": "douyin_share", "requirement_type": "fact_observations",
+            "periods": ["2026-W33"], "semantic_text": "抖音快递占比",
+            "resolution_intent": share_intent,
+        }
+        request = {
+            "metrics": ["大盘快递量", "抖音快递占比", "抖音包裹量", "邮政快递揽收量"],
+            "composition_registry_hash": "registry",
+            "contexts": [{
+                "task_id": "q", "query": "大盘快递量，其中抖音快递占比",
+                "periods": ["2026-W33"], "metrics": [
+                    {
+                        "metric_ref": "express", "name": "大盘快递量",
+                        "metric_object": "volume", "unit": "待元信息解析",
+                        "consumers": [level, trend, share],
+                    },
+                    {
+                        "metric_ref": "__share", "name": "抖音快递占比",
+                        "metric_object": "ratio", "unit": "待元信息解析",
+                        "consumers": [share], "resolution_requirement_id": "douyin_share",
+                    },
+                ],
+                "composition_intents": [{
+                    "metric_ref": "__share", "requested_metric": "抖音快递占比",
+                    "composition_id": "douyin_express_market_share",
+                    "inputs": [
+                        {"role": "numerator", "metric": "抖音包裹量"},
+                        {"role": "denominator", "metric": "邮政快递揽收量"},
+                    ],
+                    "consumers": [share], "resolution_requirement_id": "douyin_share",
+                    "logical_metric_ref": "express",
+                }],
+            }],
+        }
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertEqual(task["metric_bindings"]["大盘快递量"], "邮政快递揽收量")
+        self.assertNotEqual(
+            (task["metric_statuses"].get("__share") or {}).get("binding"),
+            "抖音包裹市占率-同比增速",
+        )
+        binding = task["requirement_bindings"]["douyin_share"]
+        self.assertEqual(binding["mode"], "registered_composition")
+        self.assertEqual(binding["composition_id"], "douyin_express_market_share")
+        self.assertFalse(any(
+            item.get("metric_ref") == "express"
+            for item in task["resolution_cases"]
+        ))
+
+    def test_precomputed_performance_fact_fulfills_compatible_sibling_requirements(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "限额以上企业零售额增速": {
+                    "aliases": ["社零分类目同比增速", "分类目同比"],
+                    "unit": "%", "metric_object": "ratio",
+                    "supported_grains": ["month"], "dimensions": ["社零类目"],
+                    "aggregation_mode": "non_additive",
+                },
+            },
+            "dimensions": {
+                "社零类目": {"aliases": ["类目"], "values": []},
+            },
+            "sheets": {},
+        }
+        level = {
+            "requirement_id": "category_level", "requirement_type": "fact_observations",
+            "periods": ["2026-07"], "breakdown_dimensions": ["类目"],
+            "semantic_text": "社零大盘中各类目表现",
+        }
+        yoy = {
+            "requirement_id": "category_yoy", "requirement_type": "derived_requirements",
+            "derived_metric_id": "yoy_growth", "allowed_metric_objects": ["volume", "ratio"],
+            "periods": ["2026-07", "2025-07"], "breakdown_dimensions": ["类目"],
+            "semantic_text": "社零大盘中各类目同比表现",
+        }
+        request = {"metrics": ["社零大盘"], "contexts": [{
+            "task_id": "q", "query": "社零大盘中哪些类目表现较好",
+            "periods": ["2026-07", "2025-07"], "metrics": [{
+                "metric_ref": "retail", "name": "社零大盘",
+                "metric_object": "volume", "metric_object_provenance": "model_inferred",
+                "unit": "待元信息解析", "consumers": [level, yoy],
+            }],
+        }]}
+        task = resolve_request_overlay(index, request, self.policy)["task_resolutions"]["q"]
+        self.assertEqual(task["resolution_cases"], [])
+        self.assertEqual(
+            task["requirement_bindings"]["category_yoy"]["mode"],
+            "source_derived_fact",
+        )
+        self.assertEqual(
+            task["requirement_bindings"]["category_level"]["mode"],
+            "source_scoped_fact",
+        )
+
+    def test_yoy_trend_can_use_registered_precomputed_series_variant(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "实物商品网上零售额同比增速": {
+                    "aliases": ["线上社零同比", "线上社零增速"],
+                    "unit": "%", "metric_object": "ratio",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                    "aggregation_mode": "non_additive",
+                },
+            },
+            "dimensions": {"无": {"aliases": [], "values": []}},
+            "sheets": {},
+        }
+        trend = {
+            "requirement_id": "trend", "requirement_type": "derived_requirements",
+            "derived_metric_id": "yoy_trend_change",
+            "allowed_metric_objects": ["volume", "ratio"],
+            "periods": ["2026-07", "2025-07", "2026-06", "2025-06"],
+            "breakdown_dimensions": [],
+        }
+        request = {"metrics": ["线上社零"], "contexts": [{
+            "task_id": "q", "query": "线上社零相比上个月涨幅变化",
+            "periods": trend["periods"], "metrics": [{
+                "metric_ref": "online", "name": "线上社零",
+                "metric_object": "volume", "metric_object_provenance": "model_inferred",
+                "unit": "待元信息解析", "consumers": [trend],
+            }],
+        }]}
+        task = resolve_request_overlay(index, request, self.policy)["task_resolutions"]["q"]
+        binding = task["requirement_bindings"]["trend"]
+        self.assertEqual(binding["mode"], "source_derived_calculation")
+        self.assertEqual(binding["source_period_roles"], ["analysis", "comparison"])
+        self.assertEqual(binding["execution_derived_metric_id"], "period_change")
+
     def test_grain_terms_do_not_count_as_derived_semantics(self) -> None:
         metadata = {"aliases": ["月度支付GMV"]}
         self.assertEqual(
@@ -932,7 +1316,7 @@ class ResolutionPolicyTests(unittest.TestCase):
         )["candidates"]
         self.assertEqual([item["metric"] for item in candidates], ["业务规模"])
 
-    def test_derived_only_alias_does_not_replace_core_fact(self) -> None:
+    def test_vague_performance_uses_unique_growth_alias_when_base_is_absent(self) -> None:
         index = {
             "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
             "metrics": {
@@ -954,17 +1338,90 @@ class ResolutionPolicyTests(unittest.TestCase):
             }},
         }
         request = {"metrics": ["线上社零"], "contexts": [{
-            "task_id": "q", "query": "线上社零表现和涨幅变化", "periods": ["2026-04", "2026-05"],
+            "task_id": "q", "query": "线上社零表现怎么样", "periods": ["2026-05"],
             "dimensions": [], "metrics": [{
                 "metric_ref": "m", "name": "线上社零", "metric_object": "volume",
                 "metric_object_provenance": "model_inferred", "unit": "待元信息解析",
-                "consumers": [{"requirement_type": "fact_observations"}],
+                "consumers": [{
+                    "requirement_type": "fact_observations",
+                    "semantic_text": "线上社零表现怎么样",
+                }],
             }],
         }]}
         result = resolve_request_overlay(index, request, self.policy)
         task = result["task_resolutions"]["q"]
+        self.assertEqual(
+            task["metric_bindings"]["线上社零"], "实物商品网上零售额同比增速"
+        )
+        selected = task["intent_resolutions"]["m"]["selected_candidate"]
+        self.assertEqual(selected["semantic_role"], "compatible_alternative")
+        self.assertEqual(selected["metric_object"], "ratio")
+
+    def test_primary_fact_outranks_growth_for_vague_performance_without_breakdown(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "线上社零": {
+                    "aliases": [], "unit": "亿元", "metric_object": "volume",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                },
+                "实物商品网上零售额同比增速": {
+                    "aliases": ["线上社零同比"], "unit": "%", "metric_object": "ratio",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                },
+            },
+            "dimensions": {},
+            "sheets": {},
+        }
+        request = {"metrics": ["线上社零"], "contexts": [{
+            "task_id": "q", "query": "线上社零表现怎么样", "periods": ["2026-05"],
+            "dimensions": [], "metrics": [{
+                "metric_ref": "m", "name": "线上社零", "metric_object": "volume",
+                "metric_object_provenance": "model_inferred", "unit": "待元信息解析",
+                "consumers": [{
+                    "requirement_type": "fact_observations",
+                    "semantic_text": "线上社零表现怎么样",
+                }],
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertEqual(task["metric_bindings"]["线上社零"], "线上社零")
+        selected = task["intent_resolutions"]["m"]["selected_candidate"]
+        self.assertEqual(selected["semantic_role"], "primary")
+        decision = next(
+            item for item in result["resolution_decisions"]
+            if item.get("kind") == "interpretation"
+        )
+        by_metric = {item["metric"]: item for item in decision["candidates"]}
+        self.assertLess(
+            by_metric["线上社零"]["semantic_tier"],
+            by_metric["实物商品网上零售额同比增速"]["semantic_tier"],
+        )
+
+    def test_explicit_volume_performance_rejects_growth_only_alias(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {"实物商品网上零售额同比增速": {
+                "aliases": ["线上社零同比"], "unit": "%", "metric_object": "ratio",
+                "supported_grains": ["month"], "dimensions": ["无"],
+            }},
+            "dimensions": {},
+            "sheets": {},
+        }
+        request = {"metrics": ["线上社零"], "contexts": [{
+            "task_id": "q", "query": "线上社零规模表现", "periods": ["2026-05"],
+            "dimensions": [], "metrics": [{
+                "metric_ref": "m", "name": "线上社零", "metric_object": "volume",
+                "metric_object_provenance": "user_explicit", "unit": "待元信息解析",
+                "consumers": [{
+                    "requirement_type": "fact_observations",
+                    "semantic_text": "线上社零规模表现",
+                }],
+            }],
+        }]}
+        task = resolve_request_overlay(index, request, self.policy)["task_resolutions"]["q"]
         self.assertNotIn("线上社零", task["metric_bindings"])
-        self.assertEqual(task["resolution_cases"][0]["candidates"], [])
 
     def test_core_online_rate_outranks_derived_word_overlap(self) -> None:
         index = {
@@ -1312,6 +1769,10 @@ class ResolutionPolicyTests(unittest.TestCase):
         self.assertEqual(task["metric_statuses"]["tr"]["status"], "bound")
         self.assertEqual(task["metric_bindings"]["综合结算TR"], "综合结算TR")
         self.assertEqual(task["resolution_cases"], [])
+        self.assertEqual(
+            task["composition_resolutions"][0]["selected_fulfillment"]["candidate_type"],
+            "direct_fact",
+        )
 
     def test_direct_ambiguity_is_not_suppressed_by_registered_composition(self) -> None:
         index = {
@@ -1368,6 +1829,11 @@ class ResolutionPolicyTests(unittest.TestCase):
         task = result["task_resolutions"]["q"]
         self.assertEqual(task["resolution_cases"][0]["action"], "confirm")
         self.assertEqual(task["resolution_cases"][0]["kind"], "interpretation")
+        composition = task["composition_resolutions"][0]
+        self.assertIsNone(composition["selected_fulfillment"])
+        self.assertEqual(
+            composition["fulfillment_candidates"][0]["status"], "infeasible"
+        )
 
     def test_unregistered_metric_without_direct_candidate_still_blocks(self) -> None:
         index = {

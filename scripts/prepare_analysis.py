@@ -8,9 +8,13 @@ import re
 from copy import deepcopy
 from typing import Any
 
+from analysis_ir_normalizer import (
+    AnalysisIRNormalizationError,
+    normalize_analysis_input,
+    normalize_analysis_ir,
+)
 from ir_contract_guard import (
     IRContractError,
-    normalize_attribution_period_roles,
     validate_analysis_ir_contract,
 )
 from source_capability import (
@@ -23,6 +27,11 @@ from source_capability import (
     validate_capabilities,
 )
 from selector_context import SelectorContextError, apply_task_selector_context
+from set_materialization import (
+    SetMaterializationError,
+    materialize_set_spec,
+    set_aggregate_expression,
+)
 from time_rollup import iso_weeks_covering
 from unit_scale import UnitScaleError, conversion_factor, formula_scale
 
@@ -42,45 +51,11 @@ def _is_unresolved_metadata(value: Any) -> bool:
 
 
 def _canonical_period(value: Any, path: str) -> str:
+    """Compatibility helper for internal rollup materialization."""
     parsed = normalize_period(value)
     if parsed is None:
         raise PreparationError("INVALID_PERIOD", f"{path} 无法识别时期：{value}")
     return parsed[1]
-
-
-def normalize_analysis_ir(ir: dict[str, Any]) -> dict[str, Any]:
-    """Canonicalize periods before compilation, hashing, and fact selection."""
-    normalized = deepcopy(ir)
-    task = normalized.get("analysis_task")
-    if not isinstance(task, dict):
-        return normalized
-    periods = task.get("periods")
-    if isinstance(periods, dict):
-        task["periods"] = {
-            str(role): _canonical_period(value, f"analysis_task.periods.{role}")
-            for role, value in periods.items()
-        }
-    for index, target in enumerate(normalized.get("attribution_targets") or []):
-        if not isinstance(target, dict) or not isinstance(target.get("periods"), dict):
-            continue
-        target["periods"] = {
-            str(role): _canonical_period(
-                value, f"attribution_targets[{index}].periods.{role}"
-            )
-            for role, value in target["periods"].items()
-        }
-    return normalize_attribution_period_roles(normalized)
-
-
-def normalize_analysis_input(value: dict[str, Any]) -> dict[str, Any]:
-    if value.get("ir_version") == "analysis_ir/1.0":
-        return normalize_analysis_ir(value)
-    normalized = deepcopy(value)
-    if normalized.get("schema_version") == "analysis_bundle/1.0":
-        for item in normalized.get("tasks") or []:
-            if isinstance(item, dict) and isinstance(item.get("analysis_ir"), dict):
-                item["analysis_ir"] = normalize_analysis_ir(item["analysis_ir"])
-    return normalized
 
 
 def _stable_suffix(value: Any) -> str:
@@ -199,8 +174,51 @@ def _apply_requirement_bindings(ir: dict[str, Any], index: dict[str, Any]) -> No
         if requirement is None:
             continue
         mode = str(binding.get("mode") or "")
+        if mode == "unavailable":
+            blocks = ir.setdefault("resolution_blocks", [])
+            if not any(
+                str(item.get("requirement_id") or "") == str(requirement_id)
+                for item in blocks if isinstance(item, dict)
+            ):
+                blocks.append({
+                    "requirement_id": str(requirement_id),
+                    "criticality": requirement.get("criticality", "required"),
+                    "reason_code": "SOURCE_REQUIREMENT_UNAVAILABLE",
+                    "details": deepcopy(binding),
+                })
+            requirement.pop("resolution_intent", None)
+            continue
+        if mode == "registered_composition":
+            logical_metric_ref = str(requirement.get("metric_ref") or "")
+            logical_metric = metrics.get(logical_metric_ref)
+            composition_id = str(binding.get("composition_id") or "")
+            output_metric_ref = str(
+                binding.get("output_metric_ref")
+                or f"__resolution_{_stable_suffix((requirement_id, composition_id))}"
+            )
+            if logical_metric is None or not composition_id:
+                continue
+            if output_metric_ref not in metrics:
+                output_metric = {
+                    "metric_id": output_metric_ref,
+                    "name": requirement.get("semantic_text") or logical_metric.get("name"),
+                    "metric_object": "ratio",
+                    "unit": "share",
+                    "definition": "registered metric composition",
+                    "composition_id": composition_id,
+                    "generated_from": "requirement_binding",
+                    "logical_metric_ref": logical_metric_ref,
+                }
+                ir["analysis_task"].setdefault("metrics", []).append(output_metric)
+                metrics[output_metric_ref] = output_metric
+            requirement["metric_ref"] = output_metric_ref
+            requirement["fulfillment_mode"] = mode
+            requirement["constraint_binding"] = deepcopy(binding)
+            requirement.pop("resolution_intent", None)
+            continue
         if mode not in {
             "source_derived_fact",
+            "source_derived_calculation",
             "source_scoped_fact",
             "member_selector",
             "additive_member_sum",
@@ -225,7 +243,7 @@ def _apply_requirement_bindings(ir: dict[str, Any], index: dict[str, Any]) -> No
             materialized_source_refs[materialization_key] = source_metric_ref
         logical_source_name = (
             source_metric
-            if mode != "source_derived_fact"
+            if mode not in {"source_derived_fact", "source_derived_calculation"}
             else f"{output_metric.get('name')}::{requirement.get('derived_metric_id')}"
         )
         source_object = metadata.get("metric_object")
@@ -268,10 +286,21 @@ def _apply_requirement_bindings(ir: dict[str, Any], index: dict[str, Any]) -> No
         requirement["source_metric_ref"] = source_metric_ref
         requirement["constraint_binding"] = deepcopy(binding)
         requirement["source_binding_candidate_id"] = binding.get("candidate_id")
+        requirement.pop("resolution_intent", None)
         if mode == "source_derived_fact":
             requirement["source_period_role"] = str(
                 binding.get("source_period_role") or "analysis"
             )
+        elif mode == "source_derived_calculation":
+            requirement["metric_ref"] = source_metric_ref
+            requirement["metric_object"] = source_object
+            requirement["derived_metric_id"] = str(
+                binding.get("execution_derived_metric_id") or "period_change"
+            )
+            requirement["required_period_roles"] = list(
+                binding.get("source_period_roles") or ["analysis", "comparison"]
+            )
+            requirement["definition_status"] = "registered"
         elif mode in {"source_scoped_fact", "member_selector"}:
             if mode == "member_selector":
                 dimensions = requirement.setdefault("dimensions", {})
@@ -680,16 +709,34 @@ def _requirement_roles(
                 else []
             )
         target_dimensions = target.get("dimensions") or {}
+        target_periods = target.get("periods") or {}
+        group_dimensions = target.get("group_dimensions") or []
+        include_overall = (
+            not group_dimensions
+            or target.get("partial_coverage") is True
+            or target.get("include_overall_metric") is True
+            or (
+                isinstance(target.get("coverage"), dict)
+                and (
+                    target["coverage"].get("mode") == "auto_residual"
+                    or isinstance(target["coverage"].get("parent_selector"), dict)
+                )
+            )
+        )
         for role in roles:
-            consumers.append({
+            grouped_consumer = {
                 "requirement_id": target.get("target_id"),
                 "metric_ref": target.get("metric_ref", target.get("metric")),
                 "view_id": target.get("view_id"),
                 "dimensions": target_dimensions,
-                "dimension_refs": target.get("group_dimensions") or [],
+                "dimension_refs": group_dimensions,
                 "criticality": target.get("criticality", "required"),
                 "role": role,
-            })
+                "period": target_periods.get(role),
+            }
+            consumers.append(grouped_consumer)
+            if group_dimensions and include_overall:
+                consumers.append({**grouped_consumer, "dimension_refs": []})
         for factor in target.get("factors") or []:
             if not isinstance(factor, dict):
                 continue
@@ -712,6 +759,7 @@ def _requirement_roles(
                         "dimension_refs": list(factor_dimensions),
                         "criticality": target.get("criticality", "required"),
                         "role": role,
+                        "period": target_periods.get(role),
                     })
 
             def visit_expression(expression: Any) -> None:
@@ -759,16 +807,6 @@ def _materialize_constraint_adaptations(
     periods = (ir.get("analysis_task") or {}).get("periods") or {}
     adaptations = ir.setdefault("input_adaptations", [])
 
-    def fact(metric_ref: str, role: str, dimension: str, value: str) -> dict[str, Any]:
-        return {"fact": {
-            "metric_ref": metric_ref,
-            "period_role": role,
-            "dimensions": {dimension: value},
-        }}
-
-    def summed(args: list[dict[str, Any]]) -> dict[str, Any]:
-        return args[0] if len(args) == 1 else {"op": "sum", "args": args}
-
     for collection in ("fact_observations", "derived_requirements"):
         for requirement in ir.get(collection) or []:
             if not isinstance(requirement, dict) or requirement.get("fulfillment_mode") not in {
@@ -789,48 +827,13 @@ def _materialize_constraint_adaptations(
                     f"指标 {source_metric} 不可按维度成员聚合",
                     {"reason": "metric_non_additive"},
                 )
-            source_dimensions = {
-                str(item.get("source_dimension") or "") for item in constraints
-            }
-            source_dimensions.discard("")
-            if len(source_dimensions) != 1:
+            try:
+                set_spec = materialize_set_spec(constraints, index, intent="total")
+            except SetMaterializationError as exc:
                 raise PreparationError(
-                    "CONSTRAINT_PATH_UNAVAILABLE",
-                    "当前物理事实选择器不能联合多个源维度",
-                    {"source_dimensions": sorted(source_dimensions)},
-                )
-            source_dimension = next(iter(source_dimensions))
-            domain = list(
-                ((index.get("dimensions") or {}).get(source_dimension) or {}).get("values")
-                or []
-            )
-            if not domain:
-                raise PreparationError(
-                    "CONSTRAINT_PATH_UNAVAILABLE", f"维度 {source_dimension} 缺少可验证枚举"
-                )
-            by_token = {normalize_match_text(value): str(value) for value in domain}
-            selected_tokens = set(by_token)
-            excluded_tokens: set[str] = set()
-            has_positive_filter = False
-            for constraint in constraints:
-                tokens = {
-                    normalize_match_text(value) for value in constraint.get("values") or []
-                }
-                if not tokens.issubset(by_token):
-                    raise PreparationError(
-                        "CONSTRAINT_PATH_UNAVAILABLE",
-                        f"维度 {source_dimension} 不包含全部约束枚举",
-                    )
-                if constraint.get("operator") in {"eq", "in"}:
-                    selected_tokens &= tokens
-                    has_positive_filter = True
-                elif constraint.get("operator") == "exclude":
-                    selected_tokens -= tokens
-                    excluded_tokens |= tokens
-            if not selected_tokens:
-                raise PreparationError(
-                    "CONSTRAINT_PATH_UNAVAILABLE", "约束筛选后的维度成员为空"
-                )
+                    "CONSTRAINT_PATH_UNAVAILABLE", str(exc), exc.details
+                ) from exc
+            source_dimension = str(set_spec["dimension_ref"])
             roles = list(requirement.get("period_roles") or [])
             if collection == "derived_requirements":
                 definition = (derived_registry.get("definitions") or {}).get(
@@ -843,18 +846,19 @@ def _materialize_constraint_adaptations(
             for role in roles:
                 if role not in periods:
                     continue
-                needed_tokens = (
-                    set(by_token)
+                needed_members = (
+                    set(set_spec["domain_members"])
                     if requirement.get("fulfillment_mode")
-                    == "same_metric_total_minus_members" and not has_positive_filter
-                    else selected_tokens
+                    == "same_metric_total_minus_members"
+                    and not set_spec.get("has_positive_filter")
+                    else set(set_spec["members"])
                 )
                 unavailable = [
-                    by_token[token]
-                    for token in sorted(needed_tokens)
+                    member
+                    for member in sorted(needed_members)
                     if not _direct_available(
                         index, source_metric, periods[role],
-                        {source_dimension: by_token[token]}, []
+                        {source_dimension: member}, []
                     )
                 ]
                 if unavailable:
@@ -863,25 +867,10 @@ def _materialize_constraint_adaptations(
                         f"指标 {source_metric} 在 {periods[role]} 缺少成员事实",
                         {"members": unavailable},
                     )
-                if (
-                    requirement.get("fulfillment_mode")
-                    == "same_metric_total_minus_members"
-                    and excluded_tokens and not has_positive_filter
-                ):
-                    total = summed([
-                        fact(source_metric_ref, role, source_dimension, by_token[token])
-                        for token in sorted(by_token)
-                    ])
-                    excluded = summed([
-                        fact(source_metric_ref, role, source_dimension, by_token[token])
-                        for token in sorted(excluded_tokens)
-                    ])
-                    expression = {"op": "subtract", "args": [total, excluded]}
-                else:
-                    expression = summed([
-                        fact(source_metric_ref, role, source_dimension, by_token[token])
-                        for token in sorted(selected_tokens)
-                    ])
+                expression = set_aggregate_expression(
+                    set_spec, source_metric_ref, role,
+                    str(requirement.get("fulfillment_mode") or ""),
+                )
                 adaptations.append({
                     "requirement_id": "constraint_adapt_" + _stable_suffix((
                         requirement.get("requirement_id"), role,
@@ -898,6 +887,7 @@ def _materialize_constraint_adaptations(
                     "criticality": requirement.get("criticality", "required"),
                     "generated": True,
                     "constraint_fulfillment": requirement.get("fulfillment_mode"),
+                    "set_spec": deepcopy(set_spec),
                 })
 
 
@@ -999,17 +989,21 @@ def _prepare_formula_target_fallbacks(
         roles = list((target.get("periods") or {}).keys()) or list(scenario_roles.get(str(target.get("scenario")), []))
         if not target_id or not metric or not roles:
             continue
+        target_periods = target.get("periods") or periods
         dimensions = target.get("dimensions") or {}
         dimension_refs = target.get("group_dimensions") or []
         target_available = all(
-            role in periods and _direct_available(index, str(metric.get("name") or ""), periods[role], dimensions, dimension_refs)
+            role in target_periods and _direct_available(
+                index, str(metric.get("name") or ""), target_periods[role],
+                dimensions, dimension_refs,
+            )
             for role in roles
         )
         if target_available:
             continue
         target_aggregatable = all(
-            role in periods and _aggregation_children(
-                index, str(metric.get("name") or ""), periods[role], dimensions, dimension_refs
+            role in target_periods and _aggregation_children(
+                index, str(metric.get("name") or ""), target_periods[role], dimensions, dimension_refs
             ) is not None
             for role in roles
         )
@@ -1026,8 +1020,9 @@ def _prepare_formula_target_fallbacks(
         eligible_roles: list[str] = []
         role_expressions: dict[str, dict[str, Any]] = {}
         for role in roles:
-            if role not in periods:
+            if role not in target_periods:
                 continue
+            source_role = _intern_physical_period_role(periods, target_periods[role])
             factor_ok = True
             for factor in factors.values():
                 if factor.get("kind") != "metric":
@@ -1035,7 +1030,7 @@ def _prepare_formula_target_fallbacks(
                 factor_metric = metrics.get(str(factor.get("metric_ref"))) or {}
                 factor_dimensions = _merge_dimensions(dimensions, factor.get("dimensions"), f"attribution target {target_id}")
                 factor_direct = factor_metric and _direct_available(
-                    index, str(factor_metric.get("name") or ""), periods[role],
+                    index, str(factor_metric.get("name") or ""), target_periods[role],
                     factor_dimensions, list(factor_dimensions)
                 )
                 if not factor_direct:
@@ -1044,7 +1039,9 @@ def _prepare_formula_target_fallbacks(
             if not factor_ok:
                 break
             eligible_roles.append(role)
-            role_expressions[role] = _formula_fallback_expression(target["formula"], factors, role)
+            role_expressions[role] = _formula_fallback_expression(
+                target["formula"], factors, source_role
+            )
         if len(eligible_roles) != len(roles):
             continue
         for role in eligible_roles:
@@ -1054,6 +1051,7 @@ def _prepare_formula_target_fallbacks(
                     "requirement_id": adaptation_id,
                     "metric_ref": target.get("metric_ref"),
                     "target_period_role": role,
+                    "target_period": target_periods[role],
                     "view_id": target.get("view_id"),
                     "dimensions": deepcopy(dimensions),
                     "dimension_refs": list(dimension_refs),
@@ -1091,12 +1089,27 @@ def prepare_analysis_ir(
         prepared = normalize_analysis_ir(ir)
         validate_analysis_ir_contract(prepared)
         prepared = apply_task_selector_context(prepared)
-    except IRContractError as exc:
+    except (IRContractError, AnalysisIRNormalizationError) as exc:
         raise PreparationError(exc.code, str(exc), exc.details) from exc
     except SelectorContextError as exc:
         raise PreparationError("SELECTOR_CONTEXT_INVALID", str(exc)) from exc
     _apply_business_intent_selection(prepared, index)
     _apply_requirement_bindings(prepared, index)
+    unresolved_intents = [
+        str(item.get("requirement_id") or item.get("target_id") or "")
+        for collection in (
+            "fact_observations", "metric_compositions", "derived_requirements",
+            "attribution_targets",
+        )
+        for item in prepared.get(collection) or []
+        if isinstance(item, dict) and item.get("resolution_intent") is not None
+    ]
+    if unresolved_intents:
+        raise PreparationError(
+            "RESOLUTION_INTENT_UNRESOLVED",
+            "path-neutral resolution intents were not materialized",
+            {"requirement_ids": sorted(unresolved_intents)},
+        )
     _bind_declared_metric_metadata(prepared, index)
     _materialize_constraint_adaptations(prepared, index, derived_registry)
     task = prepared.get("analysis_task") or {}
@@ -1258,6 +1271,11 @@ def prepare_analysis_ir(
         (
             str(item.get("metric_ref")),
             str(item.get("target_period_role")),
+            str(
+                item.get("target_period")
+                or periods.get(str(item.get("target_period_role")))
+                or ""
+            ),
             str(item.get("view_id")),
             json.dumps(item.get("dimensions") or {}, ensure_ascii=False, sort_keys=True),
             tuple(sorted(item.get("dimension_refs") or [])),
@@ -1268,6 +1286,11 @@ def prepare_analysis_ir(
         (
             str(item.get("metric_ref")),
             str(item.get("target_period_role")),
+            str(
+                item.get("target_period")
+                or periods.get(str(item.get("target_period_role")))
+                or ""
+            ),
             str(item.get("view_id")),
             tuple(sorted(item.get("dimension_refs") or [])),
         )
@@ -1277,6 +1300,11 @@ def prepare_analysis_ir(
         (
             str(item.get("metric_ref")),
             str(item.get("target_period_role")),
+            str(
+                item.get("target_period")
+                or periods.get(str(item.get("target_period_role")))
+                or ""
+            ),
             str(item.get("view_id")),
             json.dumps(item.get("dimensions") or {}, ensure_ascii=False, sort_keys=True),
             tuple(sorted(item.get("dimension_refs") or [])),
@@ -1310,7 +1338,10 @@ def prepare_analysis_ir(
         metric_ref = str(consumer.get("metric_ref"))
         metric = metrics.get(metric_ref)
         role = str(consumer.get("role"))
-        if metric is None or role not in periods:
+        actual_period = consumer.get("period")
+        if actual_period is None:
+            actual_period = periods.get(role)
+        if metric is None or not isinstance(actual_period, str) or not actual_period:
             continue
         if (str(consumer.get("requirement_id")), role) in formula_fallback_targets:
             capability_plan_item = {
@@ -1318,8 +1349,8 @@ def prepare_analysis_ir(
                 "metric_ref": metric_ref,
                 "source_metric_name": metric.get("source_metric_name") or metric.get("name"),
                 "period_role": role,
-                "period": periods[role],
-                "grain": normalize_period(periods[role])[0] if normalize_period(periods[role]) else None,
+                "period": actual_period,
+                "grain": normalize_period(actual_period)[0] if normalize_period(actual_period) else None,
                 "selector_dimensions": deepcopy(consumer.get("dimensions") or {}),
                 "group_dimensions": list(consumer.get("group_dimensions") or []),
                 "path": "formula_computed",
@@ -1336,10 +1367,14 @@ def prepare_analysis_ir(
                 consumers.append({**consumer, "metric_ref": input_ref})
             continue
         dimensions = consumer.get("dimensions") or {}
-        dimension_refs = consumer.get("dimension_refs") or []
+        dimension_refs = sorted({
+            *(str(item) for item in consumer.get("dimension_refs") or []),
+            *(str(item) for item in dimensions),
+        })
         identity = (
             metric_ref,
             role,
+            actual_period,
             str(consumer.get("view_id")),
             json.dumps(dimensions, ensure_ascii=False, sort_keys=True),
             tuple(sorted(dimension_refs)),
@@ -1347,11 +1382,12 @@ def prepare_analysis_ir(
         relaxed_identity = (
             metric_ref,
             role,
+            actual_period,
             str(consumer.get("view_id")),
             tuple(sorted(dimension_refs)),
         )
         direct_capability = _direct_capability(
-            index, metric["name"], periods[role], dimensions, dimension_refs
+            index, metric["name"], actual_period, dimensions, dimension_refs
         )
         if identity not in planned_identities:
             planned_identities.add(identity)
@@ -1360,8 +1396,8 @@ def prepare_analysis_ir(
                 "metric_ref": metric_ref,
                 "source_metric_name": metric.get("source_metric_name") or metric.get("name"),
                 "period_role": role,
-                "period": periods[role],
-                "grain": normalize_period(periods[role])[0] if normalize_period(periods[role]) else None,
+                "period": actual_period,
+                "grain": normalize_period(actual_period)[0] if normalize_period(actual_period) else None,
                 "selector_dimensions": deepcopy(dimensions),
                 "group_dimensions": list(consumer.get("group_dimensions") or []),
                 "direct": direct_capability,
@@ -1377,10 +1413,13 @@ def prepare_analysis_ir(
                     "metric_ref": metric_ref,
                     "source_metric_name": plan_item["source_metric_name"],
                     "period_role": role,
-                    "period": periods[role],
+                    "period": actual_period,
+                    "view_id": consumer.get("view_id"),
                     "grain": plan_item["grain"],
                     "selector_dimensions": deepcopy(dimensions),
-                    "group_dimensions": list(consumer.get("group_dimensions") or []),
+                    "dimension_refs": list(dimension_refs),
+                    "group_dimensions": list(dimension_refs),
+                    "component": consumer.get("component"),
                     "capability_path": "direct_fact",
                     "source_binding": deepcopy(index.get("source") or {}),
                 })
@@ -1388,18 +1427,18 @@ def prepare_analysis_ir(
             identity in existing_targets
             or (not dimensions and relaxed_identity in existing_relaxed_targets)
             or _direct_available(
-            index, metric["name"], periods[role], dimensions, dimension_refs
+            index, metric["name"], actual_period, dimensions, dimension_refs
             )
         ):
             continue
         components = _aggregation_components(
-            index, metric["name"], periods[role], dimensions, dimension_refs
+            index, metric["name"], actual_period, dimensions, dimension_refs
         )
         if components is None:
             raise PreparationError(
                 "SOURCE_PATH_UNAVAILABLE",
-                f"指标 {metric['name']} 在 {periods[role]} 没有直接事实或安全聚合方案",
-                {"metric": metric["name"], "period": periods[role]},
+                f"指标 {metric['name']} 在 {actual_period} 没有直接事实或安全聚合方案",
+                {"metric": metric["name"], "period": actual_period},
             )
         children = [str(item["period"]) for item in components]
         for item in capability_plan:
@@ -1421,6 +1460,7 @@ def prepare_analysis_ir(
             "requirement_id": adaptation_id,
             "metric_ref": metric_ref,
             "target_period_role": role,
+            "target_period": actual_period,
             "view_id": consumer.get("view_id"),
             "dimensions": deepcopy(dimensions),
             "dimension_refs": list(dimension_refs),
@@ -1445,7 +1485,7 @@ def prepare_analysis_ir(
             "validation": ["facts_present", "unit_consistent", "metric_additive"],
             "rollup": {
                 "calendar": "iso8601",
-                "target_period": periods[role],
+                "target_period": actual_period,
                 "components": deepcopy(components),
             },
             "criticality": consumer.get("criticality", "required"),
@@ -1456,7 +1496,7 @@ def prepare_analysis_ir(
             "requirement_id": consumer.get("requirement_id"),
             "mode": "aggregate",
             "metric": metric["name"],
-            "target_period": periods[role],
+            "target_period": actual_period,
             "source_periods": children,
             "adaptation_id": adaptation_id,
         })

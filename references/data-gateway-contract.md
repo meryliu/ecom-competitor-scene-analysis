@@ -13,7 +13,9 @@ facts = gateway.fetch(fetch_request)
 
 候选解析沿用 legacy-first。只有约束候选无可行 binding 且拒绝证据包含 `core_semantics_below_floor` 时，才用当前请求文本做一次本地核心语义回退；成功 legacy binding 不变，回退不发起额外 Provider/飞书请求，回退失败仍返回原确认/阻断状态。
 
-能力对象可包含 `task_resolutions`、`requirement_bindings` 和 `task_metric_dimension_bindings`。它们是按 `task_id` 投影的权威解析结果，包含任务级核心指标绑定、需求级源侧派生或维度约束 binding、指标状态、组合回退结果和确认 cases。`metric_constraints`、局部 `semantic_text` 和 `derived_metric_id` 随 consumer 进入 resolve；候选在同一固定索引上完成多通道元信息召回、核心语义、指标对象/单位 provenance、维度枚举、派生履约及结构粒度判断，不读取坐标、事实块或单元格，也不产生候选级远端调用。候选摘要最多保留三个逻辑候选；`confidence` 是结构化完整语义置信度，`lexical_confidence` 是原始名称分，`match_evidence` 只保留命中通道和各正交轴的紧凑状态，不复制完整源索引。实际事实块、时期覆盖、物理选择器和安全 AST 由 Prepare 校验并物化。根级 `metric_bindings` 仅表示所有任务结论一致的兼容核心绑定；任何 requirement-scoped binding 都不得覆盖共享逻辑指标。请求上下文可包含当前任务实际关联的 `composition_intents`，Gateway 只递归检查这些组合的叶子，不展开整个注册表。
+能力对象可包含 `task_resolutions`、`requirement_bindings` 和 `task_metric_dimension_bindings`。它们是按 `task_id` 投影的权威解析结果，包含任务级核心指标绑定、需求级源侧派生或维度约束 binding、指标状态、组合回退结果和确认 cases。`metric_constraints`、局部 `semantic_text`、`derived_metric_id` 和 `resolution_intent` 随 consumer 进入 resolve；每个 consumer 的时期、拆解维度、约束和指标对象是本 Requirement 的硬门，不得先合并为共享指标条件。根级 `required_periods`、`required_dimensions` 和 `required_breakdown_dimensions` 只用于兼容和诊断。
+
+候选在同一固定索引上完成多通道元信息召回、核心语义、指标对象/单位 provenance、维度枚举、派生履约及结构粒度判断，不读取坐标、事实块或单元格，也不产生候选级远端调用。标准名和源别名都属于核心语义证据；当拆分维度已由同一索引证明时，`breakdown_scoped` 核心证据可隔离名称中的维度标签，但不能绕过核心门槛。`primary` 和降低一层的 `compatible_alternative` 进入同一 Requirement 排序；模型推断对象的模糊“表现”可使用唯一兼容增长事实，完整主事实仍优先，权威对象声明不放宽。候选摘要最多保留三个逻辑候选；`confidence` 是结构化完整语义置信度，`lexical_confidence` 是原始名称分，`match_evidence` 只保留命中通道和各正交轴的紧凑状态，不复制完整源索引。实际事实块、时期覆盖、物理选择器和安全 AST 由 Prepare 校验并物化。根级 `metric_bindings` 仅表示所有 Requirement 选择同一核心物理指标时的兼容摘要；Requirement 局部 binding 不得覆盖共享逻辑指标。请求上下文可包含当前任务实际关联的 `composition_intents`，Gateway 只递归检查这些组合的叶子，不展开整个注册表。
 
 `fetch()` 接收 provider-neutral 事实需求和 runner 注入的 `source_binding/1.0`：
 
@@ -28,7 +30,7 @@ facts = gateway.fetch(fetch_request)
   "freshness": "live",
   "resolution_policy_hash": "...",
   "business_intent_policy_hash": "...",
-  "resolution_engine_version": "2.8.0",
+  "resolution_engine_version": "2.13.0",
   "fact_provider_version": "1.1.0"
 }
 ```

@@ -1,6 +1,6 @@
 {
   "registry_name": "scene-analysis-derived-metrics",
-  "registry_version": "1.3.0",
+  "registry_version": "1.4.0",
   "definitions": {
     "yoy_growth": {
       "definition_version": "1.2.0",
@@ -33,7 +33,7 @@
       "minimal_validation": ["facts_present", "unit_consistent", "required_denominator_nonzero"]
     },
     "yoy_trend_change": {
-      "definition_version": "1.3.0",
+      "definition_version": "1.4.0",
       "trigger_phrases": ["同比趋势", "同比波动", "同比增速差值"],
       "metric_objects": ["volume", "ratio"],
       "required_period_roles": ["analysis", "analysis_last_year", "comparison", "comparison_last_year"],
@@ -136,7 +136,20 @@
         }
       },
       "output_units": {"volume": "rate_delta", "ratio": "pp"},
-      "minimal_validation": ["facts_present", "unit_consistent", "required_denominator_nonzero"]
+      "minimal_validation": ["facts_present", "unit_consistent", "required_denominator_nonzero"],
+      "calculation_variants": [
+        {
+          "variant_id": "base_period_facts",
+          "input_semantics": "four base-period facts",
+          "execution": "compute analysis and comparison YoY, then subtract"
+        },
+        {
+          "variant_id": "source_precomputed_yoy_series",
+          "input_semantics": "two source-precomputed YoY facts",
+          "required_period_roles": ["analysis", "comparison"],
+          "execution_derived_metric_id": "period_change"
+        }
+      ]
     },
     "mom_growth": {
       "definition_version": "1.2.0",

@@ -32,7 +32,7 @@ from validate_execution import Validator, reject_duplicate_keys
 
 
 COMPILER_NAME = "scene-analysis-plan-compiler"
-COMPILER_VERSION = "1.8.0"
+COMPILER_VERSION = "1.9.0"
 IR_VERSION = "analysis_ir/1.0"
 DEFAULT_RESIDUAL_TOLERANCE = 1e-8
 ALLOWED_CRITICALITIES = {"core", "required", "optional"}
@@ -210,6 +210,20 @@ class Compiler:
         try:
             self.ir = normalize_analysis_ir(ir)
             validate_analysis_ir_contract(self.ir)
+            unresolved_intents = [
+                str(item.get("requirement_id") or item.get("target_id") or "")
+                for collection in (
+                    "fact_observations", "metric_compositions", "derived_requirements",
+                    "attribution_targets",
+                )
+                for item in self.ir.get(collection) or []
+                if isinstance(item, dict) and item.get("resolution_intent") is not None
+            ]
+            if unresolved_intents:
+                raise CompileError(
+                    "RESOLUTION_INTENT_UNRESOLVED: Prepare must materialize "
+                    f"requirements {sorted(unresolved_intents)} before Compile"
+                )
             self.ir = apply_task_selector_context(self.ir)
         except IRContractError as exc:
             raise CompileError(f"{exc.code}: {exc}") from exc
@@ -246,14 +260,18 @@ class Compiler:
         self.input_adaptation_targets: dict[str, str] = {}
         self.requirement_adaptation_dependencies: dict[str, set[str]] = {}
         self.compiling_input_adaptation = False
-        self.canonical_fact_selectors: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self.canonical_fact_selectors: dict[tuple[Any, ...], dict[str, Any]] = {}
         for selector in self.ir.get("canonical_fact_selectors") or []:
             if not isinstance(selector, dict):
                 raise CompileError("$.canonical_fact_selectors must contain objects")
             key = (
                 str(selector.get("metric_ref") or ""),
                 str(selector.get("period_role") or ""),
+                str(selector.get("period") or ""),
+                str(selector.get("view_id")),
                 canonical_json(selector.get("selector_dimensions") or {}),
+                tuple(sorted(selector.get("dimension_refs") or [])),
+                str(selector.get("component")),
             )
             if not all(key[:2]):
                 raise CompileError("canonical fact selector requires metric_ref and period_role")
@@ -441,18 +459,24 @@ class Compiler:
         component: str | None = None,
         selector_dimensions: dict[str, Any] | None = None,
         full_dimension_domains: list[str] | None = None,
+        period_value: str | None = None,
     ) -> str:
         metric = self.metric(metric_ref)
+        actual_period = period_value or self.period(period_role)
         logical_dimension_refs = sorted(set(dimension_refs or []))
         logical_selectors = deepcopy(selector_dimensions or {})
         canonical_selector = self.canonical_fact_selectors.get((
             metric_ref,
             period_role,
+            actual_period,
+            str(view_id),
             canonical_json(logical_selectors),
+            tuple(logical_dimension_refs),
+            str(component),
         ))
         if canonical_selector is not None:
             canonical_period = canonical_selector.get("period")
-            if canonical_period != self.period(period_role):
+            if canonical_period != actual_period:
                 raise CompileError(
                     f"canonical selector period conflicts with analysis_task.periods.{period_role}"
                 )
@@ -485,7 +509,7 @@ class Compiler:
         slot_identity = {
             "metric_ref": metric_ref,
             "period_role": period_role,
-            "period": self.period(period_role),
+            "period": actual_period,
             "view_id": view_id,
             "dimension_refs": logical_dimension_refs,
             "selector_dimensions": logical_selectors,
@@ -545,6 +569,17 @@ class Compiler:
                     if requirement_id not in node_refs:
                         node_refs.append(requirement_id)
                         node_refs.sort()
+                    materialize_as = (node.get("execution") or {}).get("materialize_as")
+                    if isinstance(materialize_as, dict):
+                        target_slots = materialize_as.setdefault(
+                            "fact_slot_ids",
+                            [materialize_as["fact_slot_id"]]
+                            if materialize_as.get("fact_slot_id")
+                            else [],
+                        )
+                        if slot_id not in target_slots:
+                            target_slots.append(slot_id)
+                            target_slots.sort()
                     break
         return slot_id
 
@@ -580,6 +615,7 @@ class Compiler:
         metric_ref: str | None = None,
         view_id: str | None,
         dimensions: dict[str, Any] | None = None,
+        fact_slot_id: str | None = None,
         exact: bool = True,
     ) -> dict[str, Any]:
         selector: dict[str, Any] = {
@@ -590,6 +626,8 @@ class Compiler:
             selector["metric_ref"] = metric_ref
         if view_id is not None:
             selector["view_id"] = view_id
+        if fact_slot_id is not None:
+            selector["fact_slot_id"] = fact_slot_id
         if exact:
             selector["dimensions_exact"] = True
         return selector
@@ -746,7 +784,16 @@ class Compiler:
             transformed["metric_ref"] = str(metric_ref)
             transformed["metric"] = metric["name"]
             period_role = require_nonempty_string(transformed.get("period_role"), "expression.fact.period_role")
-            self.period(period_role)
+            period_values = requirement.get("_period_values") or {}
+            if not isinstance(period_values, dict):
+                raise CompileError("internal period values must be an object")
+            period_value = period_values.get(period_role)
+            if period_value is None:
+                period_value = self.period(period_role)
+            else:
+                period_value = require_nonempty_string(
+                    period_value, f"expression.fact period for {period_role}"
+                )
             inherited_dimension_refs = requirement.get("dimension_refs", [])
             declared_dimension_refs = transformed.pop("dimension_refs", [])
             if not isinstance(inherited_dimension_refs, list) or not isinstance(declared_dimension_refs, list):
@@ -774,8 +821,10 @@ class Compiler:
                 ),
                 component=transformed.get("field") if transformed.get("field") in {"numerator", "denominator"} else None,
                 selector_dimensions=dimensions,
+                period_value=period_value,
             )
             fact_slot_ids.append(slot_id)
+            transformed["fact_slot_id"] = slot_id
             return self._bind_fact_domain(
                 transformed, dimensions, source_dimension_refs
             )
@@ -843,6 +892,7 @@ class Compiler:
                 metric_ref=metric_ref,
                 view_id=requirement.get("view_id"),
                 dimensions=self._expression_dimensions(dimensions or {}),
+                fact_slot_id=slot_id,
             ))
             return self._bind_fact_domain(
                 selector,
@@ -955,6 +1005,7 @@ class Compiler:
                     metric_ref=input_ref,
                     view_id=requirement.get("view_id"),
                     dimensions=self._expression_dimensions(dimensions),
+                    fact_slot_id=slot_id,
                 ) | {"period_role": role},
                 dimensions,
                 requirement.get("dimension_refs", []),
@@ -1081,6 +1132,7 @@ class Compiler:
             metric_ref=metric_ref,
             view_id=requirement.get("view_id"),
             dimensions={},
+            fact_slot_id=slot_id,
         ) | {"period_role": role}
         return {
             "op": "divide",
@@ -1089,6 +1141,7 @@ class Compiler:
                 {
                     "aggregate": {
                         "selector": {
+                            "fact_slot_id": slot_id,
                             "metric_ref": metric_ref,
                             "metric": metric["name"],
                             "view_id": requirement.get("view_id"),
@@ -1119,7 +1172,13 @@ class Compiler:
                 requirement.get("target_period_role"),
                 f"{requirement_id}.target_period_role",
             )
-            target_period = self.period(target_role)
+            target_period = requirement.get("target_period")
+            if target_period is None:
+                target_period = self.period(target_role)
+            else:
+                target_period = require_nonempty_string(
+                    target_period, f"{requirement_id}.target_period"
+                )
             dimensions = requirement.get("dimensions") or {}
             if not isinstance(dimensions, dict):
                 raise CompileError(f"{requirement_id}.dimensions must be an object")
@@ -1252,7 +1311,17 @@ class Compiler:
                 raise CompileError(
                     f"multiple input adaptations materialize the same target: {requirement_id}"
                 )
+            target_slot_id = self.add_fact_slot(
+                requirement_id,
+                metric_ref,
+                target_role,
+                view_id=requirement.get("view_id"),
+                dimension_refs=dimension_refs,
+                selector_dimensions=dimensions,
+                period_value=target_period,
+            )
             self.input_adaptation_targets[target_identity] = node_id
+            self.fact_slots[target_slot_id]["materialized_by"] = node_id
             dependencies = set(result_dependencies)
             dependencies.update(self._node_dependencies(requirement_id, fact_slot_ids))
             self.nodes.append(make_node(
@@ -1277,6 +1346,8 @@ class Compiler:
                     "period_roles": [target_role],
                     "group_dimensions": dimension_refs,
                     "materialize_as": {
+                        "fact_slot_id": target_slot_id,
+                        "fact_slot_ids": [target_slot_id],
                         "metric_ref": metric_ref,
                         "metric": metric["name"],
                         "metric_object": metric["metric_object"],
@@ -1474,6 +1545,7 @@ class Compiler:
                         metric_ref=source_metric_ref,
                         view_id=requirement.get("view_id"),
                         dimensions=self._expression_dimensions(dimensions),
+                        fact_slot_id=slot_id,
                     ) | {"period_role": source_role},
                     dimensions,
                     requirement.get("dimension_refs", []),
@@ -1989,8 +2061,21 @@ class Compiler:
         supplied: dict[str, Any],
         canonical: dict[str, Any],
     ) -> None:
+        def without_slot_scope(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {
+                    key: without_slot_scope(item)
+                    for key, item in value.items()
+                    if key not in {"fact_slot_id", "fact_slot_ids", "fact_slot_ids_by_period_role"}
+                }
+            if isinstance(value, list):
+                return [without_slot_scope(item) for item in value]
+            return value
+
         for key in ("scenario", "metric_object", "decomposition", "periods", "metric"):
-            if key in supplied and canonical_json(supplied[key]) != canonical_json(canonical.get(key)):
+            if key in supplied and canonical_json(without_slot_scope(supplied[key])) != canonical_json(
+                without_slot_scope(canonical.get(key))
+            ):
                 raise CompileError(
                     f"supplied formula binding.{key} must match compiler-generated binding"
                 )
@@ -2028,7 +2113,9 @@ class Compiler:
                 for key in source_keys
                 if key in bound
             }
-            if canonical_json(supplied_source) != canonical_json(expected_source):
+            if canonical_json(without_slot_scope(supplied_source)) != canonical_json(
+                without_slot_scope(expected_source)
+            ):
                 raise CompileError(
                     f"supplied binding factors[{index}] source must match target factor"
                 )
@@ -2148,6 +2235,7 @@ class Compiler:
                             factor.get("dimensions") or {},
                             target.get("dimension_refs", []),
                         ),
+                        "_period_values": deepcopy(periods),
                     }
                     for role in roles:
                         compiled_expressions[role] = self._transform_expression(
@@ -2215,6 +2303,9 @@ class Compiler:
         dimensions = target.get("dimensions") or {}
         if not isinstance(dimensions, dict):
             raise CompileError("attribution target dimensions must be an object")
+        periods = target.get("periods") or {}
+        if not isinstance(periods, dict):
+            raise CompileError("attribution target periods must be an object")
         selector_dimension_refs = self._fact_dimension_refs(dimensions, parent_dimensions)
         include_overall = (
             not has_groups
@@ -2237,6 +2328,9 @@ class Compiler:
                         dimension_refs=selector_dimension_refs + group_dimensions,
                         component=component,
                         selector_dimensions=dimensions,
+                        period_value=require_nonempty_string(
+                            periods.get(role), f"target.periods.{role}"
+                        ),
                     ))
             if include_overall:
                 for role in roles:
@@ -2249,6 +2343,9 @@ class Compiler:
                             dimension_refs=selector_dimension_refs,
                             component=component,
                             selector_dimensions=dimensions,
+                            period_value=require_nonempty_string(
+                                periods.get(role), f"target.periods.{role}"
+                            ),
                         ))
         else:
             for role in roles:
@@ -2259,6 +2356,9 @@ class Compiler:
                     view_id=target.get("view_id"),
                     dimension_refs=selector_dimension_refs,
                     selector_dimensions=dimensions,
+                    period_value=require_nonempty_string(
+                        periods.get(role), f"target.periods.{role}"
+                    ),
                 ))
         for factor in target.get("factors", []) if isinstance(target.get("factors"), list) else []:
             if not isinstance(factor, dict) or factor.get("kind") != "metric":
@@ -2275,8 +2375,119 @@ class Compiler:
                         factor_dimensions, parent_dimensions
                     ),
                     selector_dimensions=factor_dimensions,
+                    period_value=require_nonempty_string(
+                        periods.get(role), f"target.periods.{role}"
+                    ),
                 ))
         return sorted(set(slots))
+
+    def _attribution_slot_scope(
+        self,
+        target: dict[str, Any],
+        slot_ids: list[str],
+        metric_ref: str,
+        dimensions: dict[str, Any],
+        dimension_refs: list[str],
+    ) -> dict[str, list[str]]:
+        roles = SCENARIO_ROLES.get(str(target.get("scenario"))) or ()
+        expected_dimensions = dimensions or {}
+        expected_refs = sorted(set(dimension_refs))
+        periods = target.get("periods") or {}
+        scoped: dict[str, list[str]] = {}
+        for role in roles:
+            matches = sorted(
+                slot_id
+                for slot_id in slot_ids
+                if (
+                    (slot := self.fact_slots.get(slot_id)) is not None
+                    and str(slot.get("metric_ref")) == str(metric_ref)
+                    and str(slot.get("period_role")) == str(role)
+                    and str(slot.get("period")) == str(periods.get(role))
+                    and slot.get("view_id") == target.get("view_id")
+                    and (slot.get("selector_dimensions") or {}) == expected_dimensions
+                    and sorted(set(slot.get("dimension_refs") or [])) == expected_refs
+                )
+            )
+            if not matches:
+                raise CompileError(
+                    f"attribution binding has no fact slot for metric={metric_ref!r}, role={role!r}"
+                )
+            scoped[str(role)] = matches
+        return scoped
+
+    @staticmethod
+    def _apply_slot_scope(
+        config: dict[str, Any], scoped: dict[str, list[str]]
+    ) -> None:
+        config["fact_slot_ids_by_period_role"] = deepcopy(scoped)
+        selector = config.get("selector")
+        if isinstance(selector, dict):
+            selector["fact_slot_ids"] = sorted({
+                slot_id for slot_ids in scoped.values() for slot_id in slot_ids
+            })
+
+    def _scope_attribution_binding(
+        self,
+        binding: dict[str, Any],
+        target: dict[str, Any],
+        slot_ids: list[str],
+    ) -> dict[str, Any]:
+        scoped_binding = deepcopy(binding)
+        parent_dimensions = self._attribution_parent_dimensions(target)
+        target_dimensions = target.get("dimensions") or {}
+        target_refs = self._fact_dimension_refs(target_dimensions, parent_dimensions)
+        metric_config = scoped_binding.get("metric")
+        if isinstance(metric_config, dict):
+            self._apply_slot_scope(
+                metric_config,
+                self._attribution_slot_scope(
+                    target,
+                    slot_ids,
+                    str(target.get("metric_ref")),
+                    target_dimensions,
+                    target_refs,
+                ),
+            )
+        groups = scoped_binding.get("groups")
+        if isinstance(groups, dict):
+            group_refs = sorted({
+                *target_refs,
+                *(str(item) for item in target.get("group_dimensions") or []),
+            })
+            self._apply_slot_scope(
+                groups,
+                self._attribution_slot_scope(
+                    target,
+                    slot_ids,
+                    str(target.get("metric_ref")),
+                    target_dimensions,
+                    group_refs,
+                ),
+            )
+        raw_factors = target.get("factors") or []
+        for index, factor_config in enumerate(
+            scoped_binding.get("factors") or []
+        ):
+            if not isinstance(factor_config, dict) or factor_config.get("kind") != "metric":
+                continue
+            raw_factor = raw_factors[index] if index < len(raw_factors) else {}
+            factor_dimensions = raw_factor.get("dimensions") or {}
+            factor_refs = self._fact_dimension_refs(
+                factor_dimensions, parent_dimensions
+            )
+            selector = factor_config.get("selector") or {}
+            metric_ref = selector.get("metric_ref", raw_factor.get("metric_ref"))
+            self._apply_slot_scope(
+                factor_config,
+                self._attribution_slot_scope(
+                    target,
+                    slot_ids,
+                    str(metric_ref),
+                    factor_dimensions,
+                    factor_refs,
+                ),
+            )
+        return scoped_binding
 
     def compile_attribution(self) -> None:
         for raw_target in self.ir.get("attribution_targets", []):
@@ -2404,6 +2615,7 @@ class Compiler:
                     target, metric
                 )
                 slots = sorted(set(slots + binding_slots))
+                binding = self._scope_attribution_binding(binding, target, slots)
                 expansion = self._attribution_expansion(original_target)
                 self.nodes.append(make_node(
                     node_id,

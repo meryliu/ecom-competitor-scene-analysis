@@ -44,6 +44,41 @@ def fact(slot_id: str, value: float = 1.0) -> dict:
 
 
 class NormalizeFactsTests(unittest.TestCase):
+    def test_known_slot_accepts_target_local_period_role(self) -> None:
+        row = {
+            **fact("attr_comparison"),
+            "period": "2025-07",
+            "period_role": "comparison",
+        }
+        normalized = normalize_facts(
+            [row],
+            {"analysis": "2026-07", "analysis_last_year": "2025-07"},
+            fact_requirements=[{
+                "fact_slot_id": "attr_comparison",
+                "period_role": "comparison",
+                "period": "2025-07",
+            }],
+        )
+        self.assertEqual(normalized[0]["period_role"], "comparison")
+        self.assertEqual(normalized[0]["period"], "2025-07")
+
+    def test_known_slot_rejects_period_mismatch(self) -> None:
+        row = {
+            **fact("attr_comparison"),
+            "period": "2026-06",
+            "period_role": "comparison",
+        }
+        with self.assertRaisesRegex(ExecutionError, "conflicts with fact slot period"):
+            normalize_facts(
+                [row],
+                {"analysis": "2026-07"},
+                fact_requirements=[{
+                    "fact_slot_id": "attr_comparison",
+                    "period_role": "comparison",
+                    "period": "2025-07",
+                }],
+            )
+
     def test_explicit_roles_can_share_one_physical_period_across_requirements(self) -> None:
         rows = [
             {**fact("last_year_yoy"), "period": "2025-05", "period_role": "analysis_last_year"},
@@ -827,6 +862,7 @@ class NormalizeFactsTests(unittest.TestCase):
             for node in plan["nodes"]
             if node["node_id"].startswith("derived_share")
         )
+        slot_id = expression["args"][0]["fact"]["fact_slot_id"]
         domain_ref = expression["denominator_domain_ref"]
         platforms = ["淘系", "抖音", "拼多多", "京东", "快手", "视频号"]
         plan["resolved_dimension_domains"] = {
@@ -834,7 +870,7 @@ class NormalizeFactsTests(unittest.TestCase):
         }
         rows = []
         for index, platform in enumerate(platforms, start=1):
-            row = fact("share", float(index))
+            row = fact(slot_id, float(index))
             row.update({
                 "fact_id": f"fact_{index}",
                 "metric_ref": "payment",
@@ -856,6 +892,109 @@ class NormalizeFactsTests(unittest.TestCase):
         self.assertEqual(len(result), 6)
         by_platform = {item["dimensions"]["TOP6平台"]: item["value"] for item in result}
         self.assertAlmostEqual(by_platform["淘系"], 1 / 21)
+
+    def test_yoy_growth_and_target_local_attribution_execute_together(self) -> None:
+        ir = {
+            "ir_version": "analysis_ir/1.0",
+            "analysis_task": {
+                "query": "26年7月，拼多多支付GMV同比增速，从用户视角归因",
+                "analysis_goal": "返回同比增速和用户视角归因",
+                "metrics": [
+                    {"metric_id": "payment", "name": "支付GMV", "metric_object": "volume", "unit": "亿元"},
+                    {"metric_id": "settlement", "name": "结算GMV", "metric_object": "volume", "unit": "亿元"},
+                    {"metric_id": "rate", "name": "支付结算率", "metric_object": "ratio", "unit": "rate"},
+                ],
+                "periods": {"analysis": "2026-07", "analysis_last_year": "2025-07"},
+                "scope": "拼多多",
+                "filters": [],
+            },
+            "views": [{"view_id": "user_view"}],
+            "dimension_trees": [],
+            "input_adaptations": [],
+            "fact_observations": [],
+            "metric_compositions": [],
+            "derived_requirements": [{
+                "requirement_id": "payment_yoy",
+                "metric_ref": "payment",
+                "metric_object": "volume",
+                "derived_metric_id": "yoy_growth",
+                "definition_status": "registered",
+                "dimensions": {"平台": "拼多多"},
+                "criticality": "core",
+            }],
+            "custom_calculations": [],
+            "attribution_targets": [{
+                "target_id": "payment_user_attr",
+                "metric_ref": "payment",
+                "metric_object": "volume",
+                "scenario": "metric_change",
+                "target_semantics": "absolute_delta",
+                "decomposition": "formula",
+                "periods": {"analysis": "2026-07", "comparison": "2025-07"},
+                "view_id": "user_view",
+                "dimensions": {"平台": "拼多多"},
+                "factors": [
+                    {"factor_id": "settlement", "kind": "metric", "metric_ref": "settlement"},
+                    {"factor_id": "rate", "kind": "metric", "metric_ref": "rate"},
+                ],
+                "formula": {
+                    "op": "multiply",
+                    "args": [{"factor_ref": "settlement"}, {"factor_ref": "rate"}],
+                },
+                "criticality": "core",
+            }],
+            "output_requirements": [],
+            "clarifications": [],
+        }
+        plan, report = compile_and_validate(
+            ir,
+            ROOT / "references" / "derived-metric-registry.json",
+            ROOT / "references" / "metric-composition-registry.json",
+        )
+        self.assertTrue(report["valid"], report)
+        values = {
+            ("payment", "2026-07"): 120.0,
+            ("payment", "2025-07"): 100.0,
+            ("settlement", "2026-07"): 100.0,
+            ("settlement", "2025-07"): 80.0,
+            ("rate", "2026-07"): 1.2,
+            ("rate", "2025-07"): 1.25,
+        }
+        rows = []
+        for slot in plan["fetch_requests"][0]["fact_slots"]:
+            row = fact(
+                slot["fact_slot_id"],
+                values[(slot["metric_ref"], slot["period"])],
+            )
+            row.update({
+                "fact_id": f"row_{slot['fact_slot_id']}",
+                "metric_ref": slot["metric_ref"],
+                "metric": slot["metric"],
+                "metric_object": slot["metric_object"],
+                "view_id": slot.get("view_id"),
+                "period": slot["period"],
+                "period_role": slot["period_role"],
+                "dimensions": {"平台": "拼多多"},
+                "unit": slot["unit"],
+                "definition": slot["metric"],
+                "additive": slot["metric_object"] == "volume",
+            })
+            rows.append(row)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = execute_plan(
+                plan, rows, root / "manifest.json", root / "events.jsonl"
+            )
+        self.assertEqual(manifest["status"], "success")
+        yoy = next(
+            item["result"] for item in manifest["node_results"]
+            if item["node_id"].startswith("derived_payment_yoy")
+        )
+        self.assertAlmostEqual(yoy, 0.2)
+        attribution = manifest["attribution_results"][0]
+        self.assertEqual(attribution["status"], "success")
+        self.assertAlmostEqual(attribution["result"]["summary"]["change_value"], 20.0)
 
     def test_adapted_quarter_facts_feed_share_and_attribution(self) -> None:
         periods = {

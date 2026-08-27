@@ -2,6 +2,8 @@
 
 本文件定义模型与 `compile_plan.py` 的接口。只有生成、检查或扩展编译计划时读取。
 
+`scripts/analysis_ir_normalizer.py` 是 Resolve 前唯一的确定性规范化入口。它只处理可机械确定的结构：时期格式、归因时期角色别名、可由字段形态唯一判断的 factor `kind`，以及将多时期注册组合拆成编译器消费的单时期 Requirement。规范化必须幂等，不得改写用户指标、范围、筛选、公式或有歧义的业务含义。结构基线见 [analysis-ir.schema.json](analysis-ir.schema.json)，跨引用、时期角色和公式完整性继续由 `ir_contract_guard.py` 统一校验。Query Policy 应用校验失败仍返回 `fallback_raw`，增强环节不得形成业务阻断。
+
 ## 目录
 
 1. 设计边界
@@ -76,6 +78,8 @@
 
 每项需求使用唯一 `requirement_id`；归因保留唯一 `target_id`。通用字段为 `view_id`、`apply_to`、`criticality`、`period_roles` 和 `required_outputs`。`criticality` 只能是 `core|required|optional`。
 
+`analysis_task.periods` 是事实观察、组合、通用派生和自定义计算的任务级默认时期映射。每个归因目标的 `periods` 是该目标的权威局部映射，不反写任务级映射；不同归因目标可以复用同一角色名并指向不同物理时期。例如同一 Query 中，同比增速使用 `analysis=2026-07, analysis_last_year=2025-07`，同比归因可同时使用 `analysis=2026-07, comparison=2025-07`。两个归因目标也可分别声明 `comparison=2025-07` 与 `comparison=2026-06`。编译器按“目标 + 角色 + 物理时期”生成消费槽位，不因角色同名合并不同物理时期。
+
 归因目标可附带可选 `metric_semantics`、`parent_target_ref`、`relation_to_parent` 和 `ranking`。这些字段只进入 binding/结果元数据，不生成事实槽位；缺失、unknown 或低置信度不阻断归因。
 
 模型必须先完整声明用户要求的事实、派生和归因，再声明输入适配。输入适配不得替代或隐藏最终业务需求。
@@ -87,6 +91,8 @@
 ### 输入适配
 
 当计算需要的输入无法由源表直接提供，但存在唯一、可追溯的安全转换时，使用 `input_adaptations`。表达式复用自定义计算的白名单 AST；目标由指标、时期角色、视角和维度确定。相同目标只允许一个适配节点。
+
+Prepare 自动生成的适配可额外携带 `target_period`，用于目标局部时期不在 `analysis_task.periods` 中，或同名角色在不同归因目标中指向不同物理时期的情况。模型不得为粒度上卷手写该字段；Prepare 根据目标时期和源能力生成并校验。
 
 ```json
 {
@@ -142,6 +148,39 @@
 `operator` 只允许 `eq|in|exclude`，同一 requirement 的多项约束按 AND 组合。该结构表达逻辑口径，不代表物理选择器已可用；Resolve 使用指标支持维度和实时枚举判断可得性，Prepare 才写入 `dimensions` 或生成维度成员适配。约束身份必须包含 `task_id + requirement_id + metric_ref + normalized constraints`，所有 binding 均按 requirement 隔离，不能覆盖同一逻辑指标的无约束需求。
 
 安全自动路径限于：现成完整口径事实、基础指标单成员选择、可加指标的多成员求和、同一指标全域减同一指标排除成员，以及既有注册组合/派生。两个独立指标名称看似可相减时最多生成需确认假设；只有用户显式公式、注册定义或结构化同指标成员关系才能生成 AST。
+
+当 Query 已明确要求一个运算结果、但 Query 层无法判断它最终由现成事实、成员选择还是注册公式履约时，可在对应 Requirement 暂存路径无关的 `resolution_intent`。当前只允许 `operation=share_level`，并必须声明 `output_metric_object=ratio`、`operands.numerator` 和 `operands.denominator`。其中维度条件仍是逻辑语义，不是物理 selector。
+
+```json
+{
+  "requirement_id": "douyin_share",
+  "metric_ref": "express_volume",
+  "period_roles": ["analysis"],
+  "semantic_text": "抖音快递占比",
+  "resolution_intent": {
+    "operation": "share_level",
+    "output_metric_object": "ratio",
+    "operands": {
+      "numerator": {
+        "concept_ref": "express_volume",
+        "metric_constraints": [{
+          "kind": "dimension_filter",
+          "operator": "eq",
+          "dimension_hint": "平台",
+          "values": ["抖音"],
+          "provenance": "user_explicit"
+        }]
+      },
+      "denominator": {
+        "concept_ref": "express_volume",
+        "scope_kind": "market_total"
+      }
+    }
+  }
+}
+```
+
+`resolution_intent` 与 `derived_metric_id`、`composition_id` 互斥。Gateway 按 Requirement 选择直接占比事实、同指标成员占比或注册组合；Prepare 必须删除 intent 并物化为既有事实、派生或 `metric_compositions`。未物化 intent 不得进入 Compile，Fast Query 也必须转交统一 Prepare 流程。旧 IR 不含该字段时行为不变。
 
 ### 派生需求
 

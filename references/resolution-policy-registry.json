@@ -1,6 +1,6 @@
 {
   "schema_version": "resolution_policy/2.0",
-  "policy_version": "2.4.0",
+  "policy_version": "2.6.0",
   "limits": {
     "max_candidates_per_case": 3
   },
@@ -12,6 +12,7 @@
     },
     "measure_terms": {
       "growth_rate": ["增速", "增长率", "涨幅"],
+      "share": ["占比", "市占率", "份额"],
       "delta": ["增量", "绝对变化"]
     },
     "core_measure_terms": {
@@ -25,6 +26,9 @@
       "month": ["月度"],
       "quarter": ["季度"],
       "year": ["年度"]
+    },
+    "scope_terms": {
+      "universe": ["大盘", "整体", "全市场"]
     },
     "constraint_operator_terms": {
       "eq": ["仅", "只看", "限定"],

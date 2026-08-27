@@ -149,6 +149,16 @@ def assess_query(ir: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
 
     reasons: list[str] = []
     profile = "fast_derived" if calculation_nodes else "fast_fact"
+    unresolved_resolution_intents = sum(
+        1
+        for collection in (
+            "fact_observations", "metric_compositions", "derived_requirements",
+            "attribution_targets",
+        )
+        for item in ir.get(collection) or []
+        if isinstance(item, dict) and item.get("resolution_intent") is not None
+    )
+    features["unresolved_resolution_intents"] = unresolved_resolution_intents
     if targets or adaptive_fetch:
         profile = "orchestrated"
         if targets:
@@ -162,6 +172,7 @@ def assess_query(ir: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
             "BLOCKED_PLAN_NODE": bool(blocked_nodes),
             "INFERRED_DEFINITION_AMBIGUOUS": inferred_ambiguities > 0,
             "RESULT_DEPENDENCY_CHAIN": result_refs > 0,
+            "RESOLUTION_INTENT_REQUIRES_PREPARE": unresolved_resolution_intents > 0,
         }
         budget_failures = {
             "METRIC_BUDGET_EXCEEDED": len(metrics) > limits["metrics"],

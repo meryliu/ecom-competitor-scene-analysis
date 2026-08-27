@@ -25,6 +25,8 @@ ALLOWED_RULE_FIELDS = {
     "skip_if_metric_contains_any",
     "allowed_object_provenance",
     "derived_metric_ids",
+    "require_breakdown",
+    "semantic_role",
 }
 ALLOWED_TRIGGER_FIELDS = {"mode", "any", "all"}
 ALLOWED_PROVENANCE = {
@@ -34,6 +36,7 @@ ALLOWED_PROVENANCE = {
     "registered_definition",
     "source_metadata",
 }
+ALLOWED_SEMANTIC_ROLES = {"primary", "compatible_alternative"}
 
 
 class BusinessIntentPolicyError(ValueError):
@@ -155,6 +158,14 @@ def validate_business_intent_policy(policy: dict[str, Any]) -> None:
                 "INVALID_BUSINESS_INTENT_POLICY",
                 f"{intent_id}.derived_metric_ids 非法",
             )
+        if not isinstance(rule.get("require_breakdown", False), bool):
+            raise BusinessIntentPolicyError(
+                "INVALID_BUSINESS_INTENT_POLICY", f"{intent_id}.require_breakdown 必须是布尔值"
+            )
+        if str(rule.get("semantic_role") or "primary") not in ALLOWED_SEMANTIC_ROLES:
+            raise BusinessIntentPolicyError(
+                "INVALID_BUSINESS_INTENT_POLICY", f"{intent_id}.semantic_role 非法"
+            )
 
 
 def load_business_intent_policy(path: Path | None = None) -> dict[str, Any]:
@@ -170,6 +181,10 @@ def _triggered(
     triggers = rule.get("triggers") or {}
     if triggers.get("mode") == "always":
         return True
+    if rule.get("require_breakdown") and not any(
+        item.get("breakdown_dimensions") for item in consumers if isinstance(item, dict)
+    ):
+        return False
     derived_metric_ids = set(str(value) for value in rule.get("derived_metric_ids") or [])
     consumer_derived_ids = {
         str(item.get("derived_metric_id"))
@@ -216,7 +231,7 @@ def generate_metric_hypotheses(
         "fact_observations", "derived_requirements"
     })
     hypotheses: list[dict[str, Any]] = []
-    seen: set[tuple[tuple[str, ...], str]] = set()
+    seen: set[tuple[tuple[str, ...], str, str]] = set()
     for rule in sorted(policy["rules"], key=lambda item: -int(item["priority"])):
         if rule.get("intent_id") != "declared_metric" and not alternatives_allowed:
             continue
@@ -235,7 +250,8 @@ def generate_metric_hypotheses(
             if rule.get("metric_object") == "inherit"
             else rule.get("metric_object")
         )
-        identity = (terms, str(metric_object or ""))
+        semantic_role = str(rule.get("semantic_role") or "primary")
+        identity = (terms, str(metric_object or ""), semantic_role)
         if identity in seen:
             continue
         seen.add(identity)
@@ -244,6 +260,7 @@ def generate_metric_hypotheses(
             "priority": int(rule["priority"]),
             "requested_terms": list(terms),
             "metric_object": metric_object,
+            "semantic_role": semantic_role,
             "object_override_allowed": (
                 object_provenance == "model_inferred"
                 and metric_object in {"volume", "ratio"}

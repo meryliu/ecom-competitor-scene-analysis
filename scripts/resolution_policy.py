@@ -21,8 +21,14 @@ from business_intent_policy import (
     load_business_intent_policy,
 )
 from candidate_semantics import (
+    breakdown_core_evidence,
     constrained_core_evidence,
     full_scope_evidence,
+)
+from fulfillment_candidates import (
+    candidate_type_for_path,
+    fulfillment_tier_for_path,
+    select_fulfillment_candidate,
 )
 from metric_constraints import (
     MetricConstraintError,
@@ -35,7 +41,7 @@ from time_rollup import normalize_period as _normalize_time_period
 
 
 POLICY_SCHEMA = "resolution_policy/2.0"
-ENGINE_VERSION = "2.10.0"
+ENGINE_VERSION = "2.13.0"
 DEFAULT_POLICY_PATH = (
     Path(__file__).resolve().parents[1]
     / "references"
@@ -135,6 +141,7 @@ def validate_resolution_policy(policy: dict[str, Any]) -> None:
         "measure_terms",
         "core_measure_terms",
         "grain_terms",
+        "scope_terms",
         "constraint_operator_terms",
         "equivalence_rules",
     }
@@ -150,6 +157,7 @@ def validate_resolution_policy(policy: dict[str, Any]) -> None:
         "measure_terms",
         "core_measure_terms",
         "grain_terms",
+        "scope_terms",
         "constraint_operator_terms",
     ):
         values = semantic_normalization.get(field) or {}
@@ -1105,7 +1113,7 @@ def _resolve_constrained_requirement(
             else None
         )
         constraint_tier = 0 if full_scope else 1
-        fulfillment_tier = 0 if full_scope else 1
+        fulfillment_tier = fulfillment_tier_for_path(path, 0) if full_scope else 1
         if not full_scope:
             supported = {str(value) for value in metadata.get("dimensions") or []}
             variant_limit = int(policy.get("limits", {}).get("max_candidates_per_case", 3))
@@ -1155,16 +1163,14 @@ def _resolve_constrained_requirement(
             }
             if "exclude" in operators:
                 path = "same_metric_total_minus_members"
-                fulfillment_tier = 3
             elif any(
                 item["operator"] == "in" and len(item["values"]) > 1
                 for item in constraints
             ):
                 path = "additive_member_sum"
-                fulfillment_tier = 2
             else:
                 path = "member_selector"
-                fulfillment_tier = 1
+            fulfillment_tier = fulfillment_tier_for_path(path)
             if path in {"same_metric_total_minus_members", "additive_member_sum"} and not _metric_additive(metadata):
                 conflicts.append("metric_non_additive")
         if core_score < core_floor:
@@ -1187,6 +1193,7 @@ def _resolve_constrained_requirement(
                 "metric": name,
                 "status": "viable" if not conflicts else "infeasible",
                 "path": path,
+                "candidate_type": candidate_type_for_path(path),
                 "semantic_tier": semantic_tier,
                 "constraint_tier": constraint_tier,
                 "derived_tier": int(derived_evidence.get("tier") or 0),
@@ -1443,6 +1450,7 @@ def _intent_candidate_packet(candidate: dict[str, Any]) -> dict[str, Any]:
         for key in (
             "candidate_id",
             "intent_id",
+            "semantic_role",
             "status",
             "metric",
             "metric_object",
@@ -1453,6 +1461,7 @@ def _intent_candidate_packet(candidate: dict[str, Any]) -> dict[str, Any]:
             "constraint_tier",
             "derived_tier",
             "fulfillment_tier",
+            "candidate_type",
             "requires_confirmation",
             "confidence_detail",
             "match_evidence",
@@ -1473,7 +1482,7 @@ def _intent_candidate_packet(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _resolve_business_intent(
+def _resolve_business_intent_single(
     index: dict[str, Any],
     context: dict[str, Any],
     metric: dict[str, Any],
@@ -1499,7 +1508,11 @@ def _resolve_business_intent(
     candidates: list[dict[str, Any]] = []
     rejected_candidates: list[dict[str, Any]] = []
     evaluation = resolution_policy.get("candidate_evaluation") or {}
-    core_floor = float(evaluation.get("lexical_recall_floor", 0.78))
+    core_floor = float(
+        evaluation.get(
+            "core_semantic_floor", evaluation.get("lexical_recall_floor", 0.78)
+        )
+    )
     rollup_edges = (resolution_policy.get("grain_rollup") or {}).get("allowed_edges") or []
     target_grains = {
         parsed[0]
@@ -1510,15 +1523,20 @@ def _resolve_business_intent(
     has_registered_derived = any(
         item.get("requirement_type") == "derived_requirements" for item in consumers
     )
-    has_alternative_intent = any(
-        item.get("intent_id") != "declared_metric" for item in hypotheses
-    )
     allowed_object_sets = [
         set(str(value) for value in consumer.get("allowed_metric_objects") or [])
         for consumer in consumers
         if consumer.get("allowed_metric_objects")
     ]
     candidate_margin = float(evaluation.get("minimum_candidate_margin", 0.1))
+
+    contextual_terms = list(dict.fromkeys(
+        str(value).strip()
+        for consumer in consumers
+        for value in (consumer.get("semantic_text"), consumer.get("query_fragment"))
+        if str(value or "").strip()
+    ))[:3]
+    explicit_breakdown = bool(planning_context.get("breakdown_dimensions"))
 
     def competitive_band(evaluated: list[dict[str, Any]]) -> list[dict[str, Any]]:
         deduplicated: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -1569,7 +1587,34 @@ def _resolve_business_intent(
                 str(planning_context.get("query") or ""),
                 resolution_policy,
             )
-            for recalled in resolution.get("candidates") or []:
+            recalled_by_name = {
+                str(item.get("name")): deepcopy(item)
+                for item in resolution.get("candidates") or []
+                if item.get("name")
+            }
+            # One bounded contextual pass broadens lexical recall only. Every
+            # result is still scored against metric.name and must pass the same
+            # core/object/unit/grain/dimension gates below.
+            if explicit_breakdown or not recalled_by_name:
+                for contextual_term in contextual_terms:
+                    contextual = _query_metric_resolution(
+                        {**requested, "name": contextual_term},
+                        index.get("metrics") or {},
+                        str(planning_context.get("query") or ""),
+                        resolution_policy,
+                    )
+                    for item in contextual.get("candidates") or []:
+                        name = str(item.get("name") or "")
+                        if not name:
+                            continue
+                        enriched = deepcopy(item)
+                        enriched.setdefault("evidence", []).append("bounded_contextual_recall")
+                        previous = recalled_by_name.get(name)
+                        if previous is None or float(enriched.get("confidence") or 0) > float(
+                            previous.get("confidence") or 0
+                        ):
+                            recalled_by_name[name] = enriched
+            for recalled in recalled_by_name.values():
                 binding = str(recalled.get("name") or "")
                 if not binding:
                     continue
@@ -1595,9 +1640,16 @@ def _resolve_business_intent(
                     if paths and paths.issubset({"direct_fact", "aggregate_fact"})
                     else None
                 )
-                core_score = _core_semantic_score(
-                    metric.get("name"), binding, metadata, resolution_policy
+                core_evidence = breakdown_core_evidence(
+                    metric.get("name"),
+                    binding,
+                    metadata,
+                    requested_breakdowns,
+                    dimension,
+                    index.get("dimensions") or {},
+                    resolution_policy,
                 )
+                core_score = float(core_evidence.get("score") or 0.0)
                 derived_score = _derived_semantic_score(
                     hypothesis.get("intent_id"), binding, metadata, resolution_policy
                 )
@@ -1607,20 +1659,24 @@ def _resolve_business_intent(
                     6,
                 )
                 intent_id = str(hypothesis.get("intent_id") or "")
+                semantic_role = str(hypothesis.get("semantic_role") or "primary")
+                object_mismatch = "model_inferred_metric_object_mismatch" in set(
+                    recalled.get("soft_conflicts") or []
+                )
                 if core_score >= core_floor:
-                    if intent_id != "declared_metric":
+                    if semantic_role == "compatible_alternative":
+                        semantic_tier = 1 if derived_score > 0 else 3
+                    elif intent_id != "declared_metric":
                         semantic_tier = 0 if derived_score > 0 else 3
-                    elif has_alternative_intent:
-                        semantic_tier = 1
                     else:
                         semantic_tier = 0
-                    requires_confirmation = semantic_tier == 3
                 elif derived_score > 0:
                     semantic_tier = 2
-                    requires_confirmation = True
                 else:
                     semantic_tier = 3
-                    requires_confirmation = True
+                if object_mismatch and semantic_tier < 3:
+                    semantic_tier = max(semantic_tier, 1)
+                requires_confirmation = semantic_tier >= 2
                 conflicts = {
                     str(item.get("reason"))
                     for item in ([dimension_failure] if dimension_failure else []) + grain_checks
@@ -1630,9 +1686,9 @@ def _resolve_business_intent(
                 }
                 conflicts.update(str(value) for value in recalled.get("conflicts") or [])
                 if (
-                    "model_inferred_metric_object_mismatch"
-                    in set(recalled.get("soft_conflicts") or [])
+                    object_mismatch
                     and recalled.get("semantic_status") != "equivalent"
+                    and semantic_role != "compatible_alternative"
                 ):
                     conflicts.add("model_inferred_object_semantics_unproven")
                 # A source-side derived metric cannot replace a shared logical metric
@@ -1652,6 +1708,7 @@ def _resolve_business_intent(
                 )
                 candidate = {
                     "intent_id": intent_id,
+                    "semantic_role": semantic_role,
                     "status": "viable" if viable else "infeasible",
                     "metric": binding,
                     "metric_object": hypothesis.get("metric_object"),
@@ -1661,7 +1718,10 @@ def _resolve_business_intent(
                     "requires_confirmation": requires_confirmation,
                     "confidence_detail": {
                         "core": round(core_score, 6),
+                        "core_mode": core_evidence.get("mode"),
+                        "core_matched_text": core_evidence.get("matched_text"),
                         "derived": round(derived_score, 6),
+                        "object_match": not object_mismatch,
                         "grain_hint": _grain_signature(
                             metric.get("name"), resolution_policy
                         ),
@@ -1695,7 +1755,9 @@ def _resolve_business_intent(
                         "grains": grain_checks,
                     },
                     "evidence": list(hypothesis.get("evidence") or [])
+                    + list(recalled.get("evidence") or [])
                     + ["core_semantics_scored", "structural_grain_evaluated"]
+                    + (["breakdown_scoped_core"] if core_evidence.get("mode") == "breakdown_scoped" else [])
                     + (["derived_semantics_match"] if derived_score > 0 else []),
                     "conflicts": sorted(conflicts),
                     "object_override_allowed": bool(hypothesis.get("object_override_allowed")),
@@ -1727,19 +1789,16 @@ def _resolve_business_intent(
         })
     deduplicated: dict[tuple[Any, ...], dict[str, Any]] = {}
     for candidate in candidates:
-        key = (
-            candidate.get("metric"),
-            candidate.get("metric_object"),
-            candidate.get("path"),
-            candidate.get("status"),
-        )
+        key = (candidate.get("metric"), candidate.get("path"), candidate.get("status"))
         previous = deduplicated.get(key)
         if previous is None or (
             -int(candidate.get("semantic_tier") or 0),
+            bool((candidate.get("confidence_detail") or {}).get("object_match")),
             int(candidate.get("priority") or 0),
             float(candidate.get("confidence") or 0.0),
         ) > (
             -int(previous.get("semantic_tier") or 0),
+            bool((previous.get("confidence_detail") or {}).get("object_match")),
             int(previous.get("priority") or 0),
             float(previous.get("confidence") or 0.0),
         ):
@@ -1759,6 +1818,95 @@ def _resolve_business_intent(
         "candidates": bounded,
         "viable_candidates": bounded,
         "rejected_candidates": rejected_candidates,
+    }
+
+
+def _resolve_business_intent(
+    index: dict[str, Any],
+    context: dict[str, Any],
+    metric: dict[str, Any],
+    resolution_policy: dict[str, Any],
+    business_policy: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Evaluate shared logical metrics in Requirement-local contexts.
+
+    Metric-level unions remain diagnostic compatibility fields.  A consumer's
+    periods and breakdowns never become hard gates for another consumer.
+    Constrained and path-neutral consumers are resolved by their dedicated paths.
+    """
+    consumers = [
+        item for item in metric.get("consumers") or []
+        if isinstance(item, dict)
+        and not item.get("metric_constraints")
+        and not item.get("resolution_intent")
+    ]
+    if not consumers:
+        if metric.get("consumers"):
+            return None
+        return _resolve_business_intent_single(
+            index, context, metric, resolution_policy, business_policy
+        )
+    resolutions: list[dict[str, Any]] = []
+    for number, consumer in enumerate(consumers):
+        local_metric = deepcopy(metric)
+        local_metric["consumers"] = [deepcopy(consumer)]
+        local_metric["required_periods"] = list(consumer.get("periods") or [])
+        local_metric["required_dimensions"] = list(consumer.get("dimensions") or [])
+        local_metric["required_breakdown_dimensions"] = list(
+            consumer.get("breakdown_dimensions") or []
+        )
+        resolution = _resolve_business_intent_single(
+            index, context, local_metric, resolution_policy, business_policy
+        )
+        if resolution is None:
+            continue
+        requirement_id = str(consumer.get("requirement_id") or f"consumer_{number + 1}")
+        for candidate in [
+            *(resolution.get("candidates") or []),
+            *(resolution.get("rejected_candidates") or []),
+        ]:
+            candidate["requirement_id"] = requirement_id
+        resolutions.append(resolution)
+    if not resolutions:
+        return None
+    viable: dict[tuple[Any, ...], dict[str, Any]] = {}
+    rejected: list[dict[str, Any]] = []
+    for resolution in resolutions:
+        for candidate in resolution.get("viable_candidates") or []:
+            key = (
+                candidate.get("metric"), candidate.get("metric_object"),
+                candidate.get("intent_id"),
+            )
+            previous = viable.get(key)
+            if previous is None or float(candidate.get("confidence") or 0) > float(
+                previous.get("confidence") or 0
+            ):
+                viable[key] = candidate
+        rejected.extend(resolution.get("rejected_candidates") or [])
+    identity = {
+        "task_id": context.get("task_id"),
+        "metric_ref": metric.get("metric_ref") or metric.get("name"),
+        "requested_name": metric.get("name"),
+        "query": context.get("query"),
+        "requirement_ids": sorted(
+            str(item.get("requirement_id"))
+            for item in consumers if item.get("requirement_id")
+        ),
+    }
+    bounded = sorted(
+        viable.values(),
+        key=lambda item: (
+            int(item.get("semantic_tier") or 0),
+            -float(item.get("confidence") or 0),
+            str(item.get("candidate_id") or ""),
+        ),
+    )[: int(business_policy.get("limits", {}).get("max_candidates_per_case", 3))]
+    return {
+        "expanded": True,
+        "identity": identity,
+        "candidates": bounded,
+        "viable_candidates": bounded,
+        "rejected_candidates": rejected,
     }
 
 
@@ -1785,16 +1933,20 @@ def _source_derived_requirement_bindings(
         candidates = [
             item
             for item in rejected
+            if str(item.get("requirement_id") or "") == requirement_id
             if str(item.get("intent_id") or "") in allowed_intents
-            and int(item.get("semantic_tier", 99)) == 0
+            and int(item.get("semantic_tier", 99)) <= 2
             and set(item.get("conflicts") or []) == {"requirement_level_binding_required"}
             and item.get("path_hint") in {"direct_fact", "aggregate_fact"}
         ]
         if len(candidates) != 1:
             continue
         selected = candidates[0]
+        source_series = derived_metric_id == "yoy_trend_change"
         bindings[requirement_id] = {
-            "mode": "source_derived_fact",
+            "mode": (
+                "source_derived_calculation" if source_series else "source_derived_fact"
+            ),
             "derived_metric_id": derived_metric_id,
             "source_metric": selected.get("metric"),
             "source_metric_object": selected.get("metric_object"),
@@ -1805,7 +1957,62 @@ def _source_derived_requirement_bindings(
                 iter(consumer.get("period_roles") or ["analysis"]), "analysis"
             ),
         }
+        if source_series:
+            bindings[requirement_id].update({
+                "source_period_roles": ["analysis", "comparison"],
+                "execution_derived_metric_id": "period_change",
+            })
     return bindings
+
+
+def _performance_requirement_bindings(
+    metric: dict[str, Any],
+    derived_bindings: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Let a proven precomputed performance fact fulfill a broad performance output.
+
+    This is limited to sibling Requirements with the same breakdown. Explicit
+    level requests (amount, scale, level, how much) are never rewritten.
+    """
+    consumers = [item for item in metric.get("consumers") or [] if isinstance(item, dict)]
+    by_id = {
+        str(item.get("requirement_id")): item
+        for item in consumers if item.get("requirement_id")
+    }
+    additions: dict[str, dict[str, Any]] = {}
+    for requirement_id, consumer in by_id.items():
+        if consumer.get("requirement_type") != "fact_observations":
+            continue
+        semantic_text = str(consumer.get("semantic_text") or "")
+        if "表现" not in semantic_text or any(
+            token in semantic_text for token in ("金额", "规模", "水平", "多少")
+        ):
+            continue
+        breakdown = set(str(value) for value in consumer.get("breakdown_dimensions") or [])
+        periods = set(str(value) for value in consumer.get("periods") or [])
+        compatible = []
+        for sibling_id, binding in derived_bindings.items():
+            sibling = by_id.get(sibling_id) or {}
+            if set(str(value) for value in sibling.get("breakdown_dimensions") or []) != breakdown:
+                continue
+            if periods and not periods.intersection(
+                str(value) for value in sibling.get("periods") or []
+            ):
+                continue
+            compatible.append(binding)
+        physical_metrics = {
+            str(item.get("source_metric")) for item in compatible if item.get("source_metric")
+        }
+        if len(physical_metrics) != 1:
+            continue
+        selected = compatible[0]
+        additions[requirement_id] = {
+            "mode": "source_scoped_fact",
+            "source_metric": next(iter(physical_metrics)),
+            "candidate_id": selected.get("candidate_id"),
+            "fulfillment_basis": "sibling_precomputed_performance_fact",
+        }
+    return additions
 
 
 def _joint_block_candidates(
@@ -2202,6 +2409,24 @@ def resolve_request_overlay(
                 requirement_bindings = _source_derived_requirement_bindings(
                     intent_resolution, metric, intent_policy
                 )
+                requirement_bindings.update(
+                    _performance_requirement_bindings(metric, requirement_bindings)
+                )
+                if requirement_bindings and not viable_candidates:
+                    for consumer in metric.get("consumers") or []:
+                        if not isinstance(consumer, dict):
+                            continue
+                        unresolved_id = str(consumer.get("requirement_id") or "")
+                        if not unresolved_id or unresolved_id in requirement_bindings:
+                            continue
+                        requirement_bindings[unresolved_id] = {
+                            "mode": "unavailable",
+                            "reason": "no_complete_requirement_candidate",
+                            "requested_periods": list(consumer.get("periods") or []),
+                            "requested_breakdown_dimensions": list(
+                                consumer.get("breakdown_dimensions") or []
+                            ),
+                        }
                 task_resolution["requirement_bindings"].update(requirement_bindings)
                 consumer_requirement_ids = {
                     str(item.get("requirement_id") or "")
@@ -2315,6 +2540,17 @@ def resolve_request_overlay(
                     }
                     continue
                 binding = str(selected_intent["metric"])
+                resolution_requirement_id = str(
+                    metric.get("resolution_requirement_id") or ""
+                )
+                if resolution_requirement_id:
+                    task_resolution["requirement_bindings"][resolution_requirement_id] = {
+                        "mode": "source_scoped_fact",
+                        "source_metric": binding,
+                        "candidate_id": selected_intent.get("candidate_id"),
+                        "output_metric_ref": metric_ref,
+                        "resolution_operation": "share_level",
+                    }
                 task_resolution["metric_bindings"][requested_name] = binding
                 binding_votes.setdefault(requested_name, set()).add(binding)
                 binding_successes[requested_name] = binding_successes.get(requested_name, 0) + 1
@@ -2369,6 +2605,17 @@ def resolve_request_overlay(
             status = "bound" if selected else str(resolution.get("status") or "not_found")
             if selected:
                 binding = str(selected["metric"])
+                resolution_requirement_id = str(
+                    metric.get("resolution_requirement_id") or ""
+                )
+                if resolution_requirement_id:
+                    task_resolution["requirement_bindings"][resolution_requirement_id] = {
+                        "mode": "source_scoped_fact",
+                        "source_metric": binding,
+                        "candidate_id": selected.get("candidate_id"),
+                        "output_metric_ref": metric_ref,
+                        "resolution_operation": "share_level",
+                    }
                 task_resolution["metric_bindings"][requested_name] = binding
                 binding_votes.setdefault(requested_name, set()).add(binding)
                 binding_successes[requested_name] = binding_successes.get(requested_name, 0) + 1
@@ -2582,19 +2829,85 @@ def resolve_request_overlay(
                 if "ambiguous" in statuses
                 else "blocked"
             )
-            task_resolution["composition_resolutions"].append({
+            direct_status = (
+                task_resolution["metric_statuses"].get(metric_ref) or {}
+            ).get("status", "not_found")
+            direct_recall_floor = float(
+                (policy.get("candidate_evaluation") or {}).get("lexical_recall_floor", 0.78)
+            )
+            direct_cases = [
+                case for case in task_resolution.get("resolution_cases") or []
+                if case.get("metric_ref") == metric_ref
+                and case.get("kind") in {"query_metric", "interpretation"}
+            ]
+            has_viable_direct_ambiguity = direct_status == "ambiguous" and any(
+                float(candidate.get("confidence") or 0.0) >= direct_recall_floor
+                for case in direct_cases
+                for candidate in case.get("candidates") or []
+            )
+            fulfillment_candidates: list[dict[str, Any]] = []
+            direct_binding = (
+                task_resolution["metric_statuses"].get(metric_ref) or {}
+            ).get("binding")
+            if direct_binding:
+                fulfillment_candidates.append({
+                    "candidate_id": f"direct:{direct_binding}",
+                    "candidate_type": "direct_fact",
+                    "status": "viable",
+                    "metric": direct_binding,
+                    "confidence": 1.0,
+                })
+            fulfillment_candidates.append({
+                "candidate_id": f"composition:{composition_id}",
+                "candidate_type": "registered_composition",
+                "status": (
+                    "viable"
+                    if fallback_status == "ready"
+                    and direct_status in {
+                        "not_found", "not_executable", "composition_deferred"
+                    }
+                    or fallback_status == "ready"
+                    and direct_status == "ambiguous"
+                    and not has_viable_direct_ambiguity
+                    else "infeasible"
+                ),
+                "composition_id": composition_id,
+                "input_bindings": deepcopy(input_bindings),
+                "confidence": 1.0 if fallback_status == "ready" else 0.0,
+            })
+            selected_fulfillment, ranked_fulfillments = select_fulfillment_candidate(
+                fulfillment_candidates
+            )
+            composition_resolution = {
                 "metric_ref": metric_ref,
                 "requested_metric": intent.get("requested_metric"),
                 "composition_id": composition_id,
-                "direct_status": (
-                    task_resolution["metric_statuses"].get(metric_ref) or {}
-                ).get("status", "not_found"),
+                "direct_status": direct_status,
                 "input_bindings": input_bindings,
                 "input_statuses": input_statuses,
                 "fallback_status": fallback_status,
                 "deferred_cases": deferred_cases,
                 "consumers": deepcopy(intent.get("consumers") or []),
-            })
+                "fulfillment_candidates": ranked_fulfillments,
+                "selected_fulfillment": deepcopy(selected_fulfillment),
+            }
+            task_resolution["composition_resolutions"].append(composition_resolution)
+            resolution_requirement_id = str(
+                intent.get("resolution_requirement_id") or ""
+            )
+            if (
+                selected_fulfillment is not None
+                and selected_fulfillment.get("candidate_type") == "registered_composition"
+                and resolution_requirement_id
+            ):
+                task_resolution["requirement_bindings"][resolution_requirement_id] = {
+                    "mode": "registered_composition",
+                    "composition_id": composition_id,
+                    "output_metric_ref": metric_ref,
+                    "logical_metric_ref": intent.get("logical_metric_ref"),
+                    "input_bindings": deepcopy(input_bindings),
+                    "resolution_operation": "share_level",
+                }
         task_resolutions[task_id] = task_resolution
 
     for requested_name, bindings in binding_votes.items():

@@ -175,12 +175,14 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(len(payload["facts"]), 1)
         self.assertEqual(payload["schema_version"], "scene_facts/2.0")
         self.assertNotIn("results", payload)
-        self.assertEqual(payload["facts"][0]["metric_ref"], "payment_gmv")
+        self.assertNotIn("metric_ref", payload["facts"][0])
+        self.assertNotIn("metric_object", payload["facts"][0])
         self.assertEqual(payload["facts"][0]["dimensions"], {"平台": "京东"})
         self.assertEqual(payload["facts"][0]["value"], 2605.0)
         self.assertEqual(payload["facts"][0]["source_ref"]["revision"], 7)
         self.assertTrue(payload["facts"][0]["additive"])
         self.assertEqual(payload["bindings"][0]["fact_slot_id"], "slot1")
+        self.assertEqual(payload["bindings"][0]["metric_ref"], "payment_gmv")
 
     def test_provider_emits_percentage_in_declared_unit_magnitude(self) -> None:
         index = sample_index()

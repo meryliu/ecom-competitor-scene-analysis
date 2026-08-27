@@ -238,6 +238,53 @@ class PrepareAnalysisTests(unittest.TestCase):
         self.assertEqual(slot["capability_path"], "direct_fact")
         self.assertEqual(slot["grain"], "month")
 
+    def test_attribution_prepares_grouped_target_local_periods(self) -> None:
+        ir = base_ir("支付GMV")
+        ir["analysis_task"]["periods"] = {"analysis": "2026-06"}
+        ir["attribution_targets"] = [{
+            "target_id": "platform_attr",
+            "metric_ref": "target",
+            "metric_object": "volume",
+            "scenario": "metric_change",
+            "target_semantics": "absolute_delta",
+            "decomposition": "dimension",
+            "periods": {"analysis": "2026-06", "comparison": "2026-05"},
+            "view_id": "v",
+            "group_dimensions": ["平台"],
+            "criticality": "required",
+        }]
+
+        prepared, _ = prepare_analysis_ir(
+            ir, source_index(), self.compositions, self.derived
+        )
+        self.assertEqual(
+            prepared["analysis_task"]["periods"], {"analysis": "2026-06"}
+        )
+        selectors = [
+            item for item in prepared["canonical_fact_selectors"]
+            if item["metric_ref"] == "target"
+        ]
+        self.assertEqual(
+            {(item["period_role"], item["period"]) for item in selectors},
+            {("analysis", "2026-06"), ("comparison", "2026-05")},
+        )
+        self.assertEqual(
+            {tuple(item["dimension_refs"]) for item in selectors},
+            {("平台",)},
+        )
+        plan, report = compile_and_validate(
+            prepared,
+            ROOT / "references" / "derived-metric-registry.json",
+            ROOT / "references" / "metric-composition-registry.json",
+        )
+        self.assertTrue(report["valid"], report)
+        slots = plan["analysis_task"]["fact_requirements"]
+        self.assertEqual(
+            {(slot["period_role"], slot["period"]) for slot in slots},
+            {("analysis", "2026-06"), ("comparison", "2026-05")},
+        )
+        self.assertTrue(all(slot.get("capability_path") == "direct_fact" for slot in slots))
+
     def test_unsupported_metadata_grain_does_not_use_fact_block(self) -> None:
         index = source_index()
         index["metrics"]["支付GMV"]["supported_grains"] = ["year"]
@@ -715,6 +762,78 @@ class PrepareAnalysisTests(unittest.TestCase):
             "competitor_settlement_rate",
         )
         self.assertTrue(any(item.get("mode") == "derived" for item in decisions))
+
+    def test_registered_share_binding_materializes_idempotently(self) -> None:
+        ir = base_ir("大盘快递量", "volume")
+        ir["analysis_task"]["periods"] = {"analysis": "2026-05"}
+        ir["fact_observations"] = [{
+            "requirement_id": "douyin_share", "metric_ref": "target",
+            "period_roles": ["analysis"], "view_id": "v",
+            "semantic_text": "抖音快递占比", "dimensions": {},
+            "dimension_refs": [],
+            "resolution_intent": {
+                "operation": "share_level", "output_metric_object": "ratio",
+                "operands": {
+                    "numerator": {"concept_ref": "target"},
+                    "denominator": {"concept_ref": "target", "scope_kind": "market_total"},
+                },
+            },
+        }]
+        capabilities = source_index()
+        capabilities["dimensions"]["无"] = {"values": []}
+        capabilities["dimension_bindings"]["无"] = "无"
+        for name in ("抖音包裹量", "邮政快递揽收量"):
+            capabilities["metrics"][name] = {
+                "unit": "亿件", "additive": True, "dimensions": ["无"]
+            }
+            capabilities["metric_bindings"][name] = name
+            capabilities["availability"]["month"]["metrics"][name] = {
+                "dimension": "无"
+            }
+        virtual_ref = "__resolution_share"
+        capabilities["requirement_bindings"] = {"douyin_share": {
+            "mode": "registered_composition",
+            "composition_id": "douyin_express_market_share",
+            "output_metric_ref": virtual_ref,
+            "logical_metric_ref": "target",
+            "input_bindings": {
+                "numerator": "抖音包裹量", "denominator": "邮政快递揽收量",
+            },
+        }}
+        capabilities["composition_resolutions"] = [{
+            "metric_ref": virtual_ref,
+            "composition_id": "douyin_express_market_share",
+            "direct_status": "not_found",
+            "input_bindings": {
+                "numerator": "抖音包裹量", "denominator": "邮政快递揽收量",
+            },
+            "input_statuses": {
+                "numerator": {"status": "bound", "binding": "抖音包裹量"},
+                "denominator": {"status": "bound", "binding": "邮政快递揽收量"},
+            },
+            "fallback_status": "ready", "deferred_cases": [],
+        }]
+        prepared, _ = prepare_analysis_ir(
+            ir, capabilities, self.compositions, self.derived
+        )
+        self.assertEqual(prepared["fact_observations"], [])
+        self.assertEqual(len(prepared["metric_compositions"]), 1)
+        requirement = prepared["metric_compositions"][0]
+        self.assertEqual(requirement["requirement_id"], "douyin_share")
+        self.assertEqual(requirement["metric_ref"], virtual_ref)
+        self.assertEqual(
+            requirement["composition_id"], "douyin_express_market_share"
+        )
+        self.assertNotIn("resolution_intent", requirement)
+
+        prepared_again, _ = prepare_analysis_ir(
+            prepared, capabilities, self.compositions, self.derived
+        )
+        self.assertEqual(prepared_again["metric_compositions"], prepared["metric_compositions"])
+        self.assertEqual(
+            [item["metric_id"] for item in prepared_again["analysis_task"]["metrics"]],
+            [item["metric_id"] for item in prepared["analysis_task"]["metrics"]],
+        )
 
     def test_composition_leaf_confirmation_is_activated_only_during_fallback(self) -> None:
         ir = base_ir("结算率", "ratio")

@@ -30,8 +30,8 @@
      --resume auto
    ```
 
-3. runner 先校验单任务/bundle 输入协议，逐 task 执行业务参数预检；待确认 task 不进入 Provider，bundle 中其他 task 继续。可执行 task 再通过原有归因 IR guard，然后 Gateway resolve 一次逻辑能力并固定 source binding。`metric_change` 在此阶段归一为 `analysis/comparison`；同比派生所需的 `analysis_last_year` 保持独立。编译器统一传播目标过滤上下文并完成公式因子、维度冲突和 selector grain 校验；每个计划存在 `ERROR` 时不取数。Gateway 在同一 revision 下批量读取唯一物理事实，直接输出 `scene_facts/2.0`。
-4. runner 按 bindings 为每个 task 投影逻辑事实，再按 DAG 波次运行事实、输入适配、组合/通用派生、自定义计算和归因。适配结果在波次之间作为共享中间事实注入，下游不重复计算。
+3. runner 先校验单任务/bundle 输入协议，逐 task 执行业务参数预检；待确认 task 不进入 Provider，bundle 中其他 task 继续。可执行 task 再通过原有归因 IR guard，然后 Gateway resolve 一次逻辑能力并固定 source binding。`metric_change` 在目标内归一为 `analysis/comparison`；同比派生所需的任务级 `analysis_last_year` 保持独立，归因目标的 periods 不反写任务级映射。编译器统一传播目标过滤上下文并完成公式因子、维度冲突、selector grain 和 slot 范围校验；每个计划存在 `ERROR` 时不取数。Gateway 在同一 revision 下按源指标、物理时期和物理维度合并需求，批量读取唯一物理事实，直接输出 `scene_facts/2.0`。
+4. runner 按 bindings 为每个 task/slot 投影逻辑事实，再按 DAG 波次运行事实、输入适配、组合/通用派生、自定义计算和归因。适配结果在波次之间作为共享中间事实注入，并继承该适配节点覆盖的全部兼容 consumer slot；下游不重复计算，也不跨 slot 做宽泛语义绑定。
 5. `run-state.json` 在每个阶段原子落盘。成功 facts checkpoint 后的本地失败自动恢复，不再次取数；真实 fetch attempt 只追加不覆盖。
 6. 单独调试执行器时可运行：
 
@@ -88,6 +88,8 @@ Provider 输出的根对象为：
 `value=null` 时必须保持 `missing=true`；不能用 0 或模型估算替代。Provider 只返回基础指标，结算率、同比、占比和归因都由本 Skill 的确定性执行器完成。执行器可以重算缺失标记，但不得抹掉 `raw_missing`。
 
 根对象 `facts[].fact_id` 标识物理事实。按 binding 投影后的执行输入改用 `fact_id=stable_id(physical_fact_id,binding_id)`，并同时保留 `physical_fact_id` 与 `binding_id`。物理去重、消费绑定和逻辑执行身份分别由 Provider、Fact Contract 和 Executor 负责，禁止在 Intent Resolution 或 Executor 中读取源坐标后重新映射。
+
+物理事实不携带逻辑 `metric_ref`、逻辑指标对象或 view；这些字段由 `consumer_bindings` 在投影时恢复。一个 `fact_slot_id` 表示一个可含多行的消费集合。编译器 `1.9.0` 及之后的 selector 必须显式限定一个或多个 slot，正常 Query 不允许因 slot 缺失退回全局语义 selector；无 slot 只作为显式历史计划重放兼容。
 
 ## 组合与通用派生
 

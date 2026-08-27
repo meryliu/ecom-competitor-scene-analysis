@@ -4,7 +4,7 @@
 
 ## 适用边界
 
-指标组合定义“指标是什么”，例如收入除以 GMV。同比、环比、期间变化和范围占比仍由 [derived-metric-registry.json](derived-metric-registry.json) 管理。组合结果可以继续作为通用派生的输入，例如“综合支付TR同比”先计算综合支付TR，再复用 `yoy_growth`。
+指标组合定义“指标是什么”，例如收入除以 GMV，或已登记的两个业务指标构成的跨指标占比。同比、环比、期间变化和同指标选择集占比仍由 [derived-metric-registry.json](derived-metric-registry.json) 管理。组合结果可以继续作为通用派生的输入，例如“综合支付TR同比”先计算综合支付TR，再复用 `yoy_growth`。
 
 正常查询只声明用户要求的业务指标。Gateway 先解析同名直接事实；直接事实明确不可用时，Prepare 才按注册表展开基础指标。不得为了使用组合公式而绕过可用的同名源事实。
 
@@ -20,6 +20,14 @@
 | `competitor_comprehensive_settlement_tr` | 综合结算TR | 广告收入 / 结算GMV + 佣金收入 / 结算GMV |
 
 六个指标均为 `metric_object=ratio`、`unit=rate`。`rate` 使用小数值契约，例如 `value=0.15` 展示为 `15%`。计算继承需求的时期、范围、过滤、视角和拆解维度；事实缺失、叶子不可唯一解析、维度不兼容或分母为零时不得输出成功结果。
+
+## 已注册占比
+
+| `composition_id` | 指标 | 公式 |
+|---|---|---|
+| `douyin_express_market_share` | 抖音快递占比/市占率 | 抖音包裹量 / 邮政快递揽收量 |
+
+该定义只用于占比水平，不覆盖“抖音包裹市占率-同比增速”。若源表未来提供语义、时期和口径完全匹配的直接占比事实，直接事实仍优先。分子和分母是注册时明确的不同范围，不使用 `same_scope` 校验。
 
 ## 注册表达式
 

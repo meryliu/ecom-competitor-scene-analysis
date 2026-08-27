@@ -105,6 +105,76 @@ def constrained_core_evidence(
     }
 
 
+def breakdown_core_evidence(
+    requested_core: Any,
+    candidate_name: str,
+    metadata: dict[str, Any],
+    requested_dimensions: list[str],
+    resolved_dimension: str | None,
+    dimension_catalogue: dict[str, dict[str, Any]],
+    policy: dict[str, Any],
+) -> dict[str, Any]:
+    """Score the core after separating a proven breakdown from metric labels."""
+    base = constrained_core_evidence(
+        requested_core, candidate_name, metadata, [], policy
+    )
+    result = {**base, "mode": "plain", "resolved_dimension": resolved_dimension}
+    if not requested_dimensions or not resolved_dimension:
+        return result
+
+    dimension_metadata = dimension_catalogue.get(resolved_dimension) or {}
+    dimension_terms = {
+        normalize_match_text(value)
+        for value in [
+            *requested_dimensions,
+            resolved_dimension,
+            *(dimension_metadata.get("aliases") or []),
+        ]
+        if normalize_match_text(value)
+    }
+    breakdown_terms = sorted(
+        dimension_terms
+        | {f"分{value}" for value in dimension_terms}
+        | {f"各{value}" for value in dimension_terms},
+        key=len,
+        reverse=True,
+    )
+    universe_terms = sorted(
+        {
+            normalize_match_text(token)
+            for token in (
+                (policy.get("semantic_normalization") or {})
+                .get("scope_terms", {})
+                .get("universe", [])
+            )
+            if normalize_match_text(token)
+        },
+        key=len,
+        reverse=True,
+    )
+    requested = strip_core_tokens(requested_core, policy)
+    for token in universe_terms:
+        requested = requested.replace(token, "")
+    if not requested:
+        return result
+
+    for value in (candidate_name, *(metadata.get("aliases") or [])):
+        candidate_core = strip_core_tokens(value, policy)
+        for token in breakdown_terms:
+            candidate_core = candidate_core.replace(token, "")
+        score = containment_score(requested, candidate_core)
+        if score > float(result.get("score") or 0.0):
+            result = {
+                "score": score,
+                "requested_core": requested,
+                "matched_text": str(value),
+                "matched_core": candidate_core,
+                "mode": "breakdown_scoped",
+                "resolved_dimension": resolved_dimension,
+            }
+    return result
+
+
 def full_scope_evidence(
     phrase: str,
     candidate_name: str,

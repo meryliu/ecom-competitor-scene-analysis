@@ -49,6 +49,22 @@ class CompilePlanTests(unittest.TestCase):
     def compile(self, ir: dict) -> tuple[dict, dict]:
         return compile_and_validate(ir, REGISTRY, COMPOSITIONS)
 
+    def test_compile_rejects_unmaterialized_resolution_intent(self) -> None:
+        ir = base_ir()
+        ir["fact_observations"] = [{
+            "requirement_id": "share", "metric_ref": "payment",
+            "period_roles": ["analysis"], "semantic_text": "京东支付GMV占比",
+            "resolution_intent": {
+                "operation": "share_level", "output_metric_object": "ratio",
+                "operands": {
+                    "numerator": {"concept_ref": "payment"},
+                    "denominator": {"concept_ref": "payment", "scope_kind": "market_total"},
+                },
+            },
+        }]
+        with self.assertRaisesRegex(CompileError, "RESOLUTION_INTENT_UNRESOLVED"):
+            self.compile(ir)
+
     def test_provider_request_is_structured(self) -> None:
         ir = base_ir()
         ir["fact_observations"] = [{
@@ -102,6 +118,171 @@ class CompilePlanTests(unittest.TestCase):
         self.assertTrue(report["valid"], report)
         self.assertEqual(plan["execution_runtime"]["periods"]["analysis_last_year"], "2025-05")
         self.assertEqual(plan["execution_runtime"]["periods"]["comparison"], "2025-05")
+
+    def test_yoy_growth_and_attribution_keep_target_local_period_roles(self) -> None:
+        ir = base_ir()
+        ir["analysis_task"].update({
+            "query": "26年7月，拼多多支付GMV同比增速，从用户视角归因",
+            "periods": {"analysis": "2026-07", "analysis_last_year": "2025-07"},
+        })
+        ir["views"].append({"view_id": "user_view"})
+        ir["derived_requirements"] = [{
+            "requirement_id": "payment_yoy",
+            "metric_ref": "payment",
+            "metric_object": "volume",
+            "derived_metric_id": "yoy_growth",
+            "definition_status": "registered",
+            "dimensions": {"平台": "拼多多"},
+            "criticality": "core",
+        }]
+        ir["attribution_targets"] = [{
+            "target_id": "payment_user_attr",
+            "metric_ref": "payment",
+            "metric_object": "volume",
+            "scenario": "metric_change",
+            "target_semantics": "absolute_delta",
+            "decomposition": "formula",
+            "periods": {"analysis": "2026-07", "comparison": "2025-07"},
+            "view_id": "user_view",
+            "dimensions": {"平台": "拼多多"},
+            "factors": [
+                {"factor_id": "settlement", "kind": "metric", "metric_ref": "settlement"},
+                {"factor_id": "rate", "kind": "metric", "metric_ref": "rate"},
+            ],
+            "formula": {
+                "op": "multiply",
+                "args": [{"factor_ref": "settlement"}, {"factor_ref": "rate"}],
+            },
+            "criticality": "core",
+        }]
+
+        plan, report = self.compile(ir)
+        self.assertTrue(report["valid"], report)
+        self.assertEqual(
+            plan["execution_runtime"]["periods"],
+            {"analysis": "2026-07", "analysis_last_year": "2025-07"},
+        )
+        attribution = next(
+            node for node in plan["nodes"] if node["type"] == "formula_attribution"
+        )
+        binding = attribution["execution"]["binding"]
+        self.assertEqual(
+            binding["periods"],
+            {"analysis": "2026-07", "comparison": "2025-07"},
+        )
+        slots = {
+            slot["fact_slot_id"]: slot
+            for slot in plan["analysis_task"]["fact_requirements"]
+        }
+        for role, period in binding["periods"].items():
+            scoped = binding["metric"]["fact_slot_ids_by_period_role"][role]
+            self.assertTrue(scoped)
+            self.assertEqual(
+                {(slots[slot_id]["period_role"], slots[slot_id]["period"]) for slot_id in scoped},
+                {(role, period)},
+            )
+
+        shared_last_year = [
+            demand for demand in plan["fetch_requests"][0]["fact_demands"]
+            if demand.get("source_metric_name") == "支付GMV"
+            and demand.get("period") == "2025-07"
+        ]
+        self.assertEqual(len(shared_last_year), 1)
+        self.assertEqual(
+            {item["period_role"] for item in shared_last_year[0]["consumer_bindings"]},
+            {"analysis_last_year", "comparison"},
+        )
+
+    def test_two_attribution_targets_can_use_different_local_comparisons(self) -> None:
+        ir = base_ir()
+        ir["analysis_task"]["periods"] = {"analysis": "2026-07"}
+        common = {
+            "metric_ref": "payment",
+            "metric_object": "volume",
+            "scenario": "metric_change",
+            "target_semantics": "absolute_delta",
+            "decomposition": "dimension",
+            "view_id": "platform_view",
+            "group_dimensions": ["平台"],
+            "criticality": "core",
+        }
+        ir["attribution_targets"] = [
+            {
+                **common,
+                "target_id": "payment_yoy_attr",
+                "periods": {"analysis": "2026-07", "comparison": "2025-07"},
+            },
+            {
+                **common,
+                "target_id": "payment_mom_attr",
+                "periods": {"analysis": "2026-07", "comparison": "2026-06"},
+            },
+        ]
+
+        plan, report = self.compile(ir)
+        self.assertTrue(report["valid"], report)
+        bindings = {
+            node["target_ref"]: node["execution"]["binding"]
+            for node in plan["nodes"]
+            if node["type"] == "dimension_attribution"
+        }
+        self.assertEqual(bindings["payment_yoy_attr"]["periods"]["comparison"], "2025-07")
+        self.assertEqual(bindings["payment_mom_attr"]["periods"]["comparison"], "2026-06")
+        self.assertTrue(
+            set(bindings["payment_yoy_attr"]["groups"]["fact_slot_ids_by_period_role"]["comparison"])
+            .isdisjoint(
+                bindings["payment_mom_attr"]["groups"]["fact_slot_ids_by_period_role"]["comparison"]
+            )
+        )
+
+    def test_grouped_and_overall_slots_use_distinct_canonical_selectors(self) -> None:
+        ir = base_ir()
+        ir["analysis_task"]["periods"]["comparison"] = "2025-05"
+        ir["canonical_fact_selectors"] = [
+            {
+                "metric_ref": "payment",
+                "source_metric_name": "支付GMV",
+                "period_role": role,
+                "period": period,
+                "view_id": "platform_view",
+                "grain": "month",
+                "selector_dimensions": {},
+                "dimension_refs": dimension_refs,
+                "component": None,
+                "capability_path": "direct_fact",
+                "source_binding": {"revision": 1},
+            }
+            for role, period in (("analysis", "2026-05"), ("comparison", "2025-05"))
+            for dimension_refs in ([], ["平台"])
+        ]
+        ir["attribution_targets"] = [{
+            "target_id": "payment_platform_attr",
+            "metric_ref": "payment",
+            "metric_object": "volume",
+            "scenario": "metric_change",
+            "target_semantics": "absolute_delta",
+            "decomposition": "dimension",
+            "periods": {"analysis": "2026-05", "comparison": "2025-05"},
+            "view_id": "platform_view",
+            "group_dimensions": ["平台"],
+            "include_overall_metric": True,
+            "criticality": "core",
+        }]
+
+        plan, report = self.compile(ir)
+        self.assertTrue(report["valid"], report)
+        target_slots = [
+            slot for slot in plan["analysis_task"]["fact_requirements"]
+            if "payment_platform_attr" in slot["requirement_refs"]
+        ]
+        self.assertEqual(len(target_slots), 4)
+        self.assertEqual(
+            {tuple(slot["dimension_refs"]) for slot in target_slots},
+            {(), ("平台",)},
+        )
+        self.assertTrue(
+            all(slot.get("capability_path") == "direct_fact" for slot in target_slots)
+        )
 
     def test_derived_metric_object_cannot_override_metric_declaration(self) -> None:
         ir = base_ir()
@@ -324,6 +505,29 @@ class CompilePlanTests(unittest.TestCase):
         self.assertTrue(report["valid"], report)
         node = next(node for node in plan["nodes"] if node["type"] == "custom_calculation")
         self.assertEqual(node["execution"]["expression"]["fact"]["metric_ref"], "input")
+
+    def test_new_plan_requires_slot_scope_but_legacy_replay_does_not(self) -> None:
+        ir = base_ir()
+        ir["custom_calculations"] = [{
+            "requirement_id": "copy_payment",
+            "definition_source": "user_query",
+            "expression": {"fact": {"metric_ref": "payment", "period_role": "analysis"}},
+            "unit": "亿元",
+            "view_id": "platform_view",
+            "dimensions": {},
+            "dimension_refs": [],
+        }]
+        plan, report = self.compile(ir)
+        self.assertTrue(report["valid"], report)
+        node = next(node for node in plan["nodes"] if node["type"] == "custom_calculation")
+        node["execution"]["expression"]["fact"].pop("fact_slot_id")
+
+        invalid = Validator(plan, "plan", ROOT).validate()
+        self.assertIn("EXEC-045", {item["rule_id"] for item in invalid["issues"]})
+
+        plan["compiler"]["version"] = "1.8.0"
+        legacy = Validator(plan, "plan", ROOT).validate()
+        self.assertNotIn("EXEC-045", {item["rule_id"] for item in legacy["issues"]})
 
     def test_yoy_division_formula_selects_scenario_specific_operator(self) -> None:
         ir = base_ir()

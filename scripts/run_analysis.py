@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from _vendor.ecom_competitor_source import error_json
+from analysis_ir_normalizer import normalize_analysis_input
 from business_parameter_preflight import preflight_business_parameters
 from compile_plan import compile_and_validate, load_json
 from data_gateway import DataGateway, SOURCE_BINDING_V1, build_resolve_request, load_source_config
@@ -24,7 +25,6 @@ from fact_contract import SCENE_FACTS_V2, merge_fetch_requests, project_scene_fa
 from ir_contract_guard import validate_analysis_input_contract
 from prepare_analysis import (
     PreparationError,
-    normalize_analysis_input,
     prepare_analysis_ir,
 )
 from providers.feishu_competitor import FeishuCompetitorGateway

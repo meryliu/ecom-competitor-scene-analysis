@@ -69,20 +69,6 @@ def normalize_attribution_period_roles(ir: dict[str, Any]) -> dict[str, Any]:
                     periods[role] = task_periods[role]
         if periods or isinstance(declared, dict):
             target["periods"] = periods
-            for role, value in periods.items():
-                inherited = task_periods.get(role)
-                if inherited is not None and inherited != value:
-                    raise IRContractError(
-                        "ATTR-IR-006",
-                        f"attribution_targets[{index}].periods.{role} conflicts with analysis_task.periods",
-                        {
-                            "target_id": target.get("target_id"),
-                            "role": role,
-                            "target_period": value,
-                            "task_period": inherited,
-                        },
-                    )
-                task_periods.setdefault(role, value)
     return normalized
 
 
@@ -130,6 +116,45 @@ def validate_analysis_ir_contract(
     }
     task_periods = task.get("periods") if isinstance(task, dict) else {}
     task_periods = task_periods if isinstance(task_periods, dict) else {}
+    for collection in (
+        "fact_observations", "metric_compositions", "derived_requirements",
+        "attribution_targets",
+    ):
+        for requirement_index, requirement in enumerate(ir.get(collection) or []):
+            if not isinstance(requirement, dict) or "resolution_intent" not in requirement:
+                continue
+            path = f"{collection}[{requirement_index}].resolution_intent"
+            intent = requirement.get("resolution_intent")
+            if not isinstance(intent, dict):
+                raise IRContractError(
+                    "RESOLUTION-IR-001", f"{path} must be an object", {"path": path}
+                )
+            if intent.get("operation") != "share_level":
+                raise IRContractError(
+                    "RESOLUTION-IR-001", f"{path}.operation is unsupported", {"path": path}
+                )
+            if intent.get("output_metric_object") != "ratio":
+                raise IRContractError(
+                    "RESOLUTION-IR-001",
+                    f"{path}.output_metric_object must be ratio",
+                    {"path": path},
+                )
+            operands = intent.get("operands")
+            if not isinstance(operands, dict) or not all(
+                isinstance(operands.get(role), dict)
+                for role in ("numerator", "denominator")
+            ):
+                raise IRContractError(
+                    "RESOLUTION-IR-001",
+                    f"{path}.operands must declare numerator and denominator",
+                    {"path": path},
+                )
+            if requirement.get("derived_metric_id") or requirement.get("composition_id"):
+                raise IRContractError(
+                    "RESOLUTION-IR-002",
+                    f"{path} is mutually exclusive with a resolved path",
+                    {"path": path},
+                )
     for target_index, target in enumerate(ir["attribution_targets"]):
         path = f"attribution_targets[{target_index}]"
         if not isinstance(target, dict):

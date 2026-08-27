@@ -66,6 +66,7 @@ python3 scripts/execution_runner.py \
   "fact_id": "稳定且唯一的逻辑事实ID",
   "physical_fact_id": "Provider物理事实ID",
   "binding_id": "消费绑定ID",
+  "fact_slot_id": "编译期消费槽位ID",
   "metric": "运行时指标标签",
   "view_id": "分析视角ID",
   "period": "实际时期值",
@@ -85,7 +86,9 @@ python3 scripts/execution_runner.py \
 }
 ```
 
-`execution_runtime.periods` 是唯一时期角色映射。`period_role` 可根据 `period` 补充；两者同时存在时必须一致。Provider 投影事实必须满足 `fact_id=stable_id(physical_fact_id,binding_id)`；同一物理事实绑定到不同逻辑需求时具有不同逻辑 ID。编译计划产生的事实选择器必须优先携带 `metric_ref`，并携带事实槽位的 `view_id`；两者均参与索引和选择器匹配。`dimensions` 可以包含任意动态字段；旧事实将维度保存在顶层字段时，可用通用 `execution_runtime.dimension_fields` 数组迁移。
+`execution_runtime.periods` 是非归因需求的任务级默认时期映射；归因节点以自身 `binding.periods` 为权威映射。Provider 投影事实若携带已编译 `fact_slot_id`，执行器按 `analysis_task.fact_requirements` 中该 slot 的 `period_role + period` 校验并补全，不要求目标局部角色存在于 `execution_runtime.periods`。无已知 slot 的旧事实才按任务级映射补全角色；同一物理时期映射到多个任务级角色时仍要求显式 `period_role`。
+
+Provider 投影事实必须满足 `fact_id=stable_id(physical_fact_id,binding_id)`；同一物理事实绑定到不同逻辑需求时具有不同逻辑 ID。编译器 `1.9.0` 及之后产生的每个事实 selector 必须携带 `fact_slot_id` 或非空 `fact_slot_ids`。slot 只限定可消费的事实集合，不取代 slot 内的 `dimensions`、父级、集合域和聚合选择。新计划缺 slot 时校验失败，禁止退回全局 `metric_ref/view_id` 匹配；无 slot selector 只用于显式历史计划重放，正常 Query 重新编译。`dimensions` 可以包含任意动态字段；旧事实将维度保存在顶层字段时，可用通用 `execution_runtime.dimension_fields` 数组迁移。
 
 执行器不得在 Fact Contract 层全局去重逻辑事实。仅当旧计划的 selector 缺少 `metric_ref`、匹配到多条逻辑记录时，可在消费点按相同且非空的 `physical_fact_id` 折叠；折叠前必须核对指标、对象、视角、时期、维度、组件、值、分子分母、单位、缺失状态、定义、可加性、聚合方式和来源引用完全一致。不同物理事实，或任一计算/来源字段冲突，必须继续阻断。聚合也只按该规则消除同一物理事实的重复绑定，不得按数值相等合并事实。
 
@@ -126,7 +129,7 @@ python3 scripts/execution_runner.py \
 }
 ```
 
-时期角色由 Query 和派生/归因需求决定，不固定要求四期。归因 `binding.periods` 或静态 `payload.periods` 必须逐角色等于该映射。`max_workers` 用于 dry-bind、同一 DAG 波次和父任务本地并发，不得制造重复取数请求。`residual_tolerance` 由 runner 固定注入，分析 IR 不得覆盖；执行时使用 `max(base_tolerance, magnitude * base_tolerance)` 的量级感知阈值，其中 magnitude 取目标分析值、对比值和变化值的最大绝对值。
+时期角色由 Query 和派生/归因需求决定，不固定要求四期。每个归因 `binding.periods` 或静态 `payload.periods` 必须包含该算子场景需要的全部非空角色，且同一算子内各角色映射到不同物理时期；它无需逐角色等于任务级映射。`max_workers` 用于 dry-bind、同一 DAG 波次和父任务本地并发，不得制造重复取数请求。`residual_tolerance` 由 runner 固定注入，分析 IR 不得覆盖；执行时使用 `max(base_tolerance, magnitude * base_tolerance)` 的量级感知阈值，其中 magnitude 取目标分析值、对比值和变化值的最大绝对值。
 
 ## 可执行节点
 
@@ -153,7 +156,7 @@ python3 scripts/execution_runner.py \
 - `fact_artifact`：确认并索引已落盘的标准事实。
 - `model_owned`：保留给业务判断或结论组织，不由执行器改写。
 
-输入适配复用 `handler=derived`，并通过 `materialize_as` 声明目标事实。节点成功后，执行器在下一 DAG 波次前把结果注入运行时 FactStore；它只在运行时供下游复用，不写回 Provider 原始 facts。中间事实的 `source_ref` 同时保存 `input_fact_ids` 和向上游递归收集的 `input_physical_fact_ids`，前者用于逻辑执行复现，后者用于物理来源审计。`materialize_as.validation` 支持 `facts_present`、`unit_consistent`、`metric_additive` 和 `unit_scale_verified`；其中可聚合性必须来自输入事实的飞书元信息。`unit_scale_verified` 仅用于 Prepare 已证明的用户公式目标回退，必须携带输入指标实际单位、目标单位和有限非零 `scale_factor`；执行器先核验运行时事实单位，再对表达式结果应用换算，不自行推断单位。
+输入适配复用 `handler=derived`，并通过 `materialize_as` 声明目标事实。`fact_slot_id` 是主目标，`fact_slot_ids` 是该适配节点覆盖的全部兼容 consumer slot；中间事实同时继承这些 slot。节点成功后，执行器在下一 DAG 波次前把结果注入运行时 FactStore；它只在运行时供下游复用，不写回 Provider 原始 facts。这样周/月/季上卷或公式目标回退可以同时服务派生、组合和归因，而下游仍只能在自己的 slot 内选择。中间事实的 `source_ref` 同时保存 `input_fact_ids` 和向上游递归收集的 `input_physical_fact_ids`，前者用于逻辑执行复现，后者用于物理来源审计。`materialize_as.validation` 支持 `facts_present`、`unit_consistent`、`metric_additive` 和 `unit_scale_verified`；其中可聚合性必须来自输入事实的飞书元信息。`unit_scale_verified` 仅用于 Prepare 已证明的用户公式目标回退，必须携带输入指标实际单位、目标单位和有限非零 `scale_factor`；执行器先核验运行时事实单位，再对表达式结果应用换算，不自行推断单位。
 
 周上卷继续使用白名单 `multiply` 与 `sum` 表达式：每个周事实乘以 Prepare 计算的 `overlap_days/7` 后求和。执行器不重新推导周边界或选择上卷路径，只校验输入事实、单位、additive 标记和 source revision；周覆盖证明保存在 `materialize_as.rollup` 中。
 
@@ -181,6 +184,8 @@ python3 scripts/execution_runner.py \
   }
 }
 ```
+
+编译结果会在 `metric`、每个 metric factor 和 `groups` 配置中写入 `fact_slot_ids_by_period_role`，并把全部允许 slot 写入 selector 的 `fact_slot_ids`。执行时先按当前时期角色取得对应 slot 子集，再在该子集内应用指标、视角、维度、父级和集合选择。`analysis_last_year` 与 `comparison` 即使指向同一物理时期，也分别消费自己的逻辑 slot；两个归因目标的 `comparison` 指向不同物理时期也不会互相绑定。
 
 维度或结构归因使用动态分组字段：
 

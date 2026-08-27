@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from candidate_semantics import (  # noqa: E402
+    breakdown_core_evidence,
     constrained_core_evidence,
     full_scope_evidence,
 )
@@ -107,6 +108,32 @@ class CandidateSemanticsTests(unittest.TestCase):
         )
         self.assertTrue(exact["full_scope"])
         self.assertFalse(positive["full_scope"])
+
+    def test_breakdown_scope_separates_market_and_dimension_terms(self) -> None:
+        evidence = breakdown_core_evidence(
+            "社零大盘",
+            "限额以上企业零售额增速",
+            {"aliases": ["社零分类目同比增速"]},
+            ["类目"],
+            "社零类目",
+            {"社零类目": {"aliases": ["类目", "品类"]}},
+            self.policy,
+        )
+        self.assertEqual(evidence["score"], 1.0)
+        self.assertEqual(evidence["mode"], "breakdown_scoped")
+        self.assertEqual(evidence["matched_core"], "社零")
+
+    def test_breakdown_scope_cannot_rescue_a_wrong_core(self) -> None:
+        evidence = breakdown_core_evidence(
+            "广告收入",
+            "订单量",
+            {"aliases": ["各类目表现"]},
+            ["类目"],
+            "类目",
+            {"类目": {"aliases": ["品类"]}},
+            self.policy,
+        )
+        self.assertLess(evidence["score"], 0.78)
 
 
 if __name__ == "__main__":

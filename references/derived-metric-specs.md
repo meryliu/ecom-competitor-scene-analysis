@@ -2,7 +2,7 @@
 
 本竞品 Skill 将计算分为两个逻辑层：指标组合定义见 `metric-composition-registry.json`，本文件只维护跨期和范围通用派生。组合层定义“指标是什么”，通用派生定义“指标如何比较”。组合结果可以作为通用派生的输入，但不能把组合指标伪装成源表事实。
 
-注册表版本：`1.3.0`
+注册表版本：`1.4.0`
 
 本文件说明 `scene-analysis` 的派生语义和维护规则；机器可执行定义唯一来自 [derived-metric-registry.json](derived-metric-registry.json)。它与 `ecom-attribution-calculation-engine` 的归因算子注册表分离：派生指标只描述事实之间的确定性计算，不负责维度贡献、残差或复杂边界校验。两者不一致时先修正机器注册表和本说明，禁止让编译器内置第二份公式。
 
@@ -89,13 +89,13 @@ definition_version: "<registry-version>"
 
 - **业务名称**：同比增速趋势 / 同比增速差值
 - **触发表述**：同比趋势、同比增速差值、同比的环比变化、同比波动、两期同比表现变化
-- **输入事实**：`analysis`、`comparison`、`analysis_last_year`、`comparison_last_year` 四期完整值。
+- **输入事实**：默认变体使用 `analysis`、`comparison`、`analysis_last_year`、`comparison_last_year` 四期完整基础值。若源表唯一提供同口径的预计算同比序列，可使用 `source_precomputed_yoy_series` 变体，只读取 `analysis` 和 `comparison` 两期同比事实，再按 `period_change` 做差。
 - **粒度**：整体或每个独立 `view_id × group`；不同视角不得混合计算。
 - **中间计算**：先按 `yoy_growth` 分别计算分析期同比和对比期同比。
 - **公式**：`yoy_trend_delta = analysis_yoy - comparison_yoy`
-- **输出**：分析期同比、对比期同比、同比趋势差值、四期原始事实和公式。
+- **输出**：分析期同比、对比期同比、同比趋势差值、实际采用的输入事实和公式，并记录 `variant_id`；不得把预计算同比再做一次同比。
 - **归因关系**：是否对该趋势差值归因由 Query 决定；派生定义本身不创建或改变归因目标。
-- **最小校验**：四期事实存在；量级指标两个去年同期值不为 0；单位和指标定义一致。
+- **最小校验**：基础值变体要求四期事实存在且量级指标两个去年同期值不为 0；预计算同比序列变体要求分析期和对比期同比事实存在；两者都要求单位和指标定义一致。
 - **解释**：差值大于 0 表示分析期同比表现相对对比期加速；小于 0 表示相对放缓。
 
 ## 定义 `mom_growth`
@@ -121,7 +121,7 @@ definition_version: "<registry-version>"
 {
   "derived_metric_id": "yoy_trend_change",
   "definition_source": "scene-analysis/references/derived-metric-registry.json",
-  "definition_version": "1.3.0",
+  "definition_version": "1.4.0",
   "metric": "目标指标",
   "metric_object": "ratio",
   "period_roles": ["analysis", "comparison", "analysis_last_year", "comparison_last_year"],

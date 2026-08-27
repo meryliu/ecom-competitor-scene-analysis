@@ -50,6 +50,19 @@ def merge_selectors(selectors: list[dict[str, Any]]) -> dict[str, Any]:
     return merged
 
 
+def merge_source_domains(slots: list[dict[str, Any]]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for slot in slots:
+        for dimension, domain_ref in (slot.get("source_dimension_domains") or {}).items():
+            previous = merged.get(str(dimension))
+            if previous is not None and previous != domain_ref:
+                raise ValueError(
+                    f"physical dimension {dimension!r} has conflicting source domains"
+                )
+            merged[str(dimension)] = deepcopy(domain_ref)
+    return merged
+
+
 def build_fact_demands(
     slots: list[dict[str, Any]],
     *,
@@ -61,13 +74,10 @@ def build_fact_demands(
     for slot in slots:
         base = {
             "source_metric_name": slot.get("source_metric_name"),
-            "metric": slot.get("metric"),
             "period": slot.get("period"),
             "dimension_refs": sorted(set(
                 slot.get("source_dimension_refs") or slot.get("dimension_refs") or []
             )),
-            "dimension_projection": deepcopy(slot.get("dimension_projection") or {}),
-            "source_dimension_domains": deepcopy(slot.get("source_dimension_domains") or {}),
             "component": slot.get("component"),
             "scope": slot.get("scope"),
             "filters": slot.get("filters") or [],
@@ -87,7 +97,12 @@ def build_fact_demands(
             ) for slot in group
         ])
         representative = group[0]
-        demand_identity = {**bases[key], "selector_dimensions": selector}
+        source_domains = merge_source_domains(group)
+        demand_identity = {
+            **bases[key],
+            "selector_dimensions": selector,
+            "source_dimension_domains": source_domains,
+        }
         bindings = []
         for slot in group:
             binding = {
@@ -117,7 +132,11 @@ def build_fact_demands(
         demands.append({
             "fact_demand_id": stable_id("demand", demand_identity),
             **demand_identity,
+            "dimension_projection": deepcopy(
+                representative.get("dimension_projection") or {}
+            ),
             "metric_ref": representative.get("metric_ref"),
+            "metric": representative.get("metric"),
             "metric_object": representative.get("metric_object"),
             "unit": representative.get("unit"),
             "consumer_bindings": bindings,
@@ -196,9 +215,8 @@ def merge_fetch_requests(
         base = {
             key: slot.get(key)
             for key in (
-                "source_metric_name", "metric", "period", "dimension_refs",
-                "dimension_projection", "component", "scope", "filters",
-                "source_dimension_domains",
+                "source_metric_name", "period", "dimension_refs",
+                "component", "scope", "filters",
             )
         }
         grouped.setdefault(canonical_json(base), []).append(slot)
@@ -212,7 +230,12 @@ def merge_fetch_requests(
             or {}
             for slot in group
         ])
-        identity = {**base, "selector_dimensions": selector}
+        source_domains = merge_source_domains(group)
+        identity = {
+            **base,
+            "selector_dimensions": selector,
+            "source_dimension_domains": source_domains,
+        }
         representative = group[0]
         bindings = []
         for slot in group:
@@ -243,7 +266,11 @@ def merge_fetch_requests(
         demands.append({
             "fact_demand_id": stable_id("demand", identity),
             **identity,
+            "dimension_projection": deepcopy(
+                representative.get("dimension_projection") or {}
+            ),
             "metric_ref": representative.get("metric_ref"),
+            "metric": representative.get("metric"),
             "metric_object": representative.get("metric_object"),
             "unit": representative.get("unit"),
             "consumer_bindings": bindings,

@@ -185,6 +185,7 @@ def build_resolve_request(
                     "semantic_text": requirement.get("semantic_text"),
                     "query_fragment": requirement.get("query_fragment"),
                     "metric_constraints": metric_constraints,
+                    "resolution_intent": deepcopy(requirement.get("resolution_intent")),
                     "allowed_metric_objects": list(
                         (
                             derived_definitions.get(str(requirement.get("derived_metric_id")))
@@ -250,6 +251,65 @@ def build_resolve_request(
                         "inputs": inputs,
                         "consumers": deepcopy(consumers_by_metric.get(metric_ref) or []),
                     })
+        for metric_ref, consumers in consumers_by_metric.items():
+            for consumer in consumers:
+                resolution_intent = consumer.get("resolution_intent")
+                if not isinstance(resolution_intent, dict):
+                    continue
+                requirement_id = str(consumer.get("requirement_id") or "")
+                semantic_text = str(consumer.get("semantic_text") or "")
+                if not requirement_id or not semantic_text:
+                    continue
+                virtual_ref = f"__resolution_{canonical_hash([task_id, requirement_id])[:12]}"
+                virtual_consumer = deepcopy(consumer)
+                context_metrics.append({
+                    "metric_ref": virtual_ref,
+                    "name": semantic_text,
+                    "metric_object": resolution_intent.get("output_metric_object") or "ratio",
+                    "metric_object_provenance": "user_explicit",
+                    "unit": "待元信息解析",
+                    "unit_provenance": "model_inferred",
+                    "consumers": [virtual_consumer],
+                    "required_periods": list(consumer.get("periods") or []),
+                    "required_dimensions": list(consumer.get("dimensions") or []),
+                    "required_breakdown_dimensions": list(
+                        consumer.get("breakdown_dimensions") or []
+                    ),
+                    "provenance": "user_explicit",
+                    "resolution_requirement_id": requirement_id,
+                    "logical_metric_ref": metric_ref,
+                })
+                metric_names.add(semantic_text)
+                requested = normalize_match_text(semantic_text)
+                composition = next((
+                    (str(composition_id), definition)
+                    for composition_id, definition in composition_definitions.items()
+                    if isinstance(definition, dict)
+                    and any(
+                        normalize_match_text(trigger) == requested
+                        for trigger in definition.get("trigger_phrases") or []
+                    )
+                ), None)
+                if composition is None:
+                    continue
+                composition_id, definition = composition
+                inputs = [
+                    deepcopy(item)
+                    for item in definition.get("inputs") or []
+                    if isinstance(item, dict) and item.get("metric")
+                ]
+                for item in inputs:
+                    metric_names.add(str(item["metric"]))
+                composition_intents.append({
+                    "metric_ref": virtual_ref,
+                    "requested_metric": semantic_text,
+                    "composition_id": composition_id,
+                    "direct_preferred": True,
+                    "inputs": inputs,
+                    "consumers": [virtual_consumer],
+                    "resolution_requirement_id": requirement_id,
+                    "logical_metric_ref": metric_ref,
+                })
         periods.update(str(item) for item in (task.get("periods") or {}).values())
         for target in ir.get("attribution_targets") or []:
             if isinstance(target, dict):

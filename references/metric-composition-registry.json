@@ -1,7 +1,30 @@
 {
   "registry_name": "ecom-competitor-metric-compositions",
-  "registry_version": "1.1.0",
+  "registry_version": "1.2.0",
   "definitions": {
+    "douyin_express_market_share": {
+      "definition_version": "1.0.0",
+      "metric_object": "ratio",
+      "semantic_operation": "share",
+      "operator": "divide",
+      "trigger_phrases": ["抖音快递占比", "抖音快递市占率", "抖音包裹占比", "抖音包裹市占率"],
+      "inputs": [
+        {"role": "numerator", "metric": "抖音包裹量"},
+        {"role": "denominator", "metric": "邮政快递揽收量"}
+      ],
+      "expression": {
+        "op": "divide",
+        "args": [
+          {"input_role": "numerator"},
+          {"input_role": "denominator"}
+        ]
+      },
+      "formula": "douyin_parcel_volume / postal_express_pickup_volume",
+      "unit": "share",
+      "output_fields": ["value", "numerator", "denominator"],
+      "minimal_validation": ["same_period", "facts_present", "unit_consistent", "denominator_nonzero"],
+      "execution_mode": "lightweight_executor/composition"
+    },
     "competitor_settlement_rate": {
       "definition_version": "1.0.0",
       "metric_object": "ratio",

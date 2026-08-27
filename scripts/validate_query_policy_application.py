@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from analysis_ir_normalizer import normalize_analysis_input
 from business_parameter_preflight import preflight_business_parameters
 from ir_contract_guard import validate_analysis_input_contract
 from query_policy_runtime import POLICY_PACKET_SCHEMA, load_json
@@ -121,7 +122,8 @@ def validate_application(
             "business_parameter_cases": len(preflight.get("resolution_cases") or []),
             "fallback": None,
         }
-    validate_analysis_input_contract(preflight["analysis_ir"])
+    normalized_ir = normalize_analysis_input(preflight["analysis_ir"])
+    validate_analysis_input_contract(normalized_ir)
     return {
         "schema_version": VALIDATION_SCHEMA,
         "status": "commit",

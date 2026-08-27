@@ -146,6 +146,68 @@ class DataGatewayContractTests(unittest.TestCase):
         self.assertEqual(metrics["selected"]["required_breakdown_dimensions"], [])
         self.assertEqual(metrics["grouped"]["required_breakdown_dimensions"], ["平台"])
 
+    def test_resolve_request_keeps_requirement_context_local(self) -> None:
+        tasks = [("q", {
+            "analysis_task": {
+                "query": "大盘快递量和抖音快递占比",
+                "metrics": [{
+                    "metric_id": "express", "name": "大盘快递量",
+                    "metric_object": "volume",
+                }],
+                "periods": {"analysis": "2026-W33", "comparison": "2026-07"},
+            },
+            "fact_observations": [
+                {
+                    "requirement_id": "market_level", "metric_ref": "express",
+                    "period_roles": ["analysis"],
+                },
+                {
+                    "requirement_id": "douyin_share", "metric_ref": "express",
+                    "period_roles": ["analysis"], "semantic_text": "抖音快递占比",
+                    "resolution_intent": {
+                        "operation": "share_level", "output_metric_object": "ratio",
+                        "operands": {
+                            "numerator": {
+                                "concept_ref": "express",
+                                "metric_constraints": [{
+                                    "kind": "dimension_filter", "operator": "eq",
+                                    "dimension_hint": "平台", "values": ["抖音"],
+                                    "provenance": "user_explicit",
+                                }],
+                            },
+                            "denominator": {
+                                "concept_ref": "express", "scope_kind": "market_total",
+                            },
+                        },
+                    },
+                },
+            ],
+        })]
+        registry = json.loads(
+            (ROOT / "references" / "metric-composition-registry.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        request = build_resolve_request(tasks, registry)
+        context = request["contexts"][0]
+        base = next(item for item in context["metrics"] if item["metric_ref"] == "express")
+        level = next(item for item in base["consumers"] if item["requirement_id"] == "market_level")
+        share = next(item for item in base["consumers"] if item["requirement_id"] == "douyin_share")
+        self.assertEqual(level["breakdown_dimensions"], [])
+        self.assertEqual(level["periods"], ["2026-W33"])
+        self.assertEqual(share["resolution_intent"]["operation"], "share_level")
+        virtual = next(
+            item for item in context["metrics"]
+            if item.get("resolution_requirement_id") == "douyin_share"
+        )
+        self.assertEqual(virtual["name"], "抖音快递占比")
+        self.assertEqual(virtual["metric_object"], "ratio")
+        composition = next(
+            item for item in context["composition_intents"]
+            if item.get("resolution_requirement_id") == "douyin_share"
+        )
+        self.assertEqual(composition["composition_id"], "douyin_express_market_share")
+
     def test_resolve_request_uses_registered_derived_roles_and_object_capability(self) -> None:
         tasks = [("q", {
             "analysis_task": {

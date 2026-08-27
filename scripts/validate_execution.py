@@ -54,6 +54,15 @@ REFERENCE_STORAGE_VERSION = "2.0"
 REFERENCE_EXECUTOR_VERSIONS = {"1.3.0", "1.4.0", "1.5.0", "1.6.0", "1.7.0", "1.8.0", "1.8.1", "1.9.0", "1.10.0"}
 
 
+def compiler_uses_fact_slots(document: dict[str, Any]) -> bool:
+    raw_version = str((document.get("compiler") or {}).get("version") or "")
+    try:
+        version = tuple(int(part) for part in raw_version.split("."))
+    except ValueError:
+        return False
+    return version >= (1, 9, 0)
+
+
 def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     output: dict[str, Any] = {}
     for key, value in pairs:
@@ -702,9 +711,27 @@ class Validator:
                     if not isinstance(materialize_as, dict):
                         self.add("EXEC-038", "ERROR", f"{path}.materialize_as", "materialize_as 必须是对象", "提供中间事实目标契约", node_id=node_id)
                     else:
-                        for field in ("metric_ref", "metric", "period_role", "period", "unit", "rule_source"):
+                        required_fields = [
+                            "metric_ref", "metric", "period_role", "period", "unit", "rule_source"
+                        ]
+                        if compiler_uses_fact_slots(self.document):
+                            required_fields.append("fact_slot_id")
+                        for field in required_fields:
                             if not isinstance(materialize_as.get(field), str) or not materialize_as[field]:
                                 self.add("EXEC-039", "ERROR", f"{path}.materialize_as.{field}", f"materialize_as 缺少 {field}", "补齐中间事实目标和规则来源", node_id=node_id)
+                        target_slots = materialize_as.get("fact_slot_ids")
+                        if compiler_uses_fact_slots(self.document) and not (
+                            isinstance(target_slots, list)
+                            and target_slots
+                            and all(isinstance(item, str) and item for item in target_slots)
+                            and len(target_slots) == len(set(target_slots))
+                            and materialize_as.get("fact_slot_id") in target_slots
+                        ):
+                            self.add(
+                                "EXEC-045", "ERROR", f"{path}.materialize_as.fact_slot_ids",
+                                "中间事实必须声明完整且包含主 slot 的目标 slot 集合",
+                                "重新编译 input adaptation 的目标绑定", node_id=node_id,
+                            )
                         validation = materialize_as.get("validation")
                         allowed_validation = {
                             "facts_present", "unit_consistent", "metric_additive", "unit_scale_verified"
@@ -818,8 +845,8 @@ class Validator:
                         for role in roles:
                             if role not in periods:
                                 self.add("EXEC-020", "ERROR", f"{path}.binding.periods.{role}", "归因绑定缺少必需时期角色", "补齐时期映射", node_id=node_id)
-                            elif role in runtime_periods and str(periods[role]) != str(runtime_periods[role]):
-                                self.add("EXEC-021", "ERROR", f"{path}.binding.periods.{role}", "归因绑定时期与 execution_runtime 不一致", "统一使用 execution_runtime.periods", node_id=node_id)
+                            elif not isinstance(periods[role], str) or not periods[role]:
+                                self.add("EXEC-021", "ERROR", f"{path}.binding.periods.{role}", "归因绑定时期必须是非空字符串", "补齐目标局部时期映射", node_id=node_id)
                         if all(role in periods for role in roles):
                             role_periods = [str(periods[role]) for role in roles]
                             if len(role_periods) != len(set(role_periods)):
@@ -1005,6 +1032,21 @@ class Validator:
             self.add("EXEC-033", "ERROR", path, "固定粒度选择器必须声明精确 dimensions", "提供 dimensions 对象并设置 dimensions_exact=true", node_id=node_id)
         elif any(isinstance(value, (list, dict)) for value in selector["dimensions"].values()):
             self.add("EXEC-038", "ERROR", f"{path}.dimensions", "精确事实选择器不能包含集合", "将集合放入 fact demand，并通过 group_dimensions 或 domain_ref 绑定", node_id=node_id)
+        if compiler_uses_fact_slots(self.document):
+            slot_id = selector.get("fact_slot_id")
+            slot_ids = selector.get("fact_slot_ids")
+            if not (isinstance(slot_id, str) and slot_id) and not (
+                isinstance(slot_ids, list)
+                and bool(slot_ids)
+                and all(isinstance(item, str) and item for item in slot_ids)
+                and len(slot_ids) == len(set(slot_ids))
+            ):
+                self.add(
+                    "EXEC-045", "ERROR", path,
+                    "新编译计划的事实选择器缺少 fact slot 范围",
+                    "重新编译事实绑定，禁止退回全局语义选择器",
+                    node_id=node_id,
+                )
 
     def _validate_graph(self) -> None:
         graph: dict[str, list[str]] = {}
