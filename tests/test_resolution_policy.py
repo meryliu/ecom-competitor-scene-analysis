@@ -53,6 +53,78 @@ def ambiguous_platform_index() -> dict:
     }
 
 
+def aggregate_level_index(*, direct: bool = False, additive: bool = True) -> dict:
+    metrics = {
+        "支付GMV": {
+            "aliases": [], "unit": "亿元", "metric_object": "volume",
+            "supported_grains": ["month"], "dimensions": ["TOP6平台"],
+            "additive": additive,
+        },
+    }
+    blocks = {
+        "支付GMV": {
+            "dimension": "TOP6平台",
+            "rows": {"淘系": 4, "拼多多": 5, "京东": 6},
+        },
+    }
+    dimensions = {
+        "TOP6平台": {
+            "aliases": ["平台"], "values": ["淘系", "拼多多", "京东"],
+        },
+    }
+    if direct:
+        metrics["TOP6大盘支付GMV"] = {
+            "aliases": ["TOP6平台合计支付GMV"], "unit": "亿元",
+            "metric_object": "volume", "supported_grains": ["month"],
+            "dimensions": ["无"], "additive": True,
+        }
+        blocks["TOP6大盘支付GMV"] = {"dimension": "无", "rows": {"无": 8}}
+    return {
+        "source": {"url": "source", "revision": 3, "schema_hash": "schema"},
+        "metrics": metrics,
+        "dimensions": dimensions,
+        "sheets": {"month": {
+            "available": True, "periods": {"2026-07": "B"}, "blocks": blocks,
+        }},
+    }
+
+
+def aggregate_level_request() -> dict:
+    consumer = {
+        "requirement_id": "market_total", "requirement_type": "fact_observations",
+        "periods": ["2026-07"], "period_roles": ["analysis"],
+        "breakdown_dimensions": [], "semantic_text": "TOP6大盘支付GMV",
+        "resolution_intent": {
+            "operation": "aggregate_level", "output_metric_object": "volume",
+            "operand": {
+                "concept_ref": "payment",
+                "scope": {
+                    "scope_kind": "source_dimension_all",
+                    "dimension_hint": "TOP6平台",
+                },
+            },
+            "provenance": "business_policy",
+        },
+    }
+    return {
+        "metrics": ["支付GMV", "TOP6大盘支付GMV"],
+        "contexts": [{
+            "task_id": "q", "query": "26年7月大盘支付GMV表现",
+            "periods": ["2026-07"], "dimensions": ["TOP6平台"],
+            "metrics": [{
+                "metric_ref": "__resolution_total", "name": "TOP6大盘支付GMV",
+                "metric_object": "volume", "metric_object_provenance": "model_inferred",
+                "unit": "待元信息解析", "unit_provenance": "model_inferred",
+                "consumers": [consumer], "required_periods": ["2026-07"],
+                "required_dimensions": [], "required_breakdown_dimensions": [],
+                "resolution_requirement_id": "market_total",
+                "resolution_operation": "aggregate_level",
+                "resolution_intent": consumer["resolution_intent"],
+                "logical_metric_ref": "payment", "logical_metric_name": "支付GMV",
+                "provenance": "business_policy",
+            }],
+        }],
+    }
 class ResolutionPolicyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.policy = load_resolution_policy()
@@ -66,6 +138,91 @@ class ResolutionPolicyTests(unittest.TestCase):
         invalid["rules"]["fact_block_joint_resolution"]["hard_gates"] = ["eval"]
         with self.assertRaises(ResolutionPolicyError):
             validate_resolution_policy(invalid)
+
+    def test_aggregate_level_prefers_complete_direct_fact(self) -> None:
+        result = resolve_request_overlay(
+            aggregate_level_index(direct=True), aggregate_level_request(), self.policy
+        )
+        task = result["task_resolutions"]["q"]
+        binding = task["requirement_bindings"]["market_total"]
+        self.assertEqual(binding["mode"], "source_scoped_fact")
+        self.assertEqual(binding["source_metric"], "TOP6大盘支付GMV")
+
+    def test_aggregate_level_uses_safe_source_domain_when_direct_is_absent(self) -> None:
+        result = resolve_request_overlay(
+            aggregate_level_index(), aggregate_level_request(), self.policy
+        )
+        task = result["task_resolutions"]["q"]
+        binding = task["requirement_bindings"]["market_total"]
+        self.assertEqual(binding["mode"], "source_dimension_all_sum")
+        self.assertEqual(binding["source_metric"], "支付GMV")
+        self.assertEqual(binding["source_dimension"], "TOP6平台")
+
+    def test_non_additive_aggregate_candidate_does_not_poison_direct_fact(self) -> None:
+        result = resolve_request_overlay(
+            aggregate_level_index(direct=True, additive=False),
+            aggregate_level_request(), self.policy,
+        )
+        binding = result["task_resolutions"]["q"]["requirement_bindings"][
+            "market_total"
+        ]
+        self.assertEqual(binding["mode"], "source_scoped_fact")
+
+    def test_non_additive_aggregate_blocks_only_when_no_other_path_exists(self) -> None:
+        result = resolve_request_overlay(
+            aggregate_level_index(additive=False), aggregate_level_request(), self.policy
+        )
+        task = result["task_resolutions"]["q"]
+        self.assertNotIn("market_total", task["requirement_bindings"])
+        self.assertEqual(task["metric_statuses"]["__resolution_total"]["status"], "not_executable")
+        case = next(
+            item for item in task["resolution_cases"]
+            if item.get("kind") == "aggregate_level"
+        )
+        self.assertIn(
+            "metric_non_additive",
+            {reason for item in case["rejected_candidates"] for reason in item["conflicts"]},
+        )
+
+    def test_aggregate_level_rejects_incomplete_live_domain(self) -> None:
+        index = aggregate_level_index()
+        index["sheets"]["month"]["blocks"]["支付GMV"]["rows"].pop("拼多多")
+        result = resolve_request_overlay(index, aggregate_level_request(), self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertNotIn("market_total", task["requirement_bindings"])
+        case = next(
+            item for item in task["resolution_cases"]
+            if item.get("kind") == "aggregate_level"
+        )
+        self.assertIn(
+            "aggregate_domain_incomplete",
+            {reason for item in case["rejected_candidates"] for reason in item["conflicts"]},
+        )
+
+    def test_aggregate_level_is_generic_across_physical_dimensions(self) -> None:
+        for dimension, hint, members in (
+            ("经营区域", "区域", ["华东", "华南"]),
+            ("销售渠道", "渠道", ["线上", "线下"]),
+        ):
+            with self.subTest(dimension=dimension):
+                index = aggregate_level_index()
+                index["metrics"]["支付GMV"]["dimensions"] = [dimension]
+                block = index["sheets"]["month"]["blocks"]["支付GMV"]
+                block["dimension"] = dimension
+                block["rows"] = {
+                    member: number for number, member in enumerate(members)
+                }
+                index["dimensions"] = {
+                    dimension: {"aliases": [hint], "values": members}
+                }
+                request = aggregate_level_request()
+                request["contexts"][0]["metrics"][0]["resolution_intent"][
+                    "operand"
+                ]["scope"]["dimension_hint"] = hint
+                binding = resolve_request_overlay(
+                    index, request, self.policy
+                )["task_resolutions"]["q"]["requirement_bindings"]["market_total"]
+                self.assertEqual(binding["source_dimension"], dimension)
 
     def test_policy_rejects_unbounded_or_mapping_fields(self) -> None:
         invalid = dict(self.policy)

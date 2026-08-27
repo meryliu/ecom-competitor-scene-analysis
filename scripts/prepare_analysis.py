@@ -29,6 +29,7 @@ from source_capability import (
 from selector_context import SelectorContextError, apply_task_selector_context
 from set_materialization import (
     SetMaterializationError,
+    materialize_source_domain_set_spec,
     materialize_set_spec,
     set_aggregate_expression,
 )
@@ -223,6 +224,7 @@ def _apply_requirement_bindings(ir: dict[str, Any], index: dict[str, Any]) -> No
             "member_selector",
             "additive_member_sum",
             "same_metric_total_minus_members",
+            "source_dimension_all_sum",
         }:
             continue
         output_metric_ref = str(requirement.get("metric_ref") or "")
@@ -276,6 +278,14 @@ def _apply_requirement_bindings(ir: dict[str, Any], index: dict[str, Any]) -> No
             if not isinstance(constraint, dict) or not constraint.get("source_dimension"):
                 continue
             source_dimension = str(constraint["source_dimension"])
+            index.setdefault("dimension_bindings", {}).setdefault(
+                source_dimension, source_dimension
+            )
+            index.setdefault("metric_dimension_bindings", {}).setdefault(
+                source_metric, {}
+            ).setdefault(source_dimension, source_dimension)
+        if binding.get("source_dimension"):
+            source_dimension = str(binding["source_dimension"])
             index.setdefault("dimension_bindings", {}).setdefault(
                 source_dimension, source_dimension
             )
@@ -442,9 +452,28 @@ def _direct_available(
     expected_dimension = _expected_dimension(
         dimensions, dimension_refs, index, source_metric
     )
-    return expected_dimension is not None and evaluate_direct_capability(
+    if expected_dimension is None or evaluate_direct_capability(
         index, source_metric, period, expected_dimension
-    )["status"] == "available"
+    )["status"] != "available":
+        return False
+    parsed = normalize_period(period)
+    if parsed is None:
+        return False
+    grain, _ = parsed
+    member_coverage = (
+        (((index.get("availability") or {}).get(grain) or {}).get("metrics") or {})
+        .get(source_metric, {})
+        .get("members")
+    )
+    if member_coverage is None or expected_dimension == "无":
+        return True
+    requested_members: set[str] = set()
+    value = dimensions.get(expected_dimension)
+    if isinstance(value, list):
+        requested_members.update(str(item) for item in value)
+    elif value is not None:
+        requested_members.add(str(value))
+    return requested_members.issubset({str(item) for item in member_coverage})
 
 
 def _direct_capability(
@@ -800,7 +829,7 @@ def _requirement_roles(
     return [item for item in consumers if item.get("metric_ref") in metrics]
 
 
-def _materialize_constraint_adaptations(
+def _materialize_set_adaptations(
     ir: dict[str, Any], index: dict[str, Any], derived_registry: dict[str, Any]
 ) -> None:
     """Turn proven same-metric member sets into safe requirement-local ASTs."""
@@ -811,6 +840,7 @@ def _materialize_constraint_adaptations(
         for requirement in ir.get(collection) or []:
             if not isinstance(requirement, dict) or requirement.get("fulfillment_mode") not in {
                 "additive_member_sum", "same_metric_total_minus_members",
+                "source_dimension_all_sum",
             }:
                 continue
             binding = requirement.get("constraint_binding") or {}
@@ -828,7 +858,13 @@ def _materialize_constraint_adaptations(
                     {"reason": "metric_non_additive"},
                 )
             try:
-                set_spec = materialize_set_spec(constraints, index, intent="total")
+                if requirement.get("fulfillment_mode") == "source_dimension_all_sum":
+                    source_dimension = str(binding.get("source_dimension") or "")
+                    set_spec = materialize_source_domain_set_spec(
+                        source_dimension, index, intent="total"
+                    )
+                else:
+                    set_spec = materialize_set_spec(constraints, index, intent="total")
             except SetMaterializationError as exc:
                 raise PreparationError(
                     "CONSTRAINT_PATH_UNAVAILABLE", str(exc), exc.details
@@ -871,11 +907,19 @@ def _materialize_constraint_adaptations(
                     set_spec, source_metric_ref, role,
                     str(requirement.get("fulfillment_mode") or ""),
                 )
+                adaptation_id = "constraint_adapt_" + _stable_suffix((
+                    requirement.get("requirement_id"), role,
+                    binding.get("constraints_fingerprint")
+                    or set_spec.get("set_fingerprint"),
+                ))
+                if any(
+                    isinstance(item, dict)
+                    and item.get("requirement_id") == adaptation_id
+                    for item in adaptations
+                ):
+                    continue
                 adaptations.append({
-                    "requirement_id": "constraint_adapt_" + _stable_suffix((
-                        requirement.get("requirement_id"), role,
-                        binding.get("constraints_fingerprint"),
-                    )),
+                    "requirement_id": adaptation_id,
                     "metric_ref": requirement.get("metric_ref"),
                     "target_period_role": role,
                     "view_id": requirement.get("view_id"),
@@ -887,6 +931,7 @@ def _materialize_constraint_adaptations(
                     "criticality": requirement.get("criticality", "required"),
                     "generated": True,
                     "constraint_fulfillment": requirement.get("fulfillment_mode"),
+                    "set_fulfillment": requirement.get("fulfillment_mode"),
                     "set_spec": deepcopy(set_spec),
                 })
 
@@ -1111,7 +1156,7 @@ def prepare_analysis_ir(
             {"requirement_ids": sorted(unresolved_intents)},
         )
     _bind_declared_metric_metadata(prepared, index)
-    _materialize_constraint_adaptations(prepared, index, derived_registry)
+    _materialize_set_adaptations(prepared, index, derived_registry)
     task = prepared.get("analysis_task") or {}
     metrics = _metric_map(prepared)
     periods = task.get("periods") or {}

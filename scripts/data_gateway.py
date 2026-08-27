@@ -102,6 +102,11 @@ def build_resolve_request(
     for task_id, ir in tasks:
         task = ir.get("analysis_task") or {}
         task_periods = task.get("periods") or {}
+        task_metrics_by_ref = {
+            str(item.get("metric_id")): item
+            for item in task.get("metrics") or []
+            if isinstance(item, dict) and item.get("metric_id")
+        }
         inherited_dimensions = set(task_filter_selectors(task.get("filters")))
         task_dimensions: set[str] = set()
 
@@ -164,6 +169,16 @@ def build_resolve_request(
                 metric_constraints = normalize_metric_constraints(
                     requirement.get("metric_constraints")
                 )
+                resolution_intent = requirement.get("resolution_intent")
+                if isinstance(resolution_intent, dict):
+                    operand = resolution_intent.get("operand")
+                    scope = operand.get("scope") if isinstance(operand, dict) else None
+                    dimension_hint = (
+                        scope.get("dimension_hint") if isinstance(scope, dict) else None
+                    )
+                    if dimension_hint:
+                        task_dimensions.add(str(dimension_hint))
+                        dimension_names.add(str(dimension_hint))
                 constraint_dimensions = {
                     str(item["dimension_hint"])
                     for item in metric_constraints
@@ -185,7 +200,7 @@ def build_resolve_request(
                     "semantic_text": requirement.get("semantic_text"),
                     "query_fragment": requirement.get("query_fragment"),
                     "metric_constraints": metric_constraints,
-                    "resolution_intent": deepcopy(requirement.get("resolution_intent")),
+                    "resolution_intent": deepcopy(resolution_intent),
                     "allowed_metric_objects": list(
                         (
                             derived_definitions.get(str(requirement.get("derived_metric_id")))
@@ -262,6 +277,11 @@ def build_resolve_request(
                     continue
                 virtual_ref = f"__resolution_{canonical_hash([task_id, requirement_id])[:12]}"
                 virtual_consumer = deepcopy(consumer)
+                logical_metric = task_metrics_by_ref.get(str(metric_ref)) or {}
+                resolution_operation = str(resolution_intent.get("operation") or "")
+                provenance = str(
+                    resolution_intent.get("provenance") or "model_inferred"
+                )
                 context_metrics.append({
                     "metric_ref": virtual_ref,
                     "name": semantic_text,
@@ -275,9 +295,12 @@ def build_resolve_request(
                     "required_breakdown_dimensions": list(
                         consumer.get("breakdown_dimensions") or []
                     ),
-                    "provenance": "user_explicit",
+                    "provenance": provenance,
                     "resolution_requirement_id": requirement_id,
+                    "resolution_operation": resolution_operation,
+                    "resolution_intent": deepcopy(resolution_intent),
                     "logical_metric_ref": metric_ref,
+                    "logical_metric_name": logical_metric.get("name"),
                 })
                 metric_names.add(semantic_text)
                 requested = normalize_match_text(semantic_text)

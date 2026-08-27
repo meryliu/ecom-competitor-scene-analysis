@@ -149,7 +149,7 @@ Prepare 自动生成的适配可额外携带 `target_period`，用于目标局�
 
 安全自动路径限于：现成完整口径事实、基础指标单成员选择、可加指标的多成员求和、同一指标全域减同一指标排除成员，以及既有注册组合/派生。两个独立指标名称看似可相减时最多生成需确认假设；只有用户显式公式、注册定义或结构化同指标成员关系才能生成 AST。
 
-当 Query 已明确要求一个运算结果、但 Query 层无法判断它最终由现成事实、成员选择还是注册公式履约时，可在对应 Requirement 暂存路径无关的 `resolution_intent`。当前只允许 `operation=share_level`，并必须声明 `output_metric_object=ratio`、`operands.numerator` 和 `operands.denominator`。其中维度条件仍是逻辑语义，不是物理 selector。
+当 Query 已明确要求一个运算结果、但 Query 层无法判断它最终由现成事实、成员选择、全域聚合还是注册公式履约时，可在对应 Requirement 暂存路径无关的 `resolution_intent`。`operation=share_level` 必须声明 `output_metric_object=ratio`、`operands.numerator` 和 `operands.denominator`。`operation=aggregate_level` 必须声明 `output_metric_object=volume`，并用单个 `operand.scope` 表达源维度全域；其中维度条件仍是逻辑语义，不是物理 selector。
 
 ```json
 {
@@ -180,7 +180,30 @@ Prepare 自动生成的适配可额外携带 `target_period`，用于目标局�
 }
 ```
 
-`resolution_intent` 与 `derived_metric_id`、`composition_id` 互斥。Gateway 按 Requirement 选择直接占比事实、同指标成员占比或注册组合；Prepare 必须删除 intent 并物化为既有事实、派生或 `metric_compositions`。未物化 intent 不得进入 Compile，Fast Query 也必须转交统一 Prepare 流程。旧 IR 不含该字段时行为不变。
+源维度全域合计不在 IR 枚举成员：
+
+```json
+{
+  "requirement_id": "market_total",
+  "metric_ref": "payment_gmv",
+  "period_roles": ["analysis"],
+  "semantic_text": "TOP6大盘支付GMV",
+  "resolution_intent": {
+    "operation": "aggregate_level",
+    "output_metric_object": "volume",
+    "operand": {
+      "concept_ref": "payment_gmv",
+      "scope": {
+        "scope_kind": "source_dimension_all",
+        "dimension_hint": "TOP6平台"
+      }
+    },
+    "provenance": "business_policy"
+  }
+}
+```
+
+`resolution_intent` 与 `derived_metric_id`、`composition_id` 互斥。Gateway 按 Requirement 选择直接事实、同指标成员选择/全域聚合或注册组合。聚合履约保持完整范围直接事实优先；集合候选不可加、范围不完整或维度歧义时只淘汰该候选，不得污染其他可行路径。Prepare 必须删除 intent 并物化为既有事实、派生、`metric_compositions` 或既有 `sum` AST。未物化 intent 不得进入 Compile，Fast Query 也必须转交统一 Prepare 流程。旧 IR 不含该字段时行为不变。
 
 ### 派生需求
 

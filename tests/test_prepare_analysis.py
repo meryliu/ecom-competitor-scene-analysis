@@ -835,6 +835,88 @@ class PrepareAnalysisTests(unittest.TestCase):
             [item["metric_id"] for item in prepared["analysis_task"]["metrics"]],
         )
 
+    def test_source_domain_aggregate_binding_materializes_idempotently(self) -> None:
+        ir = base_ir("支付GMV", "volume")
+        ir["analysis_task"]["periods"] = {"analysis": "2026-05"}
+        ir["fact_observations"] = [{
+            "requirement_id": "market_total", "metric_ref": "target",
+            "period_roles": ["analysis"], "view_id": "v",
+            "semantic_text": "TOP6大盘支付GMV", "dimensions": {},
+            "dimension_refs": [],
+            "resolution_intent": {
+                "operation": "aggregate_level", "output_metric_object": "volume",
+                "operand": {
+                    "concept_ref": "target",
+                    "scope": {
+                        "scope_kind": "source_dimension_all",
+                        "dimension_hint": "平台",
+                    },
+                },
+            },
+        }]
+        capabilities = source_index()
+        capabilities["dimensions"]["平台"]["values"] = ["京东", "拼多多"]
+        capabilities["availability"]["month"]["metrics"]["支付GMV"][
+            "members"
+        ] = ["京东", "拼多多"]
+        capabilities["requirement_bindings"] = {"market_total": {
+            "mode": "source_dimension_all_sum", "source_metric": "支付GMV",
+            "source_dimension": "平台", "candidate_id": "set:payment:platform",
+            "resolution_operation": "aggregate_level",
+        }}
+        prepared, _ = prepare_analysis_ir(
+            ir, capabilities, self.compositions, self.derived
+        )
+        requirement = prepared["fact_observations"][0]
+        self.assertEqual(requirement["fulfillment_mode"], "source_dimension_all_sum")
+        self.assertNotIn("resolution_intent", requirement)
+        adaptation = next(
+            item for item in prepared["input_adaptations"]
+            if item.get("set_fulfillment") == "source_dimension_all_sum"
+        )
+        self.assertEqual(adaptation["set_spec"]["membership_kind"], "source_domain")
+        self.assertEqual(adaptation["expression"]["op"], "sum")
+
+        prepared_again, _ = prepare_analysis_ir(
+            prepared, capabilities, self.compositions, self.derived
+        )
+        generated = [
+            item for item in prepared_again["input_adaptations"]
+            if item.get("set_fulfillment") == "source_dimension_all_sum"
+        ]
+        self.assertEqual(len(generated), 1)
+
+    def test_source_domain_aggregate_rejects_incomplete_member_coverage(self) -> None:
+        ir = base_ir("支付GMV", "volume")
+        ir["analysis_task"]["periods"] = {"analysis": "2026-05"}
+        ir["fact_observations"] = [{
+            "requirement_id": "market_total", "metric_ref": "target",
+            "period_roles": ["analysis"], "view_id": "v", "dimensions": {},
+            "dimension_refs": [],
+            "resolution_intent": {
+                "operation": "aggregate_level", "output_metric_object": "volume",
+                "operand": {
+                    "concept_ref": "target",
+                    "scope": {
+                        "scope_kind": "source_dimension_all",
+                        "dimension_hint": "平台",
+                    },
+                },
+            },
+        }]
+        capabilities = source_index()
+        capabilities["dimensions"]["平台"]["values"] = ["京东", "拼多多"]
+        capabilities["availability"]["month"]["metrics"]["支付GMV"][
+            "members"
+        ] = ["京东"]
+        capabilities["requirement_bindings"] = {"market_total": {
+            "mode": "source_dimension_all_sum", "source_metric": "支付GMV",
+            "source_dimension": "平台", "candidate_id": "set:payment:platform",
+        }}
+        with self.assertRaises(PreparationError) as raised:
+            prepare_analysis_ir(ir, capabilities, self.compositions, self.derived)
+        self.assertEqual(raised.exception.code, "CONSTRAINT_PATH_UNAVAILABLE")
+
     def test_composition_leaf_confirmation_is_activated_only_during_fallback(self) -> None:
         ir = base_ir("结算率", "ratio")
         ir["analysis_task"]["periods"] = {"analysis": "2026年5月"}

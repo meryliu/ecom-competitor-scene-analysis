@@ -24,6 +24,7 @@ PATH_CANDIDATE_TYPES = {
     "member_selector": "member_selector",
     "additive_member_sum": "set_aggregate",
     "same_metric_total_minus_members": "set_aggregate",
+    "source_dimension_all_sum": "set_aggregate",
     "registered_composition": "registered_composition",
     "registered_derived": "registered_derived",
     "safe_inference": "safe_inference",

@@ -129,26 +129,61 @@ def validate_analysis_ir_contract(
                 raise IRContractError(
                     "RESOLUTION-IR-001", f"{path} must be an object", {"path": path}
                 )
-            if intent.get("operation") != "share_level":
+            operation = intent.get("operation")
+            if operation not in {"share_level", "aggregate_level"}:
                 raise IRContractError(
                     "RESOLUTION-IR-001", f"{path}.operation is unsupported", {"path": path}
                 )
-            if intent.get("output_metric_object") != "ratio":
+            expected_object = "ratio" if operation == "share_level" else "volume"
+            if intent.get("output_metric_object") != expected_object:
                 raise IRContractError(
                     "RESOLUTION-IR-001",
-                    f"{path}.output_metric_object must be ratio",
+                    f"{path}.output_metric_object must be {expected_object}",
                     {"path": path},
                 )
-            operands = intent.get("operands")
-            if not isinstance(operands, dict) or not all(
-                isinstance(operands.get(role), dict)
-                for role in ("numerator", "denominator")
-            ):
-                raise IRContractError(
-                    "RESOLUTION-IR-001",
-                    f"{path}.operands must declare numerator and denominator",
-                    {"path": path},
-                )
+            if operation == "share_level":
+                operands = intent.get("operands")
+                if not isinstance(operands, dict) or not all(
+                    isinstance(operands.get(role), dict)
+                    for role in ("numerator", "denominator")
+                ):
+                    raise IRContractError(
+                        "RESOLUTION-IR-001",
+                        f"{path}.operands must declare numerator and denominator",
+                        {"path": path},
+                    )
+            else:
+                operand = intent.get("operand")
+                scope = operand.get("scope") if isinstance(operand, dict) else None
+                if (
+                    not isinstance(operand, dict)
+                    or not isinstance(operand.get("concept_ref"), str)
+                    or not operand.get("concept_ref")
+                    or not isinstance(scope, dict)
+                    or scope.get("scope_kind") != "source_dimension_all"
+                    or not isinstance(scope.get("dimension_hint"), str)
+                    or not scope.get("dimension_hint")
+                ):
+                    raise IRContractError(
+                        "RESOLUTION-IR-001",
+                        f"{path}.operand must declare a source_dimension_all scope",
+                        {"path": path},
+                    )
+                if str(operand.get("concept_ref")) not in metric_ids:
+                    raise IRContractError(
+                        "RESOLUTION-IR-001",
+                        f"{path}.operand.concept_ref references an unknown metric",
+                        {"path": path, "concept_ref": operand.get("concept_ref")},
+                    )
+                provenance = intent.get("provenance")
+                if provenance is not None and provenance not in {
+                    "user_explicit", "business_policy", "model_inferred",
+                }:
+                    raise IRContractError(
+                        "RESOLUTION-IR-001",
+                        f"{path}.provenance is unsupported",
+                        {"path": path},
+                    )
             if requirement.get("derived_metric_id") or requirement.get("composition_id"):
                 raise IRContractError(
                     "RESOLUTION-IR-002",

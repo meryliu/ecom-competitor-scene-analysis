@@ -53,10 +53,12 @@ Policy 降级不放宽主流程校验。回退后的原始 Query 仍可被现有
 
 ## 规则到 IR
 
-- TOP6 支付 GMV 表现：事实值、`yoy_growth` 和 `selected_set_share` 为平行需求。
+- TOP6 支付 GMV 表现：事实值、`yoy_growth` 和 `selected_set_share` 为平行需求。事实值 Requirement 使用 `operation=aggregate_level`、`scope_kind=source_dimension_all` 和 `dimension_hint=TOP6平台`；同比与归因引用同一逻辑指标，但各自保持 Requirement 局部时期与拆解。
 - 单平台支付 GMV 归因：按规则声明完整因子和公式 AST；规则不指定归因算子。对比关系不明确时保留给现有业务参数预检确认。
 - 单平台结算 GMV：结算 GMV 水平/同比、支付 GMV 归因、结算率水平/同比为平行需求。
-- TOP6 结算 GMV：结算 GMV、支付 GMV、结算率各自生成规则要求的水平、同比和平台拆解。
+- TOP6 结算 GMV：结算 GMV 和支付 GMV 的合计水平使用各自的 `aggregate_level`；结算率不可求和，仍按直接事实、注册组合和平台拆解的既有路径履约。
 - 京东佣金：单平台未指定口径时并列两个事实需求；多平台时不增加京东专属 3P 口径。
 
 不要把 Query Policy 规则写入 `business-intent-policy-registry.json`、`resolution-policy-registry.json`、派生注册表或归因算子注册表。
+
+只有用户明确全域合计或已审核 `set_default` 产生全域范围时才提交 `aggregate_level`。模糊“大盘/整体”且范围仍有多个合理解释时保留给业务参数预检或 Resolve 澄清，不根据 `analysis_task.scope` 自由文本直接生成物理聚合。增强 IR 中该 intent 结构非法时应用校验必须 `fallback_raw`，不得把 Policy 故障变成分析阻断。

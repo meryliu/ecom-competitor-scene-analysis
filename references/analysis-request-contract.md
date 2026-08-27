@@ -113,6 +113,8 @@ runner 在 Provider 前执行本地业务参数预检。它只读取当前 task 
 
 当 Query 含有维度过滤口径但物理维度尚未由元信息确认时，在对应 requirement 使用 `metric_constraints`，不要把模型猜测直接写成已确认的 `dimensions`。每项约束固定为 `kind=dimension_filter`，`operator` 只允许 `eq|in|exclude`，`values` 为非空数组，可给出 `dimension_hint` 和 `provenance`；多项约束按 AND 组合。`semantic_text` 保留该 requirement 的完整局部表述，供“现成完整口径指标优先”召回。Resolve 根据实时维度及枚举确认逻辑路径，Prepare 才物化物理选择器或同指标成员聚合。
 
+用户明确要求某个源范围维度的整体值，或审核后的 Query Policy 已补充该默认范围时，在对应总量 Requirement 使用 `resolution_intent.operation=aggregate_level`，并声明 `operand.concept_ref`、`scope_kind=source_dimension_all`、`dimension_hint` 和 provenance。IR 不枚举成员、不指定源指标、不手写求和 AST。该 intent 只作用于本 Requirement；同一逻辑指标的单成员、逐成员、同比、份额和归因需求保持各自结构。模糊“大盘/整体”仍有多个合理范围时不得强制生成 intent。
+
 占位字段必须从 Query 或机器注册表填写。没有某类需求时保持空数组。归因的 `scenario`、`target_semantics`、时期和拆解必须与用户目标一致，不能套用其他归因问题的固定值。
 
 ## 3. 时期和输入适配

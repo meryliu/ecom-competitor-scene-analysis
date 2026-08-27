@@ -146,6 +146,58 @@ class IRContractGuardTests(unittest.TestCase):
         }]
         validate_analysis_ir_contract(ir)
 
+    def test_resolution_intent_accepts_path_neutral_source_domain_aggregate(self) -> None:
+        ir = valid_ir()
+        ir["fact_observations"] = [{
+            "requirement_id": "total", "metric_ref": "target",
+            "period_roles": ["analysis"], "semantic_text": "TOP6大盘支付GMV",
+            "resolution_intent": {
+                "operation": "aggregate_level", "output_metric_object": "volume",
+                "operand": {
+                    "concept_ref": "target",
+                    "scope": {
+                        "scope_kind": "source_dimension_all",
+                        "dimension_hint": "TOP6平台",
+                    },
+                },
+                "provenance": "business_policy",
+            },
+        }]
+        validate_analysis_ir_contract(ir)
+
+    def test_resolution_intent_rejects_aggregate_without_dimension_hint(self) -> None:
+        ir = valid_ir()
+        ir["fact_observations"] = [{
+            "requirement_id": "total", "metric_ref": "target",
+            "period_roles": ["analysis"], "semantic_text": "大盘支付GMV",
+            "resolution_intent": {
+                "operation": "aggregate_level", "output_metric_object": "volume",
+                "operand": {
+                    "concept_ref": "target",
+                    "scope": {"scope_kind": "source_dimension_all"},
+                },
+            },
+        }]
+        self.assert_contract_code(ir, "RESOLUTION-IR-001")
+
+    def test_resolution_intent_rejects_unknown_aggregate_concept(self) -> None:
+        ir = valid_ir()
+        ir["fact_observations"] = [{
+            "requirement_id": "total", "metric_ref": "target",
+            "period_roles": ["analysis"], "semantic_text": "大盘支付GMV",
+            "resolution_intent": {
+                "operation": "aggregate_level", "output_metric_object": "volume",
+                "operand": {
+                    "concept_ref": "unknown",
+                    "scope": {
+                        "scope_kind": "source_dimension_all",
+                        "dimension_hint": "平台",
+                    },
+                },
+            },
+        }]
+        self.assert_contract_code(ir, "RESOLUTION-IR-001")
+
     def test_resolution_intent_rejects_resolved_composition_on_same_requirement(self) -> None:
         ir = valid_ir()
         ir["metric_compositions"] = [{

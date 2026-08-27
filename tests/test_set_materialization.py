@@ -8,12 +8,34 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from set_materialization import (  # noqa: E402
+    materialize_source_domain_set_spec,
     materialize_set_spec,
     set_aggregate_expression,
 )
 
 
 class SetMaterializationTests(unittest.TestCase):
+    def test_source_domain_materialization_is_revision_scoped(self) -> None:
+        index = {
+            "source": {"revision": 7},
+            "dimensions": {"平台": {"values": ["京东", "拼多多"]}},
+        }
+        spec = materialize_source_domain_set_spec("平台", index)
+        self.assertEqual(spec["membership_kind"], "source_domain")
+        self.assertEqual(spec["members"], ["京东", "拼多多"])
+        self.assertEqual(spec["source_revision"], 7)
+        changed = materialize_source_domain_set_spec(
+            "平台", {**index, "source": {"revision": 8}}
+        )
+        self.assertNotEqual(spec["set_fingerprint"], changed["set_fingerprint"])
+        reordered = materialize_source_domain_set_spec(
+            "平台", {
+                **index,
+                "dimensions": {"平台": {"values": ["拼多多", "京东"]}},
+            },
+        )
+        self.assertEqual(spec["set_fingerprint"], reordered["set_fingerprint"])
+
     def test_complement_is_generic_and_revision_scoped(self) -> None:
         index = {
             "source": {"revision": 1301},

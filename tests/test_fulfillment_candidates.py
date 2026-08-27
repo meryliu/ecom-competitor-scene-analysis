@@ -34,3 +34,4 @@ class FulfillmentCandidateTests(unittest.TestCase):
     def test_same_metric_set_paths_share_unified_candidate_tier(self) -> None:
         self.assertEqual(fulfillment_tier_for_path("additive_member_sum"), 2)
         self.assertEqual(fulfillment_tier_for_path("same_metric_total_minus_members"), 2)
+        self.assertEqual(fulfillment_tier_for_path("source_dimension_all_sum"), 2)

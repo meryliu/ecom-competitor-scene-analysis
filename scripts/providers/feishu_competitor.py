@@ -137,6 +137,8 @@ class FeishuCompetitorGateway(DataGateway):
             for binding in (task_resolution.get("requirement_bindings") or {}).values():
                 if not isinstance(binding, dict):
                     continue
+                if binding.get("source_dimension"):
+                    resolved_dimensions.add(str(binding["source_dimension"]))
                 resolved_dimensions.update(
                     str(item.get("source_dimension"))
                     for item in binding.get("metric_constraints") or []
@@ -149,7 +151,10 @@ class FeishuCompetitorGateway(DataGateway):
             availability[str(grain)] = {
                 "periods": sorted((sheet.get("periods") or {}).keys()),
                 "metrics": {
-                    str(metric): {"dimension": block.get("dimension")}
+                    str(metric): {
+                        "dimension": block.get("dimension"),
+                        "members": sorted(str(value) for value in (block.get("rows") or {})),
+                    }
                     for metric, block in (sheet.get("blocks") or {}).items()
                     if isinstance(block, dict) and str(metric) in resolved_metrics
                 },

@@ -208,6 +208,44 @@ class DataGatewayContractTests(unittest.TestCase):
         )
         self.assertEqual(composition["composition_id"], "douyin_express_market_share")
 
+    def test_resolve_request_projects_aggregate_intent_without_members(self) -> None:
+        tasks = [("q", {
+            "analysis_task": {
+                "query": "大盘支付GMV表现",
+                "metrics": [{
+                    "metric_id": "payment", "name": "支付GMV",
+                    "metric_object": "volume",
+                }],
+                "periods": {"analysis": "2026-07"},
+            },
+            "fact_observations": [{
+                "requirement_id": "market_total", "metric_ref": "payment",
+                "period_roles": ["analysis"], "semantic_text": "TOP6大盘支付GMV",
+                "resolution_intent": {
+                    "operation": "aggregate_level", "output_metric_object": "volume",
+                    "operand": {
+                        "concept_ref": "payment",
+                        "scope": {
+                            "scope_kind": "source_dimension_all",
+                            "dimension_hint": "TOP6平台",
+                        },
+                    },
+                    "provenance": "business_policy",
+                },
+            }],
+        })]
+        request = build_resolve_request(tasks, {"definitions": {}})
+        context = request["contexts"][0]
+        virtual = next(
+            item for item in context["metrics"]
+            if item.get("resolution_requirement_id") == "market_total"
+        )
+        self.assertEqual(virtual["resolution_operation"], "aggregate_level")
+        self.assertEqual(virtual["logical_metric_name"], "支付GMV")
+        self.assertEqual(virtual["provenance"], "business_policy")
+        self.assertEqual(request["dimensions"], ["TOP6平台"])
+        self.assertNotIn("members", virtual["resolution_intent"])
+
     def test_resolve_request_uses_registered_derived_roles_and_object_capability(self) -> None:
         tasks = [("q", {
             "analysis_task": {

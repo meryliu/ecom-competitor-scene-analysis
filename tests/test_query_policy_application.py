@@ -30,6 +30,18 @@ def fact_ir(query: str) -> dict:
         "fact_observations": [{
             "requirement_id": "gmv_fact", "metric_ref": "gmv", "period_roles": ["analysis"],
             "view_id": "overall", "dimension_refs": [],
+            "semantic_text": "TOP6平台合计大盘支付GMV",
+            "resolution_intent": {
+                "operation": "aggregate_level", "output_metric_object": "volume",
+                "operand": {
+                    "concept_ref": "gmv",
+                    "scope": {
+                        "scope_kind": "source_dimension_all",
+                        "dimension_hint": "TOP6平台",
+                    },
+                },
+                "provenance": "business_policy",
+            },
         }],
         "metric_compositions": [],
         "derived_requirements": [],

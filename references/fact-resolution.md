@@ -47,6 +47,8 @@ Query 仅提供维度值或通用逻辑维度 hint 时，最终绑定使用当�
 
 Requirement 履约使用一个统一候选序列，候选类型包括 `direct_fact`、`member_selector`、`set_aggregate`、`registered_composition`、`registered_derived` 和显式允许的 `safe_inference`。排序保持“完整直接事实 > 同指标安全选择/聚合 > 注册组合/派生 > 安全推断”。注册组合先按逻辑输出命中，再解析叶子；叶子不会拿组合输出名称重新评分。直接事实歧义仍须确认，不能用组合绕过；组合叶子确认只在组合成为最高可行路径后激活。该统一表示不放宽粒度、维度、可加性、单位、缺失值或执行质量校验。
 
+`aggregate_level` 在统一序列中只追加一个 `source_dimension_all_sum` 路径，并继续归类为 `set_aggregate`。Resolve 从指标支持维度的规范名/别名中解析唯一物理维度，校验可加性和当前事实块的全域覆盖；完整范围直接事实仍优先。候选失败只记录在本 Requirement，不得删除或降权其他可行候选。Prepare 仅对最终选中路径按当前 source revision 物化 `SetSpec`，并复用既有 `sum` AST；成员列表不进入 IR 或模型上下文。
+
 动态集合在 Prepare 中物化为 provider-neutral `SetSpec`：物理维度、成员类型、实时成员、source revision、消费意图和稳定指纹。实现不限定平台，可处理任意具备实时枚举的维度；高基数集合受上限保护。可加指标复用现有 `input_adaptations + sum/subtract`，比率必须聚合注册的分子/分母后重算；没有注册公式的非可加指标不自动集合聚合。集合成员改变或 source revision 变化时指纹变化，旧物化结果不得复用。
 
 ## 实时性

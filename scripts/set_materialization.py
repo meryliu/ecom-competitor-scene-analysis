@@ -18,6 +18,49 @@ class SetMaterializationError(ValueError):
         self.details = details or {}
 
 
+def materialize_source_domain_set_spec(
+    dimension: str,
+    index: dict[str, Any],
+    *,
+    intent: str = "total",
+    max_members: int = DEFAULT_MAX_SET_MEMBERS,
+) -> dict[str, Any]:
+    """Materialize one live physical dimension domain without IR member lists."""
+    by_token = {
+        _token(value): str(value)
+        for value in (
+            ((index.get("dimensions") or {}).get(str(dimension)) or {}).get("values")
+            or []
+        )
+    }
+    domain = [by_token[token] for token in sorted(by_token)]
+    if not domain:
+        raise SetMaterializationError(
+            "SET_DOMAIN_UNAVAILABLE", f"维度 {dimension} 缺少可验证枚举"
+        )
+    if len(domain) > max_members:
+        raise SetMaterializationError(
+            "SET_DOMAIN_TOO_LARGE",
+            f"维度 {dimension} 的物化成员数超过单次上限",
+            {"member_count": len(domain), "max_members": max_members},
+        )
+    source_revision = (index.get("source") or {}).get("revision")
+    identity = {
+        "dimension_ref": str(dimension),
+        "membership_kind": "source_domain",
+        "members": domain,
+        "source_revision": source_revision,
+        "intent": intent,
+    }
+    return {
+        **identity,
+        "excluded_members": [],
+        "domain_members": list(domain),
+        "has_positive_filter": False,
+        "set_fingerprint": _fingerprint(identity),
+    }
+
+
 def _token(value: Any) -> str:
     return "".join(str(value or "").strip().lower().split())
 

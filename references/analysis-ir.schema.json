@@ -15,10 +15,65 @@
         "periods": {"type": "object", "additionalProperties": {"type": "string"}}
       }
     },
-    "fact_observations": {"type": "array", "items": {"type": "object"}},
-    "metric_compositions": {"type": "array", "items": {"type": "object"}},
-    "derived_requirements": {"type": "array", "items": {"type": "object"}},
+    "fact_observations": {"type": "array", "items": {"$ref": "#/$defs/requirement"}},
+    "metric_compositions": {"type": "array", "items": {"$ref": "#/$defs/requirement"}},
+    "derived_requirements": {"type": "array", "items": {"$ref": "#/$defs/requirement"}},
     "custom_calculations": {"type": "array", "items": {"type": "object"}},
-    "attribution_targets": {"type": "array", "items": {"type": "object"}}
+    "attribution_targets": {"type": "array", "items": {"$ref": "#/$defs/requirement"}}
+  },
+  "$defs": {
+    "requirement": {
+      "type": "object",
+      "properties": {
+        "resolution_intent": {"$ref": "#/$defs/resolutionIntent"}
+      },
+      "additionalProperties": true
+    },
+    "resolutionIntent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["operation", "output_metric_object", "operands"],
+          "properties": {
+            "operation": {"const": "share_level"},
+            "output_metric_object": {"const": "ratio"},
+            "operands": {
+              "type": "object",
+              "required": ["numerator", "denominator"],
+              "properties": {
+                "numerator": {"type": "object"},
+                "denominator": {"type": "object"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["operation", "output_metric_object", "operand"],
+          "properties": {
+            "operation": {"const": "aggregate_level"},
+            "output_metric_object": {"const": "volume"},
+            "provenance": {
+              "enum": ["user_explicit", "business_policy", "model_inferred"]
+            },
+            "operand": {
+              "type": "object",
+              "required": ["concept_ref", "scope"],
+              "properties": {
+                "concept_ref": {"type": "string", "minLength": 1},
+                "scope": {
+                  "type": "object",
+                  "required": ["scope_kind", "dimension_hint"],
+                  "properties": {
+                    "scope_kind": {"const": "source_dimension_all"},
+                    "dimension_hint": {"type": "string", "minLength": 1}
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
   }
 }

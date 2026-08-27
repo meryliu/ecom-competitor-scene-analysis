@@ -41,7 +41,7 @@ from time_rollup import normalize_period as _normalize_time_period
 
 
 POLICY_SCHEMA = "resolution_policy/2.0"
-ENGINE_VERSION = "2.13.0"
+ENGINE_VERSION = "2.14.0"
 DEFAULT_POLICY_PATH = (
     Path(__file__).resolve().parents[1]
     / "references"
@@ -2074,6 +2074,257 @@ def _joint_block_candidates(
     return sorted(candidates, key=lambda item: (-item["strong_evidence_count"], -item["confidence"], item["candidate_id"]))
 
 
+def _fact_block_capability(
+    index: dict[str, Any], metric: str, periods: list[str], dimension: str
+) -> dict[str, Any]:
+    """Prove one physical metric block covers all exact requested periods."""
+    failures: list[dict[str, Any]] = []
+    members: set[str] = set()
+    for period in periods:
+        parsed = _normalize_period(period)
+        if parsed is None:
+            failures.append({"period": period, "reason": "invalid_period"})
+            continue
+        grain, canonical = parsed
+        sheet = (index.get("sheets") or {}).get(grain) or {}
+        block = (sheet.get("blocks") or {}).get(metric) or {}
+        if canonical not in (sheet.get("periods") or {}):
+            failures.append({"period": canonical, "reason": "period_unavailable"})
+            continue
+        if not block:
+            failures.append({"period": canonical, "reason": "metric_block_unavailable"})
+            continue
+        if str(block.get("dimension") or "无") != dimension:
+            failures.append({
+                "period": canonical,
+                "reason": "metadata_fact_dimension_conflict",
+                "fact_dimension": block.get("dimension"),
+            })
+            continue
+        members.update(str(value) for value in (block.get("rows") or {}))
+    return {
+        "status": "available" if not failures else "unavailable",
+        "dimension": dimension,
+        "periods": list(periods),
+        "members": sorted(members),
+        "failures": failures,
+    }
+
+
+def _aggregate_scope_dimensions(
+    intent: dict[str, Any], metadata: dict[str, Any], index: dict[str, Any]
+) -> list[dict[str, Any]]:
+    operand = intent.get("operand") or {}
+    scope = operand.get("scope") or {}
+    hint = str(scope.get("dimension_hint") or "")
+    supported = {
+        str(value) for value in metadata.get("dimensions") or []
+        if str(value) != "无"
+    }
+    if not hint or not supported:
+        return []
+    normalized_hint = normalize_match_text(hint)
+    exact: list[dict[str, Any]] = []
+    contained: list[dict[str, Any]] = []
+    for dimension in sorted(supported):
+        dimension_metadata = (index.get("dimensions") or {}).get(dimension) or {}
+        names = [dimension, *(dimension_metadata.get("aliases") or [])]
+        normalized_names = {normalize_match_text(value) for value in names}
+        if normalized_hint in normalized_names:
+            exact.append({
+                "dimension": dimension,
+                "method": (
+                    "dimension_name_exact"
+                    if normalized_hint == normalize_match_text(dimension)
+                    else "dimension_alias_exact"
+                ),
+            })
+        elif any(
+            normalized_hint and (
+                normalized_hint in name or name in normalized_hint
+            )
+            for name in normalized_names if name
+        ):
+            contained.append({
+                "dimension": dimension,
+                "method": "dimension_name_containment",
+            })
+    return exact or contained
+
+
+def _aggregate_level_resolution(
+    index: dict[str, Any],
+    context: dict[str, Any],
+    metric: dict[str, Any],
+    policy: dict[str, Any],
+) -> dict[str, Any]:
+    """Add direct and source-domain candidates without changing old paths."""
+    intent = metric.get("resolution_intent") or {}
+    periods = [str(value) for value in metric.get("required_periods") or []]
+    logical_name = str(metric.get("logical_metric_name") or "")
+    identity = {
+        "task_id": context.get("task_id"),
+        "requirement_id": metric.get("resolution_requirement_id"),
+        "metric_ref": metric.get("metric_ref"),
+        "logical_metric_ref": metric.get("logical_metric_ref"),
+        "operation": "aggregate_level",
+        "periods": periods,
+        "intent": intent,
+    }
+    candidates: list[dict[str, Any]] = []
+
+    direct_resolution = _query_metric_resolution(
+        metric, index.get("metrics") or {}, str(context.get("query") or ""), policy
+    )
+    for recalled in direct_resolution.get("candidates") or []:
+        source_metric = str(recalled.get("name") or "")
+        capability = _fact_block_capability(index, source_metric, periods, "无")
+        recall_conflicts = [str(value) for value in recalled.get("conflicts") or []]
+        viable = capability["status"] == "available" and not recall_conflicts
+        candidates.append({
+            "candidate_id": stable_id("aggregate_fulfillment", {
+                **identity, "type": "direct_fact", "metric": source_metric,
+            }),
+            "candidate_type": "direct_fact",
+            "path": "direct_fact",
+            "status": "viable" if viable else "infeasible",
+            "metric": source_metric,
+            "confidence": float(recalled.get("confidence") or 0.0),
+            "semantic_status": recalled.get("semantic_status"),
+            "evidence": list(recalled.get("evidence") or []) + ["scope_block_checked"],
+            "capability": capability,
+            "conflicts": [] if viable else sorted(set([
+                *recall_conflicts,
+                *(str(item.get("reason")) for item in capability.get("failures") or []),
+            ])),
+        })
+
+    source_resolution = _query_metric_resolution(
+        {
+            **metric,
+            "name": logical_name,
+            "metric_object": intent.get("output_metric_object") or "volume",
+        },
+        index.get("metrics") or {},
+        str(context.get("query") or ""),
+        policy,
+    )
+    for recalled in source_resolution.get("candidates") or []:
+        source_metric = str(recalled.get("name") or "")
+        metadata = (index.get("metrics") or {}).get(source_metric) or {}
+        dimension_matches = _aggregate_scope_dimensions(intent, metadata, index)
+        conflicts: list[str] = [
+            str(value) for value in recalled.get("conflicts") or []
+        ]
+        if not _metric_additive(metadata):
+            conflicts.append("metric_non_additive")
+        if not dimension_matches:
+            conflicts.append("aggregate_dimension_unavailable")
+        elif len(dimension_matches) > 1:
+            conflicts.append("aggregate_dimension_ambiguous")
+        source_dimension = (
+            str(dimension_matches[0]["dimension"])
+            if len(dimension_matches) == 1 else ""
+        )
+        capability = (
+            _fact_block_capability(index, source_metric, periods, source_dimension)
+            if source_dimension else {"status": "unavailable", "failures": []}
+        )
+        if source_dimension and capability["status"] != "available":
+            conflicts.extend(
+                str(item.get("reason"))
+                for item in capability.get("failures") or []
+            )
+        domain = {
+            str(value)
+            for value in (
+                ((index.get("dimensions") or {}).get(source_dimension) or {}).get("values")
+                or []
+            )
+        }
+        block_members = set(capability.get("members") or [])
+        if source_dimension and (not domain or not domain.issubset(block_members)):
+            conflicts.append("aggregate_domain_incomplete")
+        candidates.append({
+            "candidate_id": stable_id("aggregate_fulfillment", {
+                **identity, "type": "set_aggregate", "metric": source_metric,
+                "dimension": source_dimension,
+            }),
+            "candidate_type": "set_aggregate",
+            "path": "source_dimension_all_sum",
+            "status": "viable" if not conflicts else "infeasible",
+            "metric": source_metric,
+            "dimension": source_dimension or None,
+            "dimension_resolution": deepcopy(dimension_matches),
+            "confidence": float(recalled.get("confidence") or 0.0),
+            "semantic_status": recalled.get("semantic_status"),
+            "evidence": list(recalled.get("evidence") or []) + [
+                "source_dimension_all_evaluated"
+            ],
+            "capability": capability,
+            "conflicts": sorted(set(conflicts)),
+        })
+
+    viable_direct = [
+        item for item in candidates
+        if item["candidate_type"] == "direct_fact" and item["status"] == "viable"
+    ]
+    if len(viable_direct) > 1:
+        margin = float(
+            (policy.get("candidate_evaluation") or {}).get(
+                "minimum_candidate_margin", 0.1
+            )
+        )
+        ranked_direct = sorted(
+            viable_direct, key=lambda item: -float(item.get("confidence") or 0.0)
+        )
+        if (
+            float(ranked_direct[0].get("confidence") or 0.0)
+            - float(ranked_direct[1].get("confidence") or 0.0)
+            < margin
+        ):
+            for item in viable_direct:
+                item["status"] = "infeasible"
+                item["conflicts"] = ["direct_fact_ambiguous"]
+            for item in candidates:
+                if item["candidate_type"] == "set_aggregate" and item["status"] == "viable":
+                    item["status"] = "infeasible"
+                    item["conflicts"] = [
+                        *item.get("conflicts", []), "higher_tier_direct_ambiguous",
+                    ]
+
+    viable_sets = [
+        item for item in candidates
+        if item["candidate_type"] == "set_aggregate" and item["status"] == "viable"
+    ]
+    if not any(item.get("status") == "viable" for item in viable_direct) and len(viable_sets) > 1:
+        margin = float(
+            (policy.get("candidate_evaluation") or {}).get(
+                "minimum_candidate_margin", 0.1
+            )
+        )
+        ranked_sets = sorted(
+            viable_sets, key=lambda item: -float(item.get("confidence") or 0.0)
+        )
+        if (
+            float(ranked_sets[0].get("confidence") or 0.0)
+            - float(ranked_sets[1].get("confidence") or 0.0)
+            < margin
+        ):
+            for item in viable_sets:
+                item["status"] = "infeasible"
+                item["conflicts"] = ["source_metric_ambiguous"]
+
+    selected, ranked = select_fulfillment_candidate(candidates)
+    return {
+        "identity": identity,
+        "selected": selected,
+        "candidates": ranked,
+        "viable_candidates": [item for item in ranked if item.get("status") == "viable"],
+        "rejected_candidates": [item for item in ranked if item.get("status") != "viable"],
+    }
+
+
 def resolve_request_overlay(
     index: dict[str, Any],
     request: dict[str, Any],
@@ -2243,6 +2494,89 @@ def resolve_request_overlay(
             metric_consumers = [
                 item for item in metric.get("consumers") or [] if isinstance(item, dict)
             ]
+            if metric.get("resolution_operation") == "aggregate_level":
+                aggregate_resolution = _aggregate_level_resolution(
+                    overlay, context, metric, policy
+                )
+                selected_aggregate = aggregate_resolution.get("selected")
+                requirement_id = str(metric.get("resolution_requirement_id") or "")
+                if selected_aggregate is not None and requirement_id:
+                    binding_packet = {
+                        "mode": (
+                            "source_scoped_fact"
+                            if selected_aggregate.get("candidate_type") == "direct_fact"
+                            else selected_aggregate.get("path")
+                        ),
+                        "source_metric": selected_aggregate.get("metric"),
+                        "candidate_id": selected_aggregate.get("candidate_id"),
+                        "output_metric_ref": metric_ref,
+                        "logical_metric_ref": metric.get("logical_metric_ref"),
+                        "resolution_operation": "aggregate_level",
+                    }
+                    if selected_aggregate.get("candidate_type") == "set_aggregate":
+                        binding_packet["source_dimension"] = selected_aggregate.get(
+                            "dimension"
+                        )
+                    task_resolution["requirement_bindings"][requirement_id] = binding_packet
+                rejected_aggregate = aggregate_resolution.get("rejected_candidates") or []
+                ambiguous_aggregate = any(
+                    conflict in {
+                        "aggregate_dimension_ambiguous", "direct_fact_ambiguous",
+                        "higher_tier_direct_ambiguous", "source_metric_ambiguous",
+                    }
+                    for candidate in rejected_aggregate
+                    for conflict in candidate.get("conflicts") or []
+                )
+                action = (
+                    "auto" if selected_aggregate is not None
+                    else "confirm" if ambiguous_aggregate
+                    else "block"
+                )
+                aggregate_case = {
+                    "case_id": stable_id(
+                        "resolution_case", aggregate_resolution["identity"]
+                    ),
+                    "action": action,
+                    "kind": "aggregate_level",
+                    "requested_term": requested_name,
+                    "task_ids": [task_id],
+                    "metric_ref": metric_ref,
+                    "requirement_id": requirement_id,
+                    "selected_candidate_id": (
+                        selected_aggregate.get("candidate_id")
+                        if selected_aggregate else None
+                    ),
+                    "policy_version": policy.get("policy_version"),
+                    "resolution_policy_hash": policy_hash,
+                    "source_revision": source.get("revision"),
+                    "schema_hash": source.get("schema_hash"),
+                    "resolution_engine_version": ENGINE_VERSION,
+                    "candidates": [
+                        _intent_candidate_packet(item)
+                        for item in aggregate_resolution.get("viable_candidates") or []
+                    ],
+                    "rejected_candidates": [
+                        _intent_candidate_packet(item)
+                        for item in rejected_aggregate
+                    ],
+                }
+                decisions.append(aggregate_case)
+                task_resolution["metric_statuses"][metric_ref] = {
+                    "requested_metric": requested_name,
+                    "status": (
+                        "requirement_bound" if selected_aggregate is not None
+                        else "ambiguous" if action == "confirm"
+                        else "not_executable"
+                    ),
+                    "binding": (
+                        selected_aggregate.get("metric")
+                        if selected_aggregate is not None else None
+                    ),
+                }
+                if selected_aggregate is None:
+                    cases.append(aggregate_case)
+                    task_resolution["resolution_cases"].append(aggregate_case)
+                continue
             constrained_consumers = [
                 item for item in metric_consumers if item.get("metric_constraints")
             ]

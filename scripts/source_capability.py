@@ -178,6 +178,8 @@ def project_task_capabilities(
     for binding in projected["requirement_bindings"].values():
         if not isinstance(binding, dict):
             continue
+        if binding.get("source_dimension"):
+            resolved_dimensions.add(str(binding["source_dimension"]))
         resolved_dimensions.update(
             str(item.get("source_dimension"))
             for item in binding.get("metric_constraints") or []

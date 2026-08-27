@@ -48,6 +48,8 @@
 - `tasks/<task>/compiled-plan.json`：完整 DAG、事实绑定和 `source_resolution`。
 - 顶层 `answer-payload.json`：精简业务结果；完整公式和输入引用保留在任务目录。
 
+源维度全域总量使用 Requirement 级 `aggregate_level` 进入统一履约候选。Resolve 只解析核心源指标、唯一物理维度、可加性和事实块全域覆盖；Prepare 从当前 revision 物化 `membership_kind=source_domain` 的 `SetSpec`。完整范围直接事实优先，未选中的集合候选不触发 Prepare 校验，也不影响原直接、粒度上卷、注册组合或派生路径。
+
 源数据当前只有周粒度标签。周标签使用 ISO 8601 周历解释：周一开始、周日结束；起止日期由执行时按 `date.fromisocalendar` 推导，不在源索引中复制维护。
 
 直接目标期间事实优先。目标期间没有直接事实时，只有 `aggregation_mode=additive` 或 `additive=true` 的指标才允许时间或维度聚合；`supported_grains` 只表示源表支持的粒度。
