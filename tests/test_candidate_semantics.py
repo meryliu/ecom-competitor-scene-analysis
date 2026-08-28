@@ -47,6 +47,46 @@ class CandidateSemanticsTests(unittest.TestCase):
         )
         self.assertTrue(evidence["full_scope"])
         self.assertEqual(evidence["score"], 1.0)
+        self.assertEqual(evidence["core_relation"], "exact")
+
+    def test_scoped_fact_reports_unrequested_extra_core(self) -> None:
+        evidence = self.evidence(
+            "京东闭环电商佣金收入",
+            "闭环电商佣金收入",
+            "京东闭环电商佣金收入（3P佣金）",
+            [],
+            [{"operator": "eq", "values": ["京东"]}],
+        )
+        self.assertTrue(evidence["full_scope"])
+        self.assertEqual(evidence["status"], "overqualified")
+        self.assertEqual(evidence["core_relation"], "overqualified")
+        self.assertEqual(evidence["extra_core"], "3p佣金")
+
+    def test_full_scope_does_not_combine_core_from_another_alias(self) -> None:
+        evidence = self.evidence(
+            "京东闭环电商佣金收入",
+            "闭环电商佣金收入",
+            "京东闭环电商佣金收入（3P佣金）",
+            ["闭环电商佣金收入"],
+            [{"operator": "eq", "values": ["京东"]}],
+        )
+        self.assertTrue(evidence["full_scope"])
+        self.assertEqual(evidence["core_relation"], "overqualified")
+        self.assertEqual(
+            evidence["matched_text"], "京东闭环电商佣金收入（3P佣金）"
+        )
+
+    def test_single_precise_alias_can_prove_scope_and_core(self) -> None:
+        evidence = self.evidence(
+            "京东闭环电商佣金收入",
+            "闭环电商佣金收入",
+            "京东闭环电商佣金收入（3P佣金）",
+            ["京东闭环电商佣金收入"],
+            [{"operator": "eq", "values": ["京东"]}],
+        )
+        self.assertTrue(evidence["full_scope"])
+        self.assertEqual(evidence["core_relation"], "exact")
+        self.assertEqual(evidence["matched_text"], "京东闭环电商佣金收入")
 
     def test_in_scope_requires_all_members_in_one_label(self) -> None:
         constraints = [{"operator": "in", "values": ["京东", "拼多多"]}]

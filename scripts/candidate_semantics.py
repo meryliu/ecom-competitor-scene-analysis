@@ -187,6 +187,7 @@ def full_scope_evidence(
     """Require one source label to cover every structured scope constraint."""
     phrase_token = normalize_match_text(phrase)
     core_score = float(core_evidence.get("score") or 0.0)
+    requested_core = str(core_evidence.get("requested_core") or "")
     base = {
         "status": "no_match",
         "full_scope": False,
@@ -194,13 +195,33 @@ def full_scope_evidence(
         "value_score": 0.0,
         "operator_score": 0.0,
         "matched_text": None,
+        "matched_core": None,
+        "core_relation": None,
+        "extra_core": None,
         "constraint_checks": [],
     }
-    if not phrase_token or not constraints or core_score < core_floor:
+    if (
+        not phrase_token
+        or not constraints
+        or not requested_core
+        or core_score < core_floor
+    ):
         return base
 
     exclude_terms = operator_terms(policy, "exclude")
+    removable = sorted(
+        {
+            normalize_match_text(value)
+            for constraint in constraints
+            for value in constraint.get("values") or []
+            if normalize_match_text(value)
+        }
+        | set(operator_terms(policy)),
+        key=len,
+        reverse=True,
+    )
     labels = [candidate_name, *(metadata.get("aliases") or [])]
+    matches: list[dict[str, Any]] = []
     for raw_label in labels:
         label = normalize_match_text(raw_label)
         checks: list[dict[str, Any]] = []
@@ -231,13 +252,43 @@ def full_scope_evidence(
             all_values_match = all_values_match and values_match
             all_operators_match = all_operators_match and operator_match
         if all_values_match and all_operators_match:
-            return {
-                "status": "exact",
+            label_core = strip_core_tokens(raw_label, policy)
+            for token in removable:
+                label_core = label_core.replace(token, "")
+            label_core_score = containment_score(requested_core, label_core)
+            if label_core_score < core_floor:
+                continue
+            extra_core = None
+            if label_core == requested_core:
+                core_relation = "exact"
+            elif requested_core in label_core:
+                extra_core = label_core.replace(requested_core, "", 1)
+                core_relation = "overqualified" if extra_core else "exact"
+            else:
+                core_relation = "fuzzy"
+            matches.append({
+                "status": (
+                    "overqualified"
+                    if core_relation == "overqualified"
+                    else "exact"
+                ),
                 "full_scope": True,
-                "score": min(core_score, 1.0),
+                "score": min(label_core_score, 1.0),
                 "value_score": 1.0,
                 "operator_score": 1.0,
                 "matched_text": str(raw_label),
+                "matched_core": label_core,
+                "core_relation": core_relation,
+                "extra_core": extra_core,
                 "constraint_checks": checks,
-            }
-    return base
+            })
+    if not matches:
+        return base
+    relation_rank = {"exact": 0, "fuzzy": 1, "overqualified": 2}
+    return min(
+        matches,
+        key=lambda item: (
+            relation_rank.get(str(item.get("core_relation")), 3),
+            -float(item.get("score") or 0.0),
+        ),
+    )

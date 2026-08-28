@@ -718,6 +718,130 @@ class ResolutionPolicyTests(unittest.TestCase):
         self.assertEqual(binding["source_metric"], "京东全国业务量")
         self.assertEqual(binding["mode"], "source_scoped_fact")
 
+    @staticmethod
+    def _commission_constraint_request(metric_name: str = "闭环电商佣金收入") -> dict:
+        consumer = {
+            "requirement_id": "scoped",
+            "requirement_type": "fact_observations",
+            "periods": ["2026-06"],
+            "semantic_text": f"京东{metric_name}",
+            "metric_constraints": [{
+                "kind": "dimension_filter",
+                "operator": "eq",
+                "values": ["京东"],
+                "dimension_hint": "平台",
+                "provenance": "user_explicit",
+            }],
+        }
+        return {"metrics": [metric_name], "contexts": [{
+            "task_id": "q", "query": f"京东{metric_name}", "periods": ["2026-06"],
+            "dimensions": ["平台"], "metrics": [{
+                "metric_ref": "commission", "name": metric_name,
+                "metric_object": "volume", "metric_object_provenance": "user_explicit",
+                "unit": "亿元", "unit_provenance": "user_explicit",
+                "consumers": [consumer],
+            }],
+        }]}
+
+    @staticmethod
+    def _commission_metric(*, dimensions: list[str]) -> dict:
+        return {
+            "aliases": [], "unit": "亿元", "metric_object": "volume",
+            "supported_grains": ["month"], "dimensions": dimensions,
+            "aggregation_mode": "additive",
+        }
+
+    def test_exact_member_selector_outranks_overqualified_scoped_fact(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "京东闭环电商佣金收入（3P佣金）": self._commission_metric(
+                    dimensions=["无"]
+                ),
+                "闭环电商佣金收入": self._commission_metric(dimensions=["TOP6平台"]),
+            },
+            "dimensions": {
+                "无": {"aliases": [], "values": []},
+                "TOP6平台": {"aliases": ["平台"], "values": ["京东", "拼多多"]},
+            },
+            "sheets": {},
+        }
+        result = resolve_request_overlay(
+            index, self._commission_constraint_request(), self.policy
+        )
+        task = result["task_resolutions"]["q"]
+        binding = task["requirement_bindings"]["scoped"]
+        self.assertEqual(binding["source_metric"], "闭环电商佣金收入")
+        self.assertEqual(binding["mode"], "member_selector")
+        self.assertEqual(
+            binding["metric_constraints"][0]["source_dimension"], "TOP6平台"
+        )
+        decision = next(
+            item for item in result["resolution_decisions"]
+            if item["kind"] == "metric_constraint"
+        )
+        overqualified = next(
+            item for item in decision["candidates"]
+            if item["metric"] == "京东闭环电商佣金收入（3P佣金）"
+        )
+        self.assertEqual(overqualified["semantic_tier"], 1)
+        self.assertTrue(overqualified["requires_confirmation"])
+        self.assertEqual(
+            overqualified["match_evidence"]["constraint"]["core_relation"],
+            "overqualified",
+        )
+
+    def test_only_overqualified_scoped_fact_requires_confirmation(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "京东闭环电商佣金收入（3P佣金）": self._commission_metric(
+                    dimensions=["无"]
+                ),
+            },
+            "dimensions": {
+                "无": {"aliases": [], "values": []},
+                "TOP6平台": {"aliases": ["平台"], "values": ["京东", "拼多多"]},
+            },
+            "sheets": {},
+        }
+        result = resolve_request_overlay(
+            index, self._commission_constraint_request(), self.policy
+        )
+        task = result["task_resolutions"]["q"]
+        self.assertNotIn("scoped", task["requirement_bindings"])
+        case = task["resolution_cases"][0]
+        self.assertEqual(case["action"], "confirm")
+        self.assertEqual(len(case["candidates"]), 1)
+        candidate = case["candidates"][0]
+        self.assertEqual(candidate["path"], "source_scoped_fact")
+        self.assertEqual(candidate["semantic_tier"], 1)
+        self.assertTrue(candidate["requires_confirmation"])
+
+    def test_explicit_extra_core_keeps_scoped_fact_auto_binding(self) -> None:
+        metric_name = "闭环电商佣金收入（3P佣金）"
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "京东闭环电商佣金收入（3P佣金）": self._commission_metric(
+                    dimensions=["无"]
+                ),
+            },
+            "dimensions": {
+                "无": {"aliases": [], "values": []},
+                "TOP6平台": {"aliases": ["平台"], "values": ["京东", "拼多多"]},
+            },
+            "sheets": {},
+        }
+        result = resolve_request_overlay(
+            index, self._commission_constraint_request(metric_name), self.policy
+        )
+        binding = result["task_resolutions"]["q"]["requirement_bindings"]["scoped"]
+        self.assertEqual(
+            binding["source_metric"], "京东闭环电商佣金收入（3P佣金）"
+        )
+        self.assertEqual(binding["mode"], "source_scoped_fact")
+
     def test_generic_dimension_hint_resolves_unique_physical_value_domain(self) -> None:
         index = {
             "source": {"url": "source", "revision": 1, "schema_hash": "schema"},

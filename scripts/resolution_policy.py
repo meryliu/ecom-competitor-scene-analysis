@@ -41,7 +41,7 @@ from time_rollup import normalize_period as _normalize_time_period
 
 
 POLICY_SCHEMA = "resolution_policy/2.0"
-ENGINE_VERSION = "2.15.0"
+ENGINE_VERSION = "2.16.0"
 DEFAULT_POLICY_PATH = (
     Path(__file__).resolve().parents[1]
     / "references"
@@ -1104,7 +1104,10 @@ def _resolve_constrained_requirement(
         constraint_variants: list[tuple[list[dict[str, Any]], list[dict[str, Any]], int]] = [
             ([], [], 0)
         ]
-        requires_confirmation = False
+        scope_overqualified = (
+            full_scope and scope_evidence.get("core_relation") == "overqualified"
+        )
+        requires_confirmation = bool(scope_overqualified)
         path: str | None = (
             "source_derived_fact"
             if full_scope and derived_evidence.get("status") == "source_derived_exact"
@@ -1181,7 +1184,13 @@ def _resolve_constrained_requirement(
                 for item in grain_checks
                 if item.get("status") != "available" and item.get("reason")
             )
-        semantic_tier = 0 if core_score >= core_floor else 3
+        semantic_tier = (
+            1
+            if scope_overqualified
+            else 0
+            if core_score >= core_floor
+            else 3
+        )
         match_confidence = (
             float(scope_evidence.get("score") or 0.0) if full_scope else core_score
         )
