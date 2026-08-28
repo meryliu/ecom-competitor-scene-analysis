@@ -10,10 +10,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from query_policy_runtime import (  # noqa: E402
+    QueryPolicyError,
     load_policy,
     select_query_policy,
     select_query_policy_fail_open,
     validate_policy,
+    validate_rule,
     value_hash,
 )
 from compile_query_policy import QueryPolicyCompileError, _runtime_rule  # noqa: E402
@@ -89,6 +91,13 @@ class QueryPolicyRuntimeTests(unittest.TestCase):
         source["actions"][0].pop("action_id")
         with self.assertRaises(QueryPolicyCompileError):
             _runtime_rule(source, self.index["policy_version"])
+
+    def test_attribution_effect_contract_must_match_the_protocol(self) -> None:
+        rule = deepcopy(self.rules["single-platform-payment-gmv-attribution"])
+        rule["actions"][0]["ir_effect_contract"]["target_semantics"] = "relative_yoy_trend"
+        with self.assertRaises(QueryPolicyError) as caught:
+            validate_rule(rule)
+        self.assertEqual(caught.exception.code, "QP_EFFECT_CONTRACT_INVALID")
 
     def test_fixture_rule_references_exist_and_positive_rules_are_recalled(self) -> None:
         fixture_path = ROOT / "tests" / "fixtures" / "query-policy" / "behavior-fixtures.json"

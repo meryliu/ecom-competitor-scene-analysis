@@ -3,7 +3,7 @@
   "policy_version": "query-policy/1.0.0",
   "rule_id": "single-platform-payment-gmv-attribution",
   "name": "单个平台支付 GMV 归因",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "priority": 60,
   "routing": {"terms": ["支付GMV", "归因", "拆解", "原因", "驱动", "贡献", "拉动", "拖累"]},
   "applicability": {
@@ -16,7 +16,17 @@
       "op": "rewrite",
       "idempotency": "application_key",
       "when": "用户未指定拆解公式",
-      "instruction": "补充按支付 GMV = MAC × MAC 月单量 × MAC 订单价 ×（自然月总天数/30）进行公式因子归因"
+      "instruction": "补充按支付 GMV = MAC × MAC 月单量 × MAC 订单价 ×（自然月总天数/30）进行公式因子归因",
+      "ir_effect_contract": {
+        "collection": "attribution_targets",
+        "scenario": "metric_change",
+        "target_semantics": "absolute_delta",
+        "required_shape": {
+          "decomposition": "formula",
+          "factors": "non_empty",
+          "formula": "object"
+        }
+      }
     }
   ],
   "user_explicit_protection": ["用户指定的其他拆解思路"],

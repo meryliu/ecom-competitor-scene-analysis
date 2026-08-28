@@ -91,6 +91,18 @@ runner 在 Provider 前执行本地业务参数预检。它只读取当前 task 
 
 `metric_change` 归因内部只使用 `analysis/comparison`；若用户要求同比归因，`comparison` 就是去年同期，不为归因目标额外创建 `analysis_last_year`。兼容输入仅在目标没有 `comparison` 时把其 `analysis_last_year` 确定性归一为 `comparison`。同比数值派生与同比归因可以并存：前者继续使用 `analysis/analysis_last_year`，后者使用 `analysis/comparison`。一个归因算子内不同角色不得指向同一物理时期。
 
+归因协议字段只写规范枚举，不写“同比变化归因”“用户视角”等业务文案，也不使用 `unspecified` 等伪枚举。常用映射如下；无法确定业务场景或拆解方式时省略字段，由业务参数预检处理：
+
+|字段|规范值|
+|-|-|
+|`scenario=metric_change` 的目标语义|`target_semantics=absolute_delta`|
+|`scenario=yoy_trend_change` 的目标语义|`target_semantics=relative_yoy_trend`|
+|公式因子拆解|`decomposition=formula`|
+|维度拆解|`decomposition=dimension`|
+|约束来源|`model_inferred\|user_explicit\|user_formula\|registered_definition\|source_metadata`|
+
+“用户视角、地区视角、供给视角”等是业务视角，不是 `decomposition` 枚举。用户明确平台或维度筛选时使用 `provenance=user_explicit`；不能确认来源强度时省略 provenance，使用现有默认，不写 `user_query`。
+
 同一指标同时要求水平和同比时只声明一个核心指标，例如 `线上化率`；水平写入 `fact_observations`，同比写入引用同一 `metric_ref` 的 `derived_requirements`。不要额外声明“线上化率同比变化”等来源式指标名。Resolve 可以将源侧预计算同比仅绑定到派生 requirement，不会替换水平事实。
 
 标准年、季、月粒度降级不由模型创建 `input_adaptations`。runner 先检查目标粒度直接事实；缺失且指标可聚合时，按最近细粒度和完整覆盖规则自动生成适配。只有用户明确给出非标准输入转换时才在 IR 中声明适配。

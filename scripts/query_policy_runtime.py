@@ -9,6 +9,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from ir_contract_guard import IR_DECOMPOSITIONS, SCENARIO_TARGET_SEMANTICS
+
 
 POLICY_ROOT = Path(__file__).resolve().parents[1] / "references" / "query-understanding"
 POLICY_INDEX_SCHEMA = "query_policy_index/1.0"
@@ -103,6 +105,53 @@ def validate_rule(rule: dict[str, Any]) -> None:
             raise QueryPolicyError(
                 "QP_ACTION_NOT_IDEMPOTENT",
                 f"{rule_id}.{action_id} must declare idempotency=application_key",
+                stage="validate",
+            )
+        effect = action.get("ir_effect_contract")
+        if effect is None:
+            continue
+        if not isinstance(effect, dict) or set(effect) - {
+            "collection", "scenario", "target_semantics", "required_shape",
+        }:
+            raise QueryPolicyError(
+                "QP_EFFECT_CONTRACT_INVALID",
+                f"{rule_id}.{action_id} ir_effect_contract is invalid",
+                stage="validate",
+            )
+        scenario = effect.get("scenario")
+        expected_semantics = SCENARIO_TARGET_SEMANTICS.get(str(scenario or ""))
+        if (
+            effect.get("collection") != "attribution_targets"
+            or expected_semantics is None
+            or effect.get("target_semantics") != expected_semantics
+        ):
+            raise QueryPolicyError(
+                "QP_EFFECT_CONTRACT_INVALID",
+                f"{rule_id}.{action_id} attribution protocol fields are invalid",
+                stage="validate",
+            )
+        required_shape = effect.get("required_shape")
+        if not isinstance(required_shape, dict) or set(required_shape) - {
+            "decomposition", "factors", "formula",
+        }:
+            raise QueryPolicyError(
+                "QP_EFFECT_CONTRACT_INVALID",
+                f"{rule_id}.{action_id} required_shape is invalid",
+                stage="validate",
+            )
+        if required_shape.get("decomposition") not in IR_DECOMPOSITIONS:
+            raise QueryPolicyError(
+                "QP_EFFECT_CONTRACT_INVALID",
+                f"{rule_id}.{action_id} decomposition is invalid",
+                stage="validate",
+            )
+        if (
+            required_shape.get("factors") not in (None, "non_empty")
+            or required_shape.get("formula") not in (None, "object")
+        ):
+            raise QueryPolicyError(
+                "QP_EFFECT_CONTRACT_INVALID",
+                f"{rule_id}.{action_id} formula shape is invalid",
                 stage="validate",
             )
     _rule_dependencies(rule)
