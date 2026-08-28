@@ -2,7 +2,7 @@
 
 本文件定义模型与 `compile_plan.py` 的接口。只有生成、检查或扩展编译计划时读取。
 
-`scripts/analysis_ir_normalizer.py` 是 Resolve 前唯一的确定性规范化入口。它只处理可机械确定的结构：时期格式、归因时期角色别名、可由字段形态唯一判断的 factor `kind`，以及将多时期注册组合拆成编译器消费的单时期 Requirement。规范化必须幂等，不得改写用户指标、范围、筛选、公式或有歧义的业务含义。结构基线见 [analysis-ir.schema.json](analysis-ir.schema.json)，跨引用、时期角色和公式完整性继续由 `ir_contract_guard.py` 统一校验。Query Policy 应用校验失败仍返回 `fallback_raw`，增强环节不得形成业务阻断。
+`scripts/analysis_ir_normalizer.py` 是 Resolve 前唯一的确定性规范化入口。它只处理可机械确定的结构：时期格式、归因时期角色别名、可由字段形态唯一判断的 factor `kind`，以及将多时期注册组合拆成编译器消费的单时期 Requirement。拆分时同步把 `output_requirements[*].source_requirement_refs` 中的父 Requirement ID 按时期顺序展开为全部子 ID，稳定去重并校验引用存在与生成 ID 无冲突；不得递归改写其他 `*_refs` 字段。规范化必须幂等，不得改写用户指标、范围、筛选、公式或有歧义的业务含义。结构基线见 [analysis-ir.schema.json](analysis-ir.schema.json)，跨引用、时期角色和公式完整性继续由 `ir_contract_guard.py` 统一校验。Query Policy 应用校验失败仍返回 `fallback_raw`，增强环节不得形成业务阻断。
 
 ## 目录
 
@@ -328,7 +328,7 @@ Prepare 自动生成的适配可额外携带 `target_period`，用于目标局�
 
 runner 在 Provider resolve 前先调用 `scripts/business_parameter_preflight.py`，再执行归因 IR contract guard。预检是 task-local、纯内存的业务完整性层：只对 `attribution_targets` 中缺失且可由当前 Query/IR 唯一确定的时期角色、`target_semantics` 或拆解类型做确定性补齐；多个合理解释生成不超过三个候选的 `kind=business_parameter` resolution case。它不读取源元信息、不参与指标/维度候选评分、不校验推断单位，也不从历史对话补充范围。
 
-目标及 metric 因子必须使用已声明的 `metric_ref`，`formula` 必须是对象 AST，每个 `factor_ref` 必须命中唯一 `factor_id`，literal 必须覆盖场景角色。`metric_change` 的规范角色固定为 `analysis/comparison`；目标局部的旧 `analysis_last_year` 仅可在没有冲突时归一为 `comparison`。同比派生可继续在任务级保留 `analysis_last_year`，不会被归因角色归一删除。结构错误使用 `ATTR-IR-000` 至 `ATTR-IR-006` 在远端调用前失败，不得被业务预检改写为澄清，不解析自由文本公式或模糊匹配指标名。
+目标及 metric 因子必须使用已声明的 `metric_ref`，`formula` 必须是对象 AST，每个 `factor_ref` 必须命中唯一 `factor_id`，literal 必须覆盖场景角色。`metric_change` 的规范角色固定为 `analysis/comparison`；目标局部的旧 `analysis_last_year` 仅可在没有冲突时归一为 `comparison`。同比派生可继续在任务级保留 `analysis_last_year`，不会被归因角色归一删除。Guard 只拒绝已经声明但非法的值：未知 `scenario` 使用 `ATTR-IR-007`，与场景冲突的 `target_semantics` 使用 `ATTR-IR-008`，未知或非字符串 `decomposition` 使用 `ATTR-IR-009`；缺失但可补齐或需要澄清的业务参数仍由 Preflight 处理。既有结构错误使用 `ATTR-IR-000` 至 `ATTR-IR-006` 在远端调用前失败，不得被业务预检改写为澄清，不解析自由文本公式或模糊匹配指标名。
 
 归因算子仍由 `scenario + metric_object + target_semantics + formula shape + factor roles` 共同确定。例如同一乘除公式在 `metric_change` 与 `yoy_trend_change` 下分别路由到变化算子和同比趋势算子；公式形态不越权覆盖场景。
 

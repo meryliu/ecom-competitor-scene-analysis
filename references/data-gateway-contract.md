@@ -11,7 +11,7 @@ facts = gateway.fetch(fetch_request)
 
 `resolve()` 接收语义指标名、维度名、时期及任务级语义上下文，返回 `resolved_capabilities/1.0`。能力对象包含 provider/source 身份与版本、名称 bindings、按指标隔离的维度 bindings、指标/维度业务元信息、联合可用性及必要的逻辑候选摘要。它禁止包含 token、sheet ID、行列、单元格范围或指标块坐标；完整候选坐标只留在 Provider 内部。
 
-候选解析沿用 legacy-first。只有约束候选无可行 binding 且拒绝证据包含 `core_semantics_below_floor` 时，才用当前请求文本做一次本地核心语义回退；成功 legacy binding 不变，回退不发起额外 Provider/飞书请求，回退失败仍返回原确认/阻断状态。
+候选解析沿用 legacy-first。只有约束候选无可行 binding 且拒绝证据包含 `core_semantics_below_floor` 时，才用当前请求文本做一次本地核心语义回退；成功 legacy binding 不变，回退不发起额外 Provider/飞书请求，回退失败仍返回原确认/阻断状态。若当前逻辑指标已有 `composition_intent`，来自整句 Query、非用户显式引用的 fallback 命中仅是该组合的输入叶子，则该候选不得作为逻辑输出的 Requirement binding；候选仍保留给组合输入解析，完整直接事实及用户显式引用不受影响。
 
 能力对象可包含 `task_resolutions`、`requirement_bindings` 和 `task_metric_dimension_bindings`。它们是按 `task_id` 投影的权威解析结果，包含任务级核心指标绑定、需求级源侧派生或维度约束 binding、指标状态、组合回退结果和确认 cases。`metric_constraints`、局部 `semantic_text`、`derived_metric_id` 和 `resolution_intent` 随 consumer 进入 resolve；每个 consumer 的时期、拆解维度、约束和指标对象是本 Requirement 的硬门，不得先合并为共享指标条件。根级 `required_periods`、`required_dimensions` 和 `required_breakdown_dimensions` 只用于兼容和诊断。
 
@@ -32,7 +32,7 @@ facts = gateway.fetch(fetch_request)
   "freshness": "live",
   "resolution_policy_hash": "...",
   "business_intent_policy_hash": "...",
-  "resolution_engine_version": "2.13.0",
+  "resolution_engine_version": "2.15.0",
   "fact_provider_version": "1.1.0"
 }
 ```

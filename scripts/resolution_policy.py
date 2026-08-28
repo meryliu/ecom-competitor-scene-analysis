@@ -41,7 +41,7 @@ from time_rollup import normalize_period as _normalize_time_period
 
 
 POLICY_SCHEMA = "resolution_policy/2.0"
-ENGINE_VERSION = "2.14.0"
+ENGINE_VERSION = "2.15.0"
 DEFAULT_POLICY_PATH = (
     Path(__file__).resolve().parents[1]
     / "references"
@@ -1382,6 +1382,34 @@ def _try_context_fallback(
     return retry
 
 
+def _implicit_fallback_selects_composition_leaf(
+    resolution: dict[str, Any],
+    selected: dict[str, Any] | None,
+    composition_intent: dict[str, Any] | None,
+) -> bool:
+    """Keep a query-level fallback leaf from masquerading as a composed output."""
+    if selected is None or not isinstance(composition_intent, dict):
+        return False
+    guard = resolution.get("context_guard")
+    if (
+        not isinstance(guard, dict)
+        or guard.get("mode") != "failure_fallback"
+        or guard.get("reason") != "legacy_core_semantic_gate_failed"
+        or guard.get("hint_source") != "query"
+        or bool(guard.get("explicit_reference"))
+    ):
+        return False
+    selected_metric = normalize_match_text(selected.get("metric"))
+    if not selected_metric:
+        return False
+    input_metrics = {
+        normalize_match_text(item.get("metric"))
+        for item in composition_intent.get("inputs") or []
+        if isinstance(item, dict) and item.get("metric")
+    }
+    return selected_metric in input_metrics
+
+
 def _normalize_period(value: Any) -> tuple[str, str] | None:
     return _normalize_time_period(value)
 
@@ -2485,6 +2513,7 @@ def resolve_request_overlay(
             "composition_resolutions": [],
             "resolution_cases": [],
         }
+        composition_deferred_requirements: dict[str, set[str]] = {}
         for metric in context.get("metrics") or []:
             if not isinstance(metric, dict) or not metric.get("name"):
                 continue
@@ -2630,6 +2659,16 @@ def resolve_request_overlay(
                     ),
                     None,
                 ) or constraint_resolution.get("binding")
+                composition_intent = intent_by_metric_ref.get(metric_ref)
+                deferred_to_composition = _implicit_fallback_selects_composition_leaf(
+                    constraint_resolution, selected_constraint, composition_intent
+                )
+                if deferred_to_composition:
+                    selected_constraint = None
+                    if requirement_id:
+                        composition_deferred_requirements.setdefault(
+                            metric_ref, set()
+                        ).add(requirement_id)
                 if selected_constraint is not None and requirement_id:
                     constrained_bound.add(requirement_id)
                     binding_packet = {
@@ -2653,7 +2692,9 @@ def resolve_request_overlay(
                         )
                     task_resolution["requirement_bindings"][requirement_id] = binding_packet
                 constraint_action = (
-                    "auto"
+                    "block"
+                    if deferred_to_composition
+                    else "auto"
                     if selected_constraint is not None
                     else "confirm"
                     if constraint_candidates
@@ -2693,8 +2734,13 @@ def resolve_request_overlay(
                     constraint_case["context_guard"] = deepcopy(
                         constraint_resolution["context_guard"]
                     )
+                if deferred_to_composition:
+                    constraint_case["activation"] = "deferred_to_registered_composition"
+                    constraint_case["deferred_reason"] = (
+                        "implicit_query_fallback_selected_composition_input"
+                    )
                 decisions.append(constraint_case)
-                if selected_constraint is None:
+                if selected_constraint is None and not deferred_to_composition:
                     cases.append(constraint_case)
                     task_resolution["resolution_cases"].append(constraint_case)
             if constrained_consumers and len(constrained_consumers) == len(metric_consumers):
@@ -2706,7 +2752,17 @@ def resolve_request_overlay(
                 task_resolution["metric_statuses"][metric_ref] = {
                     "requested_metric": requested_name,
                     "status": (
-                        "requirement_bound"
+                        "composition_deferred"
+                        if (
+                            metric_ref in intent_by_metric_ref
+                            and bool(composition_deferred_requirements.get(metric_ref))
+                            and all_requirement_ids
+                            == (
+                                constrained_bound
+                                | composition_deferred_requirements.get(metric_ref, set())
+                            )
+                        )
+                        else "requirement_bound"
                         if all_requirement_ids == constrained_bound
                         else "ambiguous"
                         if any(

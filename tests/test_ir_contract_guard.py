@@ -56,6 +56,39 @@ class IRContractGuardTests(unittest.TestCase):
     def test_valid_formula_passes(self) -> None:
         validate_analysis_ir_contract(valid_ir())
 
+    def test_unknown_scenario_fails(self) -> None:
+        ir = valid_ir()
+        ir["attribution_targets"][0]["scenario"] = "unknown"
+        self.assert_contract_code(ir, "ATTR-IR-007")
+
+    def test_target_semantics_must_match_scenario(self) -> None:
+        ir = valid_ir()
+        ir["attribution_targets"][0]["target_semantics"] = "relative_yoy_trend"
+        self.assert_contract_code(ir, "ATTR-IR-008")
+
+    def test_unknown_decomposition_fails(self) -> None:
+        ir = valid_ir()
+        ir["attribution_targets"][0]["decomposition"] = "custom"
+        self.assert_contract_code(ir, "ATTR-IR-009")
+
+    def test_missing_formula_contract_is_left_for_preflight(self) -> None:
+        ir = valid_ir()
+        target = ir["attribution_targets"][0]
+        target["decomposition"] = "formula"
+        target.pop("formula")
+        target.pop("factors")
+        validate_analysis_ir_contract(ir)
+
+    def test_dimension_decomposition_does_not_require_formula(self) -> None:
+        ir = valid_ir()
+        target = ir["attribution_targets"][0]
+        target["decomposition"] = "dimension"
+        target["target_semantics"] = "absolute_delta"
+        target["group_dimensions"] = ["平台"]
+        target.pop("formula")
+        target.pop("factors")
+        validate_analysis_ir_contract(ir)
+
     def test_missing_metric_factor_ref_fails(self) -> None:
         ir = valid_ir()
         ir["attribution_targets"][0]["factors"][0].pop("metric_ref")

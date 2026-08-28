@@ -11,6 +11,7 @@ from resolution_policy import (  # noqa: E402
     ResolutionPolicyError,
     _derived_semantic_score,
     _grain_signature,
+    _implicit_fallback_selects_composition_leaf,
     _strip_derived_tokens,
     load_resolution_policy,
     resolve_request_overlay,
@@ -1929,6 +1930,101 @@ class ResolutionPolicyTests(unittest.TestCase):
         self.assertEqual(
             task["composition_resolutions"][0]["selected_fulfillment"]["candidate_type"],
             "direct_fact",
+        )
+
+    def test_implicit_query_fallback_leaf_does_not_fulfill_composed_metric(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                **{
+                    name: {
+                        "unit": "亿元", "metric_object": "volume",
+                        "supported_grains": ["month"], "dimensions": ["TOP6平台"],
+                        "aggregation_mode": "additive",
+                    }
+                    for name in ("结算GMV", "支付GMV")
+                },
+                "淘系结算率同比增速": {
+                    "unit": "%", "metric_object": "ratio",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                    "aggregation_mode": "non_additive",
+                },
+            },
+            "dimensions": {"TOP6平台": {"aliases": ["平台"], "values": ["淘系"]}},
+            "sheets": {},
+        }
+        constraint = {
+            "constraint_id": "platform", "kind": "dimension_filter",
+            "operator": "eq", "values": ["淘系"],
+            "dimension_hint": "TOP6平台", "provenance": "user_explicit",
+        }
+        consumer = {
+            "requirement_id": "rate_level", "requirement_type": "fact_observations",
+            "periods": ["2026-07"], "period_roles": ["analysis"],
+            "semantic_text": "淘系结算率指标值",
+            "metric_constraints": [constraint],
+        }
+        yoy_consumer = {
+            "requirement_id": "rate_yoy", "requirement_type": "derived_requirements",
+            "derived_metric_id": "yoy_growth", "periods": ["2026-07"],
+            "period_roles": ["analysis"], "semantic_text": "淘系结算率同比变化",
+            "metric_constraints": [constraint], "allowed_metric_objects": ["ratio"],
+        }
+        request = {
+            "metrics": ["结算率", "结算GMV", "支付GMV"],
+            "composition_registry_hash": "registry",
+            "contexts": [{
+                "task_id": "q", "query": "26年7月淘系结算GMV表现及同比归因",
+                "periods": ["2026-07"],
+                "metrics": [{
+                    "metric_ref": "rate", "name": "结算率",
+                    "metric_object": "ratio", "metric_object_provenance": "model_inferred",
+                    "unit": "待元信息解析", "consumers": [consumer, yoy_consumer],
+                }],
+                "composition_intents": [{
+                    "metric_ref": "rate", "requested_metric": "结算率",
+                    "composition_id": "registered_rate",
+                    "inputs": [
+                        {"role": "numerator", "metric": "结算GMV"},
+                        {"role": "denominator", "metric": "支付GMV"},
+                    ],
+                    "consumers": [consumer, yoy_consumer],
+                }],
+            }],
+        }
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertNotIn("rate_level", task["requirement_bindings"])
+        self.assertIn("rate_yoy", task["requirement_bindings"], task)
+        self.assertEqual(
+            task["requirement_bindings"]["rate_yoy"]["source_metric"],
+            "淘系结算率同比增速",
+        )
+        self.assertEqual(
+            task["requirement_bindings"]["rate_yoy"]["mode"], "source_derived_fact"
+        )
+        self.assertEqual(task["metric_statuses"]["rate"]["status"], "composition_deferred")
+        self.assertEqual(
+            task["composition_resolutions"][0]["selected_fulfillment"]["candidate_type"],
+            "registered_composition",
+        )
+        decision = next(
+            item for item in result["resolution_decisions"]
+            if item.get("requirement_id") == "rate_level"
+        )
+        self.assertEqual(decision["activation"], "deferred_to_registered_composition")
+
+    def test_explicit_fallback_reference_is_not_suppressed_by_composition(self) -> None:
+        resolution = {"context_guard": {
+            "mode": "failure_fallback",
+            "reason": "legacy_core_semantic_gate_failed",
+            "hint_source": "query",
+            "explicit_reference": True,
+        }}
+        selected = {"metric": "履约金额"}
+        intent = {"inputs": [{"role": "numerator", "metric": "履约金额"}]}
+        self.assertFalse(
+            _implicit_fallback_selects_composition_leaf(resolution, selected, intent)
         )
 
     def test_direct_ambiguity_is_not_suppressed_by_registered_composition(self) -> None:

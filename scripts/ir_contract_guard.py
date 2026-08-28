@@ -17,6 +17,16 @@ SCENARIO_ROLES = {
     ),
 }
 
+SCENARIO_TARGET_SEMANTICS = {
+    "metric_change": "absolute_delta",
+    "yoy_trend_change": "relative_yoy_trend",
+}
+
+IR_DECOMPOSITIONS = {
+    "addition", "subtraction", "multiplication", "division",
+    "dimension", "structure", "formula",
+}
+
 
 class IRContractError(ValueError):
     def __init__(self, code: str, message: str, details: dict[str, Any] | None = None):
@@ -205,7 +215,38 @@ def validate_analysis_ir_contract(
                 f"{path}.metric_ref references an unknown metric",
                 {"path": path, "metric_ref": metric_ref},
             )
-        roles = SCENARIO_ROLES.get(str(target.get("scenario") or ""), ())
+        scenario = str(target.get("scenario") or "")
+        if scenario and scenario not in SCENARIO_ROLES:
+            raise IRContractError(
+                "ATTR-IR-007", f"{path}.scenario is unsupported",
+                {"path": path, "scenario": scenario},
+            )
+        target_semantics = target.get("target_semantics")
+        expected_semantics = SCENARIO_TARGET_SEMANTICS.get(scenario)
+        if (
+            target_semantics not in (None, "")
+            and expected_semantics is not None
+            and target_semantics != expected_semantics
+        ):
+            raise IRContractError(
+                "ATTR-IR-008",
+                f"{path}.target_semantics conflicts with scenario {scenario}",
+                {
+                    "path": path,
+                    "scenario": scenario,
+                    "target_semantics": target_semantics,
+                    "expected_target_semantics": expected_semantics,
+                },
+            )
+        decomposition = target.get("decomposition")
+        if decomposition not in (None, "") and (
+            not isinstance(decomposition, str) or decomposition not in IR_DECOMPOSITIONS
+        ):
+            raise IRContractError(
+                "ATTR-IR-009", f"{path}.decomposition is unsupported",
+                {"path": path, "decomposition": decomposition},
+            )
+        roles = SCENARIO_ROLES.get(scenario, ())
         periods = target.get("periods") if isinstance(target.get("periods"), dict) else {}
         effective_periods = {role: periods.get(role, task_periods.get(role)) for role in roles}
         missing_roles = [role for role, value in effective_periods.items() if value is None]
