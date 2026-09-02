@@ -940,6 +940,9 @@ class Compiler:
         inputs = definition.get("inputs")
         if not isinstance(inputs, list) or not inputs:
             raise CompileError(f"{composition_id}.inputs must be a non-empty array")
+        prepared_inputs = requirement.get("composition_input_bindings")
+        if prepared_inputs is not None and not isinstance(prepared_inputs, dict):
+            raise CompileError("composition_input_bindings must be an object")
         input_refs: dict[str, str] = {}
         for index, item in enumerate(inputs):
             if not isinstance(item, dict):
@@ -951,7 +954,14 @@ class Compiler:
                 raise CompileError(
                     f"{composition_id}.inputs contains duplicate role: {input_role!r}"
                 )
-            input_ref = item.get("metric_ref")
+            prepared_input = (prepared_inputs or {}).get(input_role)
+            if prepared_input is not None and not isinstance(prepared_input, dict):
+                raise CompileError(
+                    f"composition_input_bindings.{input_role} must be an object"
+                )
+            input_ref = (prepared_input or {}).get("metric_ref")
+            if input_ref is None:
+                input_ref = item.get("metric_ref")
             if input_ref is None:
                 input_ref = self._metric_ref_by_name(
                     require_nonempty_string(
@@ -987,6 +997,19 @@ class Compiler:
             raise CompileError("derived requirement dimensions must be an object")
         input_expressions: dict[str, dict[str, Any]] = {}
         for input_role, input_ref in input_refs.items():
+            prepared_input = (prepared_inputs or {}).get(input_role) or {}
+            input_dimensions = prepared_input.get("dimensions", dimensions)
+            input_dimension_refs = prepared_input.get(
+                "dimension_refs", requirement.get("dimension_refs", [])
+            )
+            if not isinstance(input_dimensions, dict):
+                raise CompileError(
+                    f"composition_input_bindings.{input_role}.dimensions must be an object"
+                )
+            if not isinstance(input_dimension_refs, list):
+                raise CompileError(
+                    f"composition_input_bindings.{input_role}.dimension_refs must be an array"
+                )
             base_metric = self.metric(input_ref)
             slot_id = self.add_fact_slot(
                 str(requirement["requirement_id"]),
@@ -994,9 +1017,9 @@ class Compiler:
                 role,
                 view_id=requirement.get("view_id"),
                 dimension_refs=self._fact_dimension_refs(
-                    dimensions, requirement.get("dimension_refs", [])
+                    input_dimensions, input_dimension_refs
                 ),
-                selector_dimensions=dimensions,
+                selector_dimensions=input_dimensions,
             )
             fact_slot_ids.append(slot_id)
             input_expressions[input_role] = self._bind_fact_domain(
@@ -1004,11 +1027,11 @@ class Compiler:
                     base_metric["name"],
                     metric_ref=input_ref,
                     view_id=requirement.get("view_id"),
-                    dimensions=self._expression_dimensions(dimensions),
+                    dimensions=self._expression_dimensions(input_dimensions),
                     fact_slot_id=slot_id,
                 ) | {"period_role": role},
-                dimensions,
-                requirement.get("dimension_refs", []),
+                input_dimensions,
+                input_dimension_refs,
             )
 
         referenced_roles: set[str] = set()

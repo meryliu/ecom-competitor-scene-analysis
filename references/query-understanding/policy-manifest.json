@@ -13,8 +13,8 @@
     "top6-payment-gmv-performance": "83a91665ac5def893dfe429520d0629773b6c728e4836edc4823ab08e8212e1c",
     "single-platform-settlement-gmv": "09d00543cffd57c9a1fda62924826f6e4382a2083a532e849ff815704bd04963",
     "top6-settlement-gmv": "3c351f3f4a4dc6073ec13e3c0c115f1945324aee948262a0f8f7cae21d236240",
-    "jd-commission": "7787d22a2225659fef26c2e79b63b1eedb5a4808445fe32f669de28daa83e503",
+    "jd-commission": "43e498cd1af051d9ff3b91ee9e2b954413931494b518b1bf73b903d6c8930e91",
     "gmv-defaults": "052f88eae78296203634d80fa46ee7d8809f305c93f0228327db81990e14ac71"
   },
-  "policy_sha256": "cebc3b9ce461d7cb881a68507dfe12d09cc65655755a2549eb4e569caffcedb4"
+  "policy_sha256": "2a64b69ce869885ceefad510c84db9449cf6ffab4cacb32c9e1abf50194202c2"
 }

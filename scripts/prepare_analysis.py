@@ -150,6 +150,100 @@ def _apply_business_intent_selection(ir: dict[str, Any], index: dict[str, Any]) 
         metric["business_intent_candidate_id"] = selected.get("candidate_id")
 
 
+def _materialize_composition_input_binding(
+    ir: dict[str, Any],
+    index: dict[str, Any],
+    metrics: dict[str, dict[str, Any]],
+    source_catalogue: dict[str, Any],
+    materialized_source_refs: dict[tuple[str, str, str, str], str],
+    requirement_id: str,
+    output_metric_ref: str,
+    role: str,
+    binding: dict[str, Any],
+) -> dict[str, Any]:
+    """Materialize one already-resolved composition leaf without re-resolving it."""
+    mode = str(binding.get("mode") or "")
+    source_metric = str(binding.get("source_metric") or "")
+    metadata = source_catalogue.get(source_metric) or {}
+    if mode not in {"member_selector", "source_scoped_fact"} or not source_metric or not metadata:
+        raise PreparationError(
+            "COMPOSITION_INPUT_BINDING_INVALID",
+            f"需求 {requirement_id} 的组合输入 {role!r} 绑定不可物化",
+            {"role": role, "binding": deepcopy(binding)},
+        )
+    binding_fingerprint = _stable_suffix(binding)
+    materialization_key = (
+        output_metric_ref,
+        source_metric,
+        mode,
+        f"{role}:{binding_fingerprint}",
+    )
+    source_metric_ref = materialized_source_refs.get(materialization_key)
+    if source_metric_ref is None:
+        source_metric_ref = f"__source_requirement_{_stable_suffix(materialization_key)}"
+        materialized_source_refs[materialization_key] = source_metric_ref
+    source_object = metadata.get("metric_object")
+    if source_object not in {"volume", "ratio"}:
+        source_object = "ratio" if str(metadata.get("unit") or "").lower() in {
+            "%", "rate", "ratio", "share", "pp"
+        } else "volume"
+    if source_metric_ref not in metrics:
+        source_declaration = {
+            "metric_id": source_metric_ref,
+            "name": source_metric,
+            "metric_object": source_object,
+            "unit": metadata.get("unit") or "待元信息解析",
+            "definition": metadata.get("notes") or "source metric for registered composition",
+            "source_metric_name": source_metric,
+            "source_metric_object": source_object,
+            "source_dimension_bindings": deepcopy(
+                (index.get("metric_dimension_bindings") or {}).get(source_metric) or {}
+            ),
+            "aggregation": metadata.get("aggregation"),
+            "additive": metadata.get("additive"),
+            "generated_from": "requirement_composition_binding",
+            "logical_metric_ref": output_metric_ref,
+            "composition_input_role": role,
+        }
+        ir["analysis_task"].setdefault("metrics", []).append(source_declaration)
+        metrics[source_metric_ref] = source_declaration
+    index.setdefault("metric_bindings", {})[source_metric] = source_metric
+
+    dimensions: dict[str, Any] = {}
+    for constraint in binding.get("metric_constraints") or []:
+        if not isinstance(constraint, dict) or not constraint.get("source_dimension"):
+            continue
+        source_dimension = str(constraint["source_dimension"])
+        index.setdefault("dimension_bindings", {}).setdefault(
+            source_dimension, source_dimension
+        )
+        index.setdefault("metric_dimension_bindings", {}).setdefault(
+            source_metric, {}
+        ).setdefault(source_dimension, source_dimension)
+        if mode != "member_selector":
+            continue
+        values = list(constraint.get("values") or [])
+        if constraint.get("operator") not in {"eq", "in"} or len(values) != 1:
+            raise PreparationError(
+                "CONSTRAINT_PATH_INVALID",
+                "member_selector 仅支持单成员正向筛选",
+                {"requirement_id": requirement_id, "input_role": role},
+            )
+        if source_dimension in dimensions and dimensions[source_dimension] != values[0]:
+            raise PreparationError(
+                "DIMENSION_CONFLICT",
+                f"需求 {requirement_id} 的组合输入 {role!r} 存在维度冲突",
+            )
+        dimensions[source_dimension] = values[0]
+    return {
+        "metric_ref": source_metric_ref,
+        "dimensions": dimensions,
+        "dimension_refs": [],
+        "fulfillment_mode": mode,
+        "constraint_binding": deepcopy(binding),
+    }
+
+
 def _apply_requirement_bindings(ir: dict[str, Any], index: dict[str, Any]) -> None:
     """Materialize requirement-scoped source bindings without changing the core metric."""
     bindings = index.get("requirement_bindings") or {}
@@ -212,6 +306,38 @@ def _apply_requirement_bindings(ir: dict[str, Any], index: dict[str, Any]) -> No
                 }
                 ir["analysis_task"].setdefault("metrics", []).append(output_metric)
                 metrics[output_metric_ref] = output_metric
+            metrics[output_metric_ref]["composition_id"] = composition_id
+            input_bindings = binding.get("input_bindings") or {}
+            if not isinstance(input_bindings, dict):
+                raise PreparationError(
+                    "COMPOSITION_INPUT_BINDING_INVALID",
+                    f"需求 {requirement_id} 的组合输入绑定必须是对象",
+                )
+            structured_bindings = {
+                str(role): leaf
+                for role, leaf in input_bindings.items()
+                if isinstance(leaf, dict)
+            }
+            if structured_bindings:
+                if len(structured_bindings) != len(input_bindings):
+                    raise PreparationError(
+                        "COMPOSITION_INPUT_BINDING_INVALID",
+                        f"需求 {requirement_id} 的组合输入绑定格式不一致",
+                    )
+                requirement["composition_input_bindings"] = {
+                    role: _materialize_composition_input_binding(
+                        ir,
+                        index,
+                        metrics,
+                        source_catalogue,
+                        materialized_source_refs,
+                        str(requirement_id),
+                        output_metric_ref,
+                        role,
+                        leaf,
+                    )
+                    for role, leaf in structured_bindings.items()
+                }
             requirement["metric_ref"] = output_metric_ref
             requirement["fulfillment_mode"] = mode
             requirement["constraint_binding"] = deepcopy(binding)
@@ -1371,11 +1497,29 @@ def prepare_analysis_ir(
         metric = metrics.get(str(requirement.get("metric_ref"))) or {}
         composition_id = requirement.get("composition_id") or metric.get("composition_id")
         definition = (composition_registry.get("definitions") or {}).get(composition_id) or {}
-        for input_ref in _composition_input_refs(prepared, metrics, definition, index):
+        prepared_inputs = requirement.get("composition_input_bindings")
+        if isinstance(prepared_inputs, dict) and prepared_inputs:
+            input_consumers = [
+                {
+                    "metric_ref": str(binding.get("metric_ref") or ""),
+                    "dimensions": deepcopy(binding.get("dimensions") or {}),
+                    "dimension_refs": list(binding.get("dimension_refs") or []),
+                }
+                for binding in prepared_inputs.values()
+                if isinstance(binding, dict) and binding.get("metric_ref")
+            ]
+        else:
+            input_consumers = [
+                {"metric_ref": input_ref}
+                for input_ref in _composition_input_refs(
+                    prepared, metrics, definition, index
+                )
+            ]
+        for input_consumer in input_consumers:
             for role in requirement.get("period_roles") or []:
                 consumers.append({
                     **requirement,
-                    "metric_ref": input_ref,
+                    **input_consumer,
                     "role": role,
                 })
 
@@ -1408,8 +1552,22 @@ def prepare_analysis_ir(
             composition = (composition_registry.get("definitions") or {}).get(
                 metric["composition_id"]
             ) or {}
-            for input_ref in _composition_input_refs(prepared, metrics, composition, index):
-                consumers.append({**consumer, "metric_ref": input_ref})
+            prepared_inputs = consumer.get("composition_input_bindings")
+            if isinstance(prepared_inputs, dict) and prepared_inputs:
+                for binding in prepared_inputs.values():
+                    if not isinstance(binding, dict) or not binding.get("metric_ref"):
+                        continue
+                    consumers.append({
+                        **consumer,
+                        "metric_ref": str(binding["metric_ref"]),
+                        "dimensions": deepcopy(binding.get("dimensions") or {}),
+                        "dimension_refs": list(binding.get("dimension_refs") or []),
+                    })
+            else:
+                for input_ref in _composition_input_refs(
+                    prepared, metrics, composition, index
+                ):
+                    consumers.append({**consumer, "metric_ref": input_ref})
             continue
         dimensions = consumer.get("dimensions") or {}
         dimension_refs = sorted({

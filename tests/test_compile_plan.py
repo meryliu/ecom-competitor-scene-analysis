@@ -939,6 +939,46 @@ class CompilePlanTests(unittest.TestCase):
         facts = node["execution"]["expression"]["args"]
         self.assertEqual([item["fact"]["dimensions"] for item in facts], [{}, {}])
 
+    def test_composition_uses_prepared_role_local_bindings(self) -> None:
+        ir = base_ir()
+        ir["analysis_task"]["metrics"].extend([
+            {
+                "metric_id": "pdd_settlement", "name": "结算GMV",
+                "metric_object": "volume", "unit": "亿元",
+            },
+            {
+                "metric_id": "pdd_payment", "name": "支付GMV",
+                "metric_object": "volume", "unit": "亿元",
+            },
+        ])
+        ir["metric_compositions"] = [{
+            "requirement_id": "pdd_rate", "metric_ref": "rate",
+            "composition_id": "competitor_settlement_rate",
+            "period_roles": ["analysis"], "view_id": "platform_view",
+            "dimensions": {"平台": "不应继承"}, "dimension_refs": ["平台"],
+            "composition_input_bindings": {
+                "numerator": {
+                    "metric_ref": "pdd_settlement",
+                    "dimensions": {"TOP6平台": "拼多多"}, "dimension_refs": [],
+                },
+                "denominator": {
+                    "metric_ref": "pdd_payment",
+                    "dimensions": {"TOP6平台": "拼多多"}, "dimension_refs": [],
+                },
+            },
+        }]
+        plan, report = self.compile(ir)
+        self.assertTrue(report["valid"], report)
+        node = next(
+            item for item in plan["nodes"]
+            if item["node_id"].startswith("composition_pdd_rate")
+        )
+        facts = node["execution"]["expression"]["args"]
+        self.assertEqual(
+            [item["fact"]["dimensions"] for item in facts],
+            [{"TOP6平台": "拼多多"}, {"TOP6平台": "拼多多"}],
+        )
+
     def test_composition_inputs_are_auto_declared(self) -> None:
         ir = base_ir()
         ir["analysis_task"]["metrics"] = [

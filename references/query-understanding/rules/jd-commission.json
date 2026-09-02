@@ -13,7 +13,34 @@
       "op": "expand_sub_queries",
       "idempotency": "application_key",
       "when": "只查询京东且未指定口径",
-      "instructions": ["闭环电商佣金收入，平台为京东", "京东闭环电商佣金收入（3P佣金）"]
+      "instructions": ["闭环电商佣金收入，平台为京东", "京东闭环电商佣金收入（3P佣金）"],
+      "ir_effect_contract": {
+        "contract_type": "scoped_expansion",
+        "roles": [
+          {
+            "role": "generic_commission",
+            "collection": "fact_observations",
+            "metric_name": "闭环电商佣金收入",
+            "metric_constraint_effects": [
+              {
+                "dimension_hint": "TOP6平台",
+                "state": "required",
+                "operator": "eq",
+                "values": ["京东"],
+                "provenance": "registered_definition"
+              }
+            ]
+          },
+          {
+            "role": "intrinsic_3p_commission",
+            "collection": "fact_observations",
+            "metric_name": "京东闭环电商佣金收入（3P佣金）",
+            "metric_constraint_effects": [
+              {"dimension_hint": "TOP6平台", "state": "absent"}
+            ]
+          }
+        ]
+      }
     },
     {
       "action_id": "normalize_multi_platform_commission",

@@ -22,7 +22,11 @@
         "properties": {
           "action_id": {"type": "string", "minLength": 1},
           "op": {"enum": ["preserve", "set_default", "rewrite", "expand_sub_queries", "clarify"]},
-          "idempotency": {"const": "application_key"}
+          "idempotency": {"const": "application_key"},
+          "ir_effect_contract": {
+            "type": "object",
+            "description": "Optional attribution or scoped-expansion ownership contract; validated by the runtime."
+          }
         }
       }
     },

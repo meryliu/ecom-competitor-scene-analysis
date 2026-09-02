@@ -110,7 +110,105 @@ def validate_rule(rule: dict[str, Any]) -> None:
         effect = action.get("ir_effect_contract")
         if effect is None:
             continue
-        if not isinstance(effect, dict) or set(effect) - {
+        if not isinstance(effect, dict):
+            raise QueryPolicyError(
+                "QP_EFFECT_CONTRACT_INVALID",
+                f"{rule_id}.{action_id} ir_effect_contract is invalid",
+                stage="validate",
+            )
+        contract_type = effect.get("contract_type")
+        if contract_type == "scoped_expansion":
+            if action.get("op") != "expand_sub_queries" or set(effect) != {
+                "contract_type", "roles",
+            }:
+                raise QueryPolicyError(
+                    "QP_EFFECT_CONTRACT_INVALID",
+                    f"{rule_id}.{action_id} scoped expansion contract is invalid",
+                    stage="validate",
+                )
+            roles = effect.get("roles")
+            if not isinstance(roles, list) or not roles:
+                raise QueryPolicyError(
+                    "QP_EFFECT_CONTRACT_INVALID",
+                    f"{rule_id}.{action_id} scoped expansion roles are invalid",
+                    stage="validate",
+                )
+            seen_roles: set[str] = set()
+            for role in roles:
+                if not isinstance(role, dict) or set(role) != {
+                    "role", "collection", "metric_name", "metric_constraint_effects",
+                }:
+                    raise QueryPolicyError(
+                        "QP_EFFECT_CONTRACT_INVALID",
+                        f"{rule_id}.{action_id} scoped expansion role is invalid",
+                        stage="validate",
+                    )
+                role_id = role.get("role")
+                if (
+                    not isinstance(role_id, str) or not role_id
+                    or role_id in seen_roles
+                    or role.get("collection") not in {
+                        "fact_observations", "metric_compositions", "derived_requirements"
+                    }
+                    or not isinstance(role.get("metric_name"), str)
+                    or not role.get("metric_name")
+                ):
+                    raise QueryPolicyError(
+                        "QP_EFFECT_CONTRACT_INVALID",
+                        f"{rule_id}.{action_id} scoped expansion role identity is invalid",
+                        stage="validate",
+                    )
+                seen_roles.add(role_id)
+                effects = role.get("metric_constraint_effects")
+                if not isinstance(effects, list):
+                    raise QueryPolicyError(
+                        "QP_EFFECT_CONTRACT_INVALID",
+                        f"{rule_id}.{action_id} metric constraint effects are invalid",
+                        stage="validate",
+                    )
+                seen_dimensions: set[str] = set()
+                for scope_effect in effects:
+                    if not isinstance(scope_effect, dict) or set(scope_effect) - {
+                        "dimension_hint", "state", "operator", "values", "provenance",
+                    }:
+                        raise QueryPolicyError(
+                            "QP_EFFECT_CONTRACT_INVALID",
+                            f"{rule_id}.{action_id} metric constraint effect is invalid",
+                            stage="validate",
+                        )
+                    dimension_hint = scope_effect.get("dimension_hint")
+                    state = scope_effect.get("state")
+                    if (
+                        not isinstance(dimension_hint, str) or not dimension_hint
+                        or dimension_hint in seen_dimensions
+                        or state not in {"required", "absent"}
+                    ):
+                        raise QueryPolicyError(
+                            "QP_EFFECT_CONTRACT_INVALID",
+                            f"{rule_id}.{action_id} metric constraint effect identity is invalid",
+                            stage="validate",
+                        )
+                    seen_dimensions.add(dimension_hint)
+                    if state == "required" and (
+                        scope_effect.get("operator") not in {"eq", "in"}
+                        or not isinstance(scope_effect.get("values"), list)
+                        or not scope_effect.get("values")
+                    ):
+                        raise QueryPolicyError(
+                            "QP_EFFECT_CONTRACT_INVALID",
+                            f"{rule_id}.{action_id} required metric constraint is incomplete",
+                            stage="validate",
+                        )
+                    if state == "absent" and set(scope_effect) != {
+                        "dimension_hint", "state",
+                    }:
+                        raise QueryPolicyError(
+                            "QP_EFFECT_CONTRACT_INVALID",
+                            f"{rule_id}.{action_id} absent metric constraint has extra fields",
+                            stage="validate",
+                        )
+            continue
+        if contract_type is not None or set(effect) - {
             "collection", "scenario", "target_semantics", "required_shape",
         }:
             raise QueryPolicyError(

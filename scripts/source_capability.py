@@ -157,11 +157,27 @@ def project_task_capabilities(
             for value in (composition.get("input_bindings") or {}).values()
             if value
         )
+        for profile in composition.get("input_binding_profiles") or []:
+            if not isinstance(profile, dict):
+                continue
+            resolved_metrics.update(
+                str(binding.get("source_metric"))
+                for binding in (profile.get("input_bindings") or {}).values()
+                if isinstance(binding, dict) and binding.get("source_metric")
+            )
     resolved_metrics.update(
         str(item.get("source_metric"))
         for item in projected["requirement_bindings"].values()
         if isinstance(item, dict) and item.get("source_metric")
     )
+    for requirement_binding in projected["requirement_bindings"].values():
+        if not isinstance(requirement_binding, dict):
+            continue
+        resolved_metrics.update(
+            str(binding.get("source_metric"))
+            for binding in (requirement_binding.get("input_bindings") or {}).values()
+            if isinstance(binding, dict) and binding.get("source_metric")
+        )
     projected["metrics"] = {
         name: deepcopy(metadata)
         for name, metadata in (capabilities.get("metrics") or {}).items()
@@ -185,6 +201,14 @@ def project_task_capabilities(
             for item in binding.get("metric_constraints") or []
             if isinstance(item, dict) and item.get("source_dimension")
         )
+        for input_binding in (binding.get("input_bindings") or {}).values():
+            if not isinstance(input_binding, dict):
+                continue
+            resolved_dimensions.update(
+                str(item.get("source_dimension"))
+                for item in input_binding.get("metric_constraints") or []
+                if isinstance(item, dict) and item.get("source_dimension")
+            )
     projected["dimensions"] = {
         name: deepcopy(metadata)
         for name, metadata in (capabilities.get("dimensions") or {}).items()

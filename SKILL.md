@@ -28,6 +28,14 @@ description: WHEN 用户需要从飞书竞品宏观数据源查询、计算或�
 统一 runner 在 Resolve 前通过 `analysis_ir_normalizer.py` 做幂等结构规范化；它只处理时期、角色、factor 类型和多时期组合拆分，不推断业务指标、范围或公式含义。
 
 1. 读取统一分析请求契约。对用户显式独立问题分别保留不可变原始 Query，在 `/workspace/runtime` 的 task 目录运行 `scripts/select_query_policy.py`。`no_match`、`fallback_raw`、超时、命令失败或输出不可解析时，本 task 禁止再次尝试 Policy，直接从原始 Query 生成 IR。
+
+   选择器只接受文件参数。先写入内容为 `{"raw_query":"用户原始 Query"}` 的 JSON 文件，再使用规范命令；不要把 Query 文本直接作为 CLI 参数，也不要猜测 `--query` 等别名：
+
+   ```bash
+   python3 scripts/select_query_policy.py \
+     --input <raw-query.json> \
+     --output <query-policy-packet.json>
+   ```
 2. `selected` 时只读取返回的有界规则包和 [references/query-understanding/application-contract.md](references/query-understanding/application-contract.md)，在临时语义帧中应用规则并生成候选 IR，再运行 `scripts/validate_query_policy_application.py`。带 `ir_effect_contract` 的已应用 action 必须在 decision 中用 `produced_refs` 绑定其生成的 IR 目标。只有 `commit|commit_pending_confirmation` 才提交校验器返回的 `committed_ir_path`；不得继续使用校验前的候选 IR。`commit_clarification` 询问规则正常产生的业务问题；`fallback_raw` 按 task 丢弃全部默认、展开、assumptions、clarifications 和 action 记录，从原始 Query 生成一次基础 IR。Query Policy 故障不得成为 `blocked`、`waiting_confirmation` 或非零分析状态。
 3. 从提交后的语义生成精简 `analysis_ir/1.0`；同一轮多个独立问题生成一个 `analysis_bundle/1.0`。`analysis_task.query` 必须保留原始 Query；规则只补缺失语义，用户明确指标、平台、时期、视角、拆解、口径和输出优先。
 4. 只声明用户要求或通过 Query Policy 正常补充的业务指标、时期、范围、派生和归因目标。派生与归因并存时分别保留各自时期角色：归因使用目标内 `periods`，不得为了复用事实而覆盖任务级派生时期。不要为标准指标组合补写基础指标，不要为年/季/月粒度降级手写 `input_adaptations` 或计算 AST；统一 runner 根据源表能力生成这些执行细节。

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -833,6 +834,66 @@ class PrepareAnalysisTests(unittest.TestCase):
         self.assertEqual(
             [item["metric_id"] for item in prepared_again["analysis_task"]["metrics"]],
             [item["metric_id"] for item in prepared["analysis_task"]["metrics"]],
+        )
+
+    def test_registered_composition_materializes_role_local_member_selectors(self) -> None:
+        ir = base_ir("结算率", "ratio")
+        ir["analysis_task"]["periods"] = {"analysis": "2026-05"}
+        ir["fact_observations"] = [{
+            "requirement_id": "pdd_rate", "metric_ref": "target",
+            "period_roles": ["analysis"], "view_id": "v",
+            "semantic_text": "拼多多结算率", "dimensions": {},
+            "dimension_refs": [],
+        }]
+        capabilities = source_index()
+        capabilities["dimensions"]["平台"]["values"].append("拼多多")
+        constraint = {
+            "operator": "eq", "values": ["拼多多"], "source_dimension": "平台",
+        }
+        capabilities["requirement_bindings"] = {"pdd_rate": {
+            "mode": "registered_composition",
+            "composition_id": "competitor_settlement_rate",
+            "output_metric_ref": "target",
+            "logical_metric_ref": "target",
+            "input_bindings": {
+                "numerator": {
+                    "mode": "member_selector", "source_metric": "结算GMV",
+                    "candidate_id": "settlement:pdd",
+                    "metric_constraints": [deepcopy(constraint)],
+                },
+                "denominator": {
+                    "mode": "member_selector", "source_metric": "支付GMV",
+                    "candidate_id": "payment:pdd",
+                    "metric_constraints": [deepcopy(constraint)],
+                },
+            },
+        }}
+
+        prepared, _ = prepare_analysis_ir(
+            ir, capabilities, self.compositions, self.derived
+        )
+        requirement = prepared["metric_compositions"][0]
+        self.assertEqual(
+            set(requirement["composition_input_bindings"]),
+            {"numerator", "denominator"},
+        )
+        for binding in requirement["composition_input_bindings"].values():
+            self.assertEqual(binding["dimensions"], {"平台": "拼多多"})
+            self.assertEqual(binding["dimension_refs"], [])
+
+        plan, report = compile_and_validate(
+            prepared,
+            ROOT / "references" / "derived-metric-registry.json",
+            ROOT / "references" / "metric-composition-registry.json",
+        )
+        self.assertTrue(report["valid"], report)
+        node = next(
+            item for item in plan["nodes"]
+            if item["node_id"].startswith("composition_pdd_rate")
+        )
+        self.assertEqual(
+            [item["fact"]["dimensions"] for item in node["execution"]["expression"]["args"]],
+            [{"平台": "拼多多"}, {"平台": "拼多多"}],
         )
 
     def test_source_domain_aggregate_binding_materializes_idempotently(self) -> None:

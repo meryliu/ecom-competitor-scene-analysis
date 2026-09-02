@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
+import tempfile
 import unittest
 from copy import deepcopy
 from pathlib import Path
@@ -55,6 +57,26 @@ class QueryPolicyRuntimeTests(unittest.TestCase):
         packet = select_query_policy("查询昨天的天气")
         self.assertEqual(packet["status"], "no_match")
         self.assertEqual(packet["rules"], [])
+
+    def test_selector_cli_uses_canonical_input_and_output_file_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            input_path = Path(temporary) / "raw-query.json"
+            output_path = Path(temporary) / "packet.json"
+            input_path.write_text(
+                json.dumps({"raw_query": "看一下8月京东闭环电商佣金收入"}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable, str(ROOT / "scripts" / "select_query_policy.py"),
+                    "--input", str(input_path), "--output", str(output_path),
+                ],
+                check=False, capture_output=True, text=True,
+            )
+            packet = json.loads(output_path.read_text(encoding="utf-8"))
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(packet["status"], "selected")
+        self.assertIn("jd-commission", packet["selected_rule_ids"])
 
     def test_missing_dependency_fails_open_to_raw_query(self) -> None:
         index = deepcopy(self.index)

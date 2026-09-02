@@ -110,7 +110,106 @@ def formula_action(target_id: str) -> dict:
     }
 
 
+def jd_commission_ir(query: str) -> dict:
+    ir = fact_ir(query)
+    ir["analysis_task"].update({
+        "analysis_goal": "返回京东两种佣金口径及同比",
+        "metrics": [
+            {
+                "metric_id": "commission", "name": "闭环电商佣金收入",
+                "metric_object": "volume", "unit": "待元信息解析",
+            },
+            {
+                "metric_id": "jd_3p", "name": "京东闭环电商佣金收入（3P佣金）",
+                "metric_object": "volume", "unit": "待元信息解析",
+            },
+        ],
+        "periods": {"analysis": "2026-Q2", "analysis_last_year": "2025-Q2"},
+        "scope": "京东",
+    })
+    platform_constraint = {
+        "kind": "dimension_filter", "operator": "eq", "values": ["京东"],
+        "dimension_hint": "TOP6平台", "provenance": "registered_definition",
+    }
+    ir["fact_observations"] = [
+        {
+            "requirement_id": "generic_commission", "metric_ref": "commission",
+            "period_roles": ["analysis", "analysis_last_year"], "view_id": "overall",
+            "semantic_text": "闭环电商佣金收入，平台为京东",
+            "metric_constraints": [deepcopy(platform_constraint)],
+        },
+        {
+            "requirement_id": "jd_3p_commission", "metric_ref": "jd_3p",
+            "period_roles": ["analysis", "analysis_last_year"], "view_id": "overall",
+            "semantic_text": "京东闭环电商佣金收入（3P佣金）",
+            "metric_constraints": [deepcopy(platform_constraint)],
+        },
+    ]
+    ir["output_requirements"] = [{
+        "requirement_id": "output",
+        "source_requirement_refs": ["generic_commission", "jd_3p_commission"],
+        "criticality": "core",
+    }]
+    return ir
+
+
+def jd_commission_action() -> dict:
+    return {
+        "task_id": "default", "rule_id": "jd-commission",
+        "action_id": "expand_jd_dual_commission_scope",
+        "target_scope_fingerprint": "jd:commission:2026-Q2",
+        "produced_refs": [
+            {
+                "role": "generic_commission", "collection": "fact_observations",
+                "id": "generic_commission",
+            },
+            {
+                "role": "intrinsic_3p_commission", "collection": "fact_observations",
+                "id": "jd_3p_commission",
+            },
+        ],
+    }
+
+
 class QueryPolicyApplicationTests(unittest.TestCase):
+
+    def test_scoped_expansion_canonicalizes_only_the_owned_platform_field(self) -> None:
+        query = "26Q2京东闭环电商佣金收入表现如何？同比变化如何？"
+        packet = select_query_policy(query)
+        candidate = jd_commission_ir(query)
+        with tempfile.TemporaryDirectory() as temporary:
+            committed = Path(temporary) / "committed-ir.json"
+            result = validate_application_fail_open(
+                packet,
+                decision(query, packet, [jd_commission_action()]),
+                candidate,
+                committed_ir_output=committed,
+            )
+            saved = json.loads(committed.read_text(encoding="utf-8"))
+        self.assertEqual(result["status"], "commit")
+        by_id = {
+            item["requirement_id"]: item for item in saved["fact_observations"]
+        }
+        self.assertEqual(
+            by_id["generic_commission"]["metric_constraints"][0]["values"], ["京东"]
+        )
+        self.assertNotIn("metric_constraints", by_id["jd_3p_commission"])
+        self.assertEqual(
+            by_id["jd_3p_commission"]["period_roles"],
+            ["analysis", "analysis_last_year"],
+        )
+
+    def test_scoped_expansion_rejects_produced_role_bound_to_the_wrong_metric(self) -> None:
+        query = "26Q2京东闭环电商佣金收入表现如何？同比变化如何？"
+        packet = select_query_policy(query)
+        action = jd_commission_action()
+        action["produced_refs"][0]["id"] = "jd_3p_commission"
+        action["produced_refs"][1]["id"] = "generic_commission"
+        result = validate_application_fail_open(
+            packet, decision(query, packet, [action]), jd_commission_ir(query)
+        )
+        self.assertEqual(result["status"], "fallback_raw")
+        self.assertEqual(result["failure"]["code"], "QP_EFFECT_CONTRACT_CONFLICT")
     def test_valid_enhanced_ir_commits(self) -> None:
         query = "看一下2026年5月支付GMV"
         packet = select_query_policy(query)

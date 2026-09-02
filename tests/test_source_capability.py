@@ -69,6 +69,46 @@ class SourceCapabilityTests(unittest.TestCase):
         self.assertIn("支付GMV", projected["metrics"])
         self.assertIn("TOP6平台", projected["dimensions"])
 
+    def test_task_projection_keeps_registered_composition_leaf_capabilities(self) -> None:
+        capabilities = {
+            "schema_version": "resolved_capabilities/1.0",
+            "source": {}, "metric_bindings": {}, "dimension_bindings": {},
+            "metrics": {
+                "支付GMV": {"dimensions": ["TOP6平台"]},
+                "结算GMV": {"dimensions": ["TOP6平台"]},
+            },
+            "dimensions": {"TOP6平台": {"values": ["拼多多"]}},
+            "availability": {},
+            "task_resolutions": {"q": {
+                "metric_bindings": {}, "metric_statuses": {},
+                "requirement_bindings": {"rate": {
+                    "mode": "registered_composition",
+                    "composition_id": "competitor_settlement_rate",
+                    "input_bindings": {
+                        "numerator": {
+                            "mode": "member_selector", "source_metric": "结算GMV",
+                            "metric_constraints": [{
+                                "source_dimension": "TOP6平台", "operator": "eq",
+                                "values": ["拼多多"],
+                            }],
+                        },
+                        "denominator": {
+                            "mode": "member_selector", "source_metric": "支付GMV",
+                            "metric_constraints": [{
+                                "source_dimension": "TOP6平台", "operator": "eq",
+                                "values": ["拼多多"],
+                            }],
+                        },
+                    },
+                }},
+                "composition_resolutions": [], "resolution_cases": [],
+            }},
+            "task_metric_dimension_bindings": {"q": {}},
+        }
+        projected = project_task_capabilities(capabilities, "q")
+        self.assertEqual(set(projected["metrics"]), {"支付GMV", "结算GMV"})
+        self.assertIn("TOP6平台", projected["dimensions"])
+
 
 if __name__ == "__main__":
     unittest.main()

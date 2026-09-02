@@ -2118,7 +2118,10 @@ class ResolutionPolicyTests(unittest.TestCase):
         }
         result = resolve_request_overlay(index, request, self.policy)
         task = result["task_resolutions"]["q"]
-        self.assertNotIn("rate_level", task["requirement_bindings"])
+        self.assertEqual(
+            task["requirement_bindings"]["rate_level"]["mode"],
+            "registered_composition",
+        )
         self.assertIn("rate_yoy", task["requirement_bindings"], task)
         self.assertEqual(
             task["requirement_bindings"]["rate_yoy"]["source_metric"],
@@ -2348,6 +2351,143 @@ class ResolutionPolicyTests(unittest.TestCase):
         self.assertEqual(
             composition["input_statuses"]["denominator"]["dimension_capability"]["reason"],
             "metadata_dimension_unsupported",
+        )
+
+    def test_registered_composition_propagates_requirement_constraints_to_every_leaf(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                name: {
+                    "unit": "亿元", "metric_object": "volume",
+                    "supported_grains": ["month"], "dimensions": ["TOP6平台"],
+                    "aggregation_mode": "additive",
+                }
+                for name in ("结算GMV", "支付GMV")
+            },
+            "dimensions": {
+                "TOP6平台": {
+                    "aliases": ["平台"], "values": ["淘系", "拼多多", "京东"],
+                },
+            },
+            "sheets": {},
+        }
+        constraint = {
+            "constraint_id": "pdd", "kind": "dimension_filter", "operator": "eq",
+            "values": ["拼多多"], "dimension_hint": "平台", "provenance": "user_explicit",
+        }
+        consumers = [
+            {
+                "requirement_id": "rate_level", "requirement_type": "fact_observations",
+                "periods": ["2026-Q2"], "period_roles": ["analysis"],
+                "semantic_text": "拼多多结算率", "metric_constraints": [constraint],
+            },
+            {
+                "requirement_id": "rate_yoy", "requirement_type": "derived_requirements",
+                "derived_metric_id": "yoy_growth", "periods": ["2026-Q2", "2025-Q2"],
+                "period_roles": ["analysis", "comparison"],
+                "semantic_text": "拼多多结算率同比", "metric_constraints": [constraint],
+                "allowed_metric_objects": ["ratio"],
+            },
+        ]
+        request = {
+            "metrics": ["结算率", "结算GMV", "支付GMV"],
+            "composition_registry_hash": "registry",
+            "contexts": [{
+                "task_id": "q", "query": "26Q2拼多多结算率和同比", "periods": ["2026-Q2", "2025-Q2"],
+                "metrics": [{
+                    "metric_ref": "rate", "name": "结算率", "metric_object": "ratio",
+                    "unit": "待元信息解析", "consumers": consumers,
+                }],
+                "composition_intents": [{
+                    "metric_ref": "rate", "requested_metric": "结算率",
+                    "composition_id": "competitor_settlement_rate",
+                    "inputs": [
+                        {"role": "numerator", "metric": "结算GMV"},
+                        {"role": "denominator", "metric": "支付GMV"},
+                    ],
+                    "consumers": consumers,
+                }],
+            }],
+        }
+
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertEqual(task["resolution_cases"], [])
+        self.assertEqual(set(task["requirement_bindings"]), {"rate_level", "rate_yoy"})
+        for requirement_id in ("rate_level", "rate_yoy"):
+            binding = task["requirement_bindings"][requirement_id]
+            self.assertEqual(binding["mode"], "registered_composition")
+            self.assertEqual(set(binding["input_bindings"]), {"numerator", "denominator"})
+            for leaf in binding["input_bindings"].values():
+                self.assertEqual(leaf["mode"], "member_selector")
+                self.assertEqual(
+                    leaf["metric_constraints"][0]["source_dimension"], "TOP6平台"
+                )
+                self.assertEqual(leaf["metric_constraints"][0]["values"], ["拼多多"])
+        composition = task["composition_resolutions"][0]
+        self.assertEqual(composition["fallback_status"], "ready")
+        self.assertEqual(
+            composition["selected_fulfillment"]["candidate_type"],
+            "registered_composition",
+        )
+
+    def test_registered_composition_does_not_hide_an_unfulfillable_leaf_constraint(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "结算GMV": {
+                    "unit": "亿元", "metric_object": "volume",
+                    "supported_grains": ["month"], "dimensions": ["TOP6平台"],
+                    "aggregation_mode": "additive",
+                },
+                "支付GMV": {
+                    "unit": "亿元", "metric_object": "volume",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                    "aggregation_mode": "additive",
+                },
+            },
+            "dimensions": {
+                "TOP6平台": {"aliases": ["平台"], "values": ["拼多多"]},
+                "无": {"aliases": [], "values": []},
+            },
+            "sheets": {},
+        }
+        constraint = {
+            "kind": "dimension_filter", "operator": "eq", "values": ["拼多多"],
+            "dimension_hint": "平台", "provenance": "user_explicit",
+        }
+        consumer = {
+            "requirement_id": "rate_level", "requirement_type": "fact_observations",
+            "periods": ["2026-07"], "period_roles": ["analysis"],
+            "semantic_text": "拼多多结算率", "metric_constraints": [constraint],
+        }
+        request = {
+            "metrics": ["结算率", "结算GMV", "支付GMV"],
+            "composition_registry_hash": "registry",
+            "contexts": [{
+                "task_id": "q", "query": "拼多多结算率", "periods": ["2026-07"],
+                "metrics": [{
+                    "metric_ref": "rate", "name": "结算率", "metric_object": "ratio",
+                    "unit": "待元信息解析", "consumers": [consumer],
+                }],
+                "composition_intents": [{
+                    "metric_ref": "rate", "requested_metric": "结算率",
+                    "composition_id": "competitor_settlement_rate",
+                    "inputs": [
+                        {"role": "numerator", "metric": "结算GMV"},
+                        {"role": "denominator", "metric": "支付GMV"},
+                    ],
+                    "consumers": [consumer],
+                }],
+            }],
+        }
+
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertNotIn("rate_level", task["requirement_bindings"])
+        self.assertTrue(task["resolution_cases"])
+        self.assertEqual(
+            task["composition_resolutions"][0]["fallback_status"], "blocked"
         )
 
 

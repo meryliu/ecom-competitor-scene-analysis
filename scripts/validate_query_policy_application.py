@@ -97,11 +97,27 @@ def _validate_applied_actions(
             )
         normalized_refs: list[dict[str, str]] = []
         seen_refs: set[tuple[str, str]] = set()
+        scoped_roles = {
+            str(item.get("role")): item
+            for item in effect.get("roles") or []
+            if isinstance(item, dict) and item.get("role")
+        } if effect.get("contract_type") == "scoped_expansion" else {}
+        seen_roles: set[str] = set()
         for ref_index, ref in enumerate(produced_refs):
+            expected_keys = (
+                {"role", "collection", "id"}
+                if scoped_roles else {"collection", "id"}
+            )
+            role = str(ref.get("role") or "") if isinstance(ref, dict) else ""
+            expected_collection = (
+                (scoped_roles.get(role) or {}).get("collection")
+                if scoped_roles else effect.get("collection")
+            )
             if (
                 not isinstance(ref, dict)
-                or set(ref) != {"collection", "id"}
-                or ref.get("collection") != effect.get("collection")
+                or set(ref) != expected_keys
+                or (scoped_roles and role not in scoped_roles)
+                or ref.get("collection") != expected_collection
                 or not isinstance(ref.get("id"), str)
                 or not ref.get("id")
             ):
@@ -122,7 +138,28 @@ def _validate_applied_actions(
                     details={"collection": identity[0], "id": identity[1]},
                 )
             seen_refs.add(identity)
-            normalized_refs.append({"collection": identity[0], "id": identity[1]})
+            if scoped_roles:
+                if role in seen_roles:
+                    raise QueryPolicyApplicationError(
+                        "QP_EFFECT_BINDING_INVALID",
+                        "produced_refs contains a duplicate scoped expansion role",
+                        details={"role": role},
+                    )
+                seen_roles.add(role)
+                normalized_refs.append({
+                    "role": role, "collection": identity[0], "id": identity[1],
+                })
+            else:
+                normalized_refs.append({"collection": identity[0], "id": identity[1]})
+        if scoped_roles and seen_roles != set(scoped_roles):
+            raise QueryPolicyApplicationError(
+                "QP_EFFECT_BINDING_MISSING",
+                "produced_refs must bind every scoped expansion role exactly once",
+                details={
+                    "expected_roles": sorted(scoped_roles),
+                    "actual_roles": sorted(seen_roles),
+                },
+            )
         effect_bindings.append({
             "rule_id": rule_id,
             "action_id": action_id,
@@ -141,6 +178,104 @@ def _canonicalize_policy_effects(
     valid_semantics = set(SCENARIO_TARGET_SEMANTICS.values())
     for binding in effect_bindings:
         contract = binding["contract"]
+        if contract.get("contract_type") == "scoped_expansion":
+            roles = {
+                str(item["role"]): item
+                for item in contract.get("roles") or []
+                if isinstance(item, dict) and item.get("role")
+            }
+            metric_names = {
+                str(item.get("metric_id")): str(item.get("name") or "")
+                for item in ((canonical.get("analysis_task") or {}).get("metrics") or [])
+                if isinstance(item, dict) and item.get("metric_id")
+            }
+            for ref in binding["produced_refs"]:
+                role_contract = roles[str(ref["role"])]
+                collection = str(ref["collection"])
+                identity = (collection, str(ref["id"]))
+                if identity in owned_refs:
+                    raise QueryPolicyApplicationError(
+                        "QP_EFFECT_BINDING_INVALID",
+                        "an IR target is owned by more than one applied action",
+                        details={"collection": collection, "id": identity[1]},
+                    )
+                owned_refs.add(identity)
+                items = canonical.get(collection)
+                if not isinstance(items, list):
+                    raise QueryPolicyApplicationError(
+                        "QP_EFFECT_TARGET_MISSING",
+                        "the contracted IR collection is missing",
+                        details={"collection": collection},
+                    )
+                matches = [
+                    (index, item)
+                    for index, item in enumerate(items)
+                    if isinstance(item, dict)
+                    and item.get("requirement_id") == identity[1]
+                ]
+                if len(matches) != 1:
+                    raise QueryPolicyApplicationError(
+                        "QP_EFFECT_TARGET_MISSING",
+                        "the applied action does not bind exactly one IR target",
+                        details={
+                            "collection": collection, "id": identity[1],
+                            "matches": len(matches),
+                        },
+                    )
+                index, target = matches[0]
+                path = f"{collection}[{index}]"
+                actual_metric_name = metric_names.get(str(target.get("metric_ref") or ""))
+                expected_metric_name = str(role_contract["metric_name"])
+                if actual_metric_name != expected_metric_name:
+                    raise QueryPolicyApplicationError(
+                        "QP_EFFECT_CONTRACT_CONFLICT",
+                        "the scoped expansion role is bound to the wrong metric",
+                        details={
+                            "path": f"{path}.metric_ref", "role": ref["role"],
+                            "actual_metric_name": actual_metric_name,
+                            "expected_metric_name": expected_metric_name,
+                        },
+                    )
+                constraints = target.get("metric_constraints") or []
+                if not isinstance(constraints, list) or not all(
+                    isinstance(item, dict) for item in constraints
+                ):
+                    raise QueryPolicyApplicationError(
+                        "QP_EFFECT_CONTRACT_CONFLICT",
+                        "metric_constraints must be an array of objects",
+                        details={"path": f"{path}.metric_constraints"},
+                    )
+                for scope_effect in role_contract.get("metric_constraint_effects") or []:
+                    dimension_hint = str(scope_effect["dimension_hint"])
+                    before = deepcopy(constraints)
+                    constraints = [
+                        item for item in constraints
+                        if str(item.get("dimension_hint") or "") != dimension_hint
+                    ]
+                    if scope_effect["state"] == "required":
+                        canonical_constraint = {
+                            "kind": "dimension_filter",
+                            "operator": scope_effect["operator"],
+                            "values": deepcopy(scope_effect["values"]),
+                            "dimension_hint": dimension_hint,
+                            "provenance": scope_effect.get("provenance") or "registered_definition",
+                        }
+                        constraints.append(canonical_constraint)
+                    if constraints != before:
+                        changes.append({
+                            "path": f"{path}.metric_constraints",
+                            "dimension_hint": dimension_hint,
+                            "from": before,
+                            "to": deepcopy(constraints),
+                            "rule_id": binding["rule_id"],
+                            "action_id": binding["action_id"],
+                            "role": ref["role"],
+                        })
+                if constraints:
+                    target["metric_constraints"] = constraints
+                else:
+                    target.pop("metric_constraints", None)
+            continue
         collection = str(contract["collection"])
         items = canonical.get(collection)
         if not isinstance(items, list):

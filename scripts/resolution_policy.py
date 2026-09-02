@@ -41,7 +41,7 @@ from time_rollup import normalize_period as _normalize_time_period
 
 
 POLICY_SCHEMA = "resolution_policy/2.0"
-ENGINE_VERSION = "2.16.0"
+ENGINE_VERSION = "2.17.0"
 DEFAULT_POLICY_PATH = (
     Path(__file__).resolve().parents[1]
     / "references"
@@ -1423,6 +1423,366 @@ def _normalize_period(value: Any) -> tuple[str, str] | None:
     return _normalize_time_period(value)
 
 
+def _composition_consumer_profiles(intent: dict[str, Any]) -> list[dict[str, Any]]:
+    """Group consumers only when their leaf capability requirements are identical."""
+    grouped: dict[str, dict[str, Any]] = {}
+    consumers = [
+        item for item in intent.get("consumers") or [] if isinstance(item, dict)
+    ]
+    if not consumers:
+        consumers = [{"requirement_id": "", "periods": [], "breakdown_dimensions": []}]
+    for consumer in consumers:
+        try:
+            constraints = normalize_metric_constraints(consumer.get("metric_constraints"))
+            constraints_fingerprint = metric_constraints_fingerprint(constraints)
+            constraint_error = None
+        except MetricConstraintError as exc:
+            constraints = []
+            constraints_fingerprint = stable_id(
+                "invalid_constraints", consumer.get("metric_constraints")
+            )
+            constraint_error = str(exc)
+        identity = {
+            "constraints_fingerprint": constraints_fingerprint,
+            "periods": sorted(str(value) for value in consumer.get("periods") or []),
+            "breakdown_dimensions": sorted(
+                str(value) for value in consumer.get("breakdown_dimensions") or []
+            ),
+        }
+        profile_id = stable_id("composition_profile", identity)
+        profile = grouped.setdefault(profile_id, {
+            "profile_id": profile_id,
+            **identity,
+            "metric_constraints": constraints,
+            "constraint_error": constraint_error,
+            "consumers": [],
+            "requirement_ids": [],
+        })
+        profile["consumers"].append(deepcopy(consumer))
+        requirement_id = str(consumer.get("requirement_id") or "")
+        if requirement_id:
+            profile["requirement_ids"].append(requirement_id)
+    return list(grouped.values())
+
+
+def _composition_leaf_semantic_text(metric: str, constraints: list[dict[str, Any]]) -> str:
+    scope_terms = [
+        str(value)
+        for constraint in constraints
+        for value in constraint.get("values") or []
+    ]
+    return "".join([*dict.fromkeys(scope_terms), metric])
+
+
+def _composition_input_binding(candidate: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "mode": candidate.get("path"),
+        "source_metric": candidate.get("metric"),
+        "candidate_id": candidate.get("candidate_id"),
+        "metric_constraints": deepcopy(candidate.get("constraints") or []),
+    }
+
+
+def _resolve_constrained_composition_intent(
+    index: dict[str, Any],
+    context: dict[str, Any],
+    intent: dict[str, Any],
+    task_resolution: dict[str, Any],
+    policy: dict[str, Any],
+    intent_policy: dict[str, Any],
+    source: dict[str, Any],
+    policy_hash: str,
+    composition_registry_hash: str,
+    context_patches: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Resolve each constrained composition leaf for every unique consumer profile."""
+    task_id = str(context.get("task_id") or "default")
+    metric_ref = str(intent.get("metric_ref") or "")
+    composition_id = str(intent.get("composition_id") or "")
+    expected_inputs = [
+        item for item in intent.get("inputs") or []
+        if isinstance(item, dict) and item.get("metric")
+    ]
+    profiles = _composition_consumer_profiles(intent)
+    profile_resolutions: list[dict[str, Any]] = []
+    deferred_cases: list[dict[str, Any]] = []
+    leaf_bindings: list[tuple[str, str]] = []
+    max_candidates = int(
+        policy.get("limits", {}).get("max_candidates_per_case", 3)
+    )
+
+    for profile in profiles:
+        profile_bindings: dict[str, dict[str, Any]] = {}
+        profile_statuses: dict[str, dict[str, Any]] = {}
+        for number, item in enumerate(expected_inputs):
+            role = str(item.get("role") or f"input_{number + 1}")
+            requested_name = str(item["metric"])
+            requested_leaf = {
+                "metric_ref": f"{metric_ref}:{role}",
+                "name": requested_name,
+                "metric_object": item.get("metric_object"),
+                "unit": item.get("unit") or "待元信息解析",
+                "provenance": "registered_definition",
+            }
+            leaf_consumer = {
+                "requirement_id": f"{profile['profile_id']}:{role}",
+                "requirement_type": "fact_observations",
+                "periods": list(profile.get("periods") or []),
+                "breakdown_dimensions": list(
+                    profile.get("breakdown_dimensions") or []
+                ),
+                "semantic_text": _composition_leaf_semantic_text(
+                    requested_name, profile.get("metric_constraints") or []
+                ),
+                "metric_constraints": deepcopy(
+                    profile.get("metric_constraints") or []
+                ),
+            }
+            semantics_fingerprint = stable_id("metric_semantics", {
+                "metric_object": requested_leaf.get("metric_object"),
+                "unit": str(requested_leaf.get("unit") or "").strip().lower(),
+            })
+            identity = {
+                "source_id": source.get("spreadsheet_token") or source.get("url"),
+                "kind": "composition_input",
+                "task_id": task_id,
+                "metric_ref": metric_ref,
+                "composition_id": composition_id,
+                "composition_profile_id": profile["profile_id"],
+                "input_role": role,
+                "requested_name": requested_name,
+                "metric_semantics_fingerprint": semantics_fingerprint,
+                "metric_constraints_fingerprint": profile[
+                    "constraints_fingerprint"
+                ],
+                "composition_registry_hash": composition_registry_hash,
+            }
+            case_id = stable_id("resolution_case", identity)
+            if profile.get("constraint_error"):
+                resolution = {
+                    "binding": None,
+                    "candidates": [],
+                    "rejected_candidates": [],
+                }
+            else:
+                resolution = _resolve_constrained_requirement(
+                    index,
+                    context,
+                    requested_leaf,
+                    leaf_consumer,
+                    policy,
+                    intent_policy,
+                )
+            candidates = list(resolution.get("candidates") or [])
+            rejected_candidates = list(resolution.get("rejected_candidates") or [])
+            selected_id, patch_status = _patch_selection(
+                case_id,
+                context_patches,
+                source,
+                policy_hash,
+                {
+                    "metric_semantics_fingerprint": semantics_fingerprint,
+                    "metric_constraints_fingerprint": profile[
+                        "constraints_fingerprint"
+                    ],
+                    "composition_registry_hash": composition_registry_hash,
+                },
+                require_engine_version=True,
+            )
+            selected = next(
+                (
+                    candidate for candidate in candidates
+                    if candidate.get("candidate_id") == selected_id
+                ),
+                None,
+            ) or resolution.get("binding")
+            if selected is not None and selected.get("path") not in {
+                "member_selector", "source_scoped_fact"
+            }:
+                rejected = deepcopy(selected)
+                rejected.setdefault("conflicts", []).append(
+                    "composition_constraint_path_unsupported"
+                )
+                rejected_candidates.insert(0, rejected)
+                selected = None
+
+            dimension_capability: dict[str, Any] = {
+                "status": "deferred",
+                "reason": "no_breakdown_requested",
+                "requested_dimensions": [],
+            }
+            breakdown_dimensions = set(profile.get("breakdown_dimensions") or [])
+            if selected is not None and breakdown_dimensions:
+                dimension, dimension_failure = _candidate_dimension(
+                    {"breakdown_dimensions": sorted(breakdown_dimensions)},
+                    str(selected.get("metric") or ""),
+                    index,
+                )
+                dimension_capability = dimension_failure or (
+                    {"status": "available", "dimension": dimension}
+                    if dimension is not None
+                    else {
+                        "status": "deferred",
+                        "reason": "dimension_binding_ambiguous",
+                        "requested_dimensions": sorted(breakdown_dimensions),
+                    }
+                )
+                if dimension_failure is not None:
+                    selected = None
+            status = (
+                "bound" if selected is not None
+                else "ambiguous" if candidates
+                else "not_executable"
+            )
+            binding_packet = None
+            if selected is not None:
+                binding_packet = _composition_input_binding(selected)
+                profile_bindings[role] = binding_packet
+                leaf_bindings.append((requested_name, str(selected.get("metric") or "")))
+            profile_statuses[role] = {
+                "requested_metric": requested_name,
+                "status": status,
+                "binding": str(selected.get("metric")) if selected else None,
+                "binding_packet": deepcopy(binding_packet),
+                "structural_capability": list(
+                    (selected or {}).get("grain_checks") or []
+                ),
+                "dimension_capability": dimension_capability,
+            }
+            if selected is None:
+                deferred_cases.append({
+                    "case_id": case_id,
+                    "action": "confirm" if status == "ambiguous" else "block",
+                    "activation": "deferred",
+                    "kind": "composition_input",
+                    "requested_term": requested_name,
+                    "task_ids": [task_id],
+                    "requirement_ids": list(profile.get("requirement_ids") or []),
+                    "metric_ref": metric_ref,
+                    "composition_id": composition_id,
+                    "composition_profile_id": profile["profile_id"],
+                    "input_role": role,
+                    "selected_candidate_id": None,
+                    "policy_version": policy.get("policy_version"),
+                    "resolution_policy_hash": policy_hash,
+                    "source_revision": source.get("revision"),
+                    "schema_hash": source.get("schema_hash"),
+                    "resolution_engine_version": ENGINE_VERSION,
+                    "metric_semantics_fingerprint": semantics_fingerprint,
+                    "metric_constraints_fingerprint": profile[
+                        "constraints_fingerprint"
+                    ],
+                    "composition_registry_hash": composition_registry_hash,
+                    "patch_status": patch_status,
+                    "candidates": [
+                        _intent_candidate_packet(candidate)
+                        for candidate in candidates[:max_candidates]
+                    ],
+                    "rejected_candidates": [
+                        _intent_candidate_packet(candidate)
+                        for candidate in rejected_candidates[:max_candidates]
+                    ],
+                })
+        profile_status = (
+            "ready"
+            if expected_inputs and len(profile_bindings) == len(expected_inputs)
+            else "confirm"
+            if any(
+                item.get("status") == "ambiguous"
+                for item in profile_statuses.values()
+            )
+            else "blocked"
+        )
+        profile_resolutions.append({
+            "profile_id": profile["profile_id"],
+            "requirement_ids": list(profile.get("requirement_ids") or []),
+            "constraints_fingerprint": profile["constraints_fingerprint"],
+            "periods": list(profile.get("periods") or []),
+            "breakdown_dimensions": list(profile.get("breakdown_dimensions") or []),
+            "status": profile_status,
+            "input_bindings": profile_bindings,
+            "input_statuses": profile_statuses,
+        })
+
+    profile_states = {profile["status"] for profile in profile_resolutions}
+    fallback_status = (
+        "ready" if profile_states == {"ready"}
+        else "confirm" if "confirm" in profile_states
+        else "blocked"
+    )
+    direct_status = (
+        task_resolution.get("metric_statuses", {}).get(metric_ref) or {}
+    ).get("status", "not_found")
+    direct_recall_floor = float(
+        (policy.get("candidate_evaluation") or {}).get("lexical_recall_floor", 0.78)
+    )
+    direct_cases = [
+        case for case in task_resolution.get("resolution_cases") or []
+        if case.get("metric_ref") == metric_ref
+        and case.get("kind") in {
+            "query_metric", "interpretation", "metric_constraint"
+        }
+    ]
+    has_viable_direct_ambiguity = direct_status == "ambiguous" and any(
+        float(candidate.get("confidence") or 0.0) >= direct_recall_floor
+        for case in direct_cases
+        for candidate in case.get("candidates") or []
+    )
+    fulfillment_candidates: list[dict[str, Any]] = []
+    direct_binding = (
+        task_resolution.get("metric_statuses", {}).get(metric_ref) or {}
+    ).get("binding")
+    if direct_binding:
+        fulfillment_candidates.append({
+            "candidate_id": f"direct:{direct_binding}",
+            "candidate_type": "direct_fact",
+            "status": "viable",
+            "metric": direct_binding,
+            "confidence": 1.0,
+        })
+    fulfillment_candidates.append({
+        "candidate_id": f"composition:{composition_id}",
+        "candidate_type": "registered_composition",
+        "status": (
+            "viable"
+            if fallback_status == "ready"
+            and direct_status in {"not_found", "not_executable", "composition_deferred"}
+            or fallback_status == "ready"
+            and direct_status == "ambiguous"
+            and not has_viable_direct_ambiguity
+            else "infeasible"
+        ),
+        "composition_id": composition_id,
+        "input_binding_profiles": deepcopy(profile_resolutions),
+        "confidence": 1.0 if fallback_status == "ready" else 0.0,
+    })
+    selected_fulfillment, ranked_fulfillments = select_fulfillment_candidate(
+        fulfillment_candidates
+    )
+    return {
+        "composition_resolution": {
+            "metric_ref": metric_ref,
+            "requested_metric": intent.get("requested_metric"),
+            "composition_id": composition_id,
+            "direct_status": direct_status,
+            "input_bindings": {},
+            "input_statuses": {},
+            "input_binding_profiles": profile_resolutions,
+            "fallback_status": fallback_status,
+            "deferred_cases": deferred_cases,
+            "consumers": deepcopy(intent.get("consumers") or []),
+            "fulfillment_candidates": ranked_fulfillments,
+            "selected_fulfillment": deepcopy(selected_fulfillment),
+        },
+        "selected_composition": bool(
+            selected_fulfillment is not None
+            and selected_fulfillment.get("candidate_type") == "registered_composition"
+        ),
+        "profile_resolutions": profile_resolutions,
+        "leaf_bindings": leaf_bindings,
+    }
+
+
 def _candidate_dimension(
     context: dict[str, Any], metric: str, index: dict[str, Any]
 ) -> tuple[str | None, dict[str, Any] | None]:
@@ -2523,6 +2883,7 @@ def resolve_request_overlay(
             "resolution_cases": [],
         }
         composition_deferred_requirements: dict[str, set[str]] = {}
+        composition_provisional_cases: dict[str, list[dict[str, Any]]] = {}
         for metric in context.get("metrics") or []:
             if not isinstance(metric, dict) or not metric.get("name"):
                 continue
@@ -2674,10 +3035,15 @@ def resolve_request_overlay(
                 )
                 if deferred_to_composition:
                     selected_constraint = None
-                    if requirement_id:
-                        composition_deferred_requirements.setdefault(
-                            metric_ref, set()
-                        ).add(requirement_id)
+                composition_can_defer_failure = bool(
+                    composition_intent is not None
+                    and selected_constraint is None
+                    and not constraint_candidates
+                )
+                if (deferred_to_composition or composition_can_defer_failure) and requirement_id:
+                    composition_deferred_requirements.setdefault(metric_ref, set()).add(
+                        requirement_id
+                    )
                 if selected_constraint is not None and requirement_id:
                     constrained_bound.add(requirement_id)
                     binding_packet = {
@@ -2743,13 +3109,26 @@ def resolve_request_overlay(
                     constraint_case["context_guard"] = deepcopy(
                         constraint_resolution["context_guard"]
                     )
-                if deferred_to_composition:
-                    constraint_case["activation"] = "deferred_to_registered_composition"
+                if deferred_to_composition or composition_can_defer_failure:
+                    constraint_case["activation"] = (
+                        "deferred_to_registered_composition"
+                        if deferred_to_composition
+                        else "provisional_registered_composition"
+                    )
                     constraint_case["deferred_reason"] = (
                         "implicit_query_fallback_selected_composition_input"
+                        if deferred_to_composition
+                        else "no_viable_direct_candidate_before_fulfillment_arbitration"
+                    )
+                    composition_provisional_cases.setdefault(metric_ref, []).append(
+                        constraint_case
                     )
                 decisions.append(constraint_case)
-                if selected_constraint is None and not deferred_to_composition:
+                if (
+                    selected_constraint is None
+                    and not deferred_to_composition
+                    and not composition_can_defer_failure
+                ):
                     cases.append(constraint_case)
                     task_resolution["resolution_cases"].append(constraint_case)
             if constrained_consumers and len(constrained_consumers) == len(metric_consumers):
@@ -3051,6 +3430,77 @@ def resolve_request_overlay(
         for intent in intents:
             metric_ref = str(intent.get("metric_ref") or "")
             composition_id = str(intent.get("composition_id") or "")
+            has_requirement_constraints = any(
+                isinstance(consumer, dict) and consumer.get("metric_constraints")
+                for consumer in intent.get("consumers") or []
+            )
+            if has_requirement_constraints:
+                constrained_composition = _resolve_constrained_composition_intent(
+                    overlay,
+                    context,
+                    intent,
+                    task_resolution,
+                    policy,
+                    intent_policy,
+                    source,
+                    policy_hash,
+                    composition_registry_hash,
+                    context_patches,
+                )
+                composition_resolution = constrained_composition[
+                    "composition_resolution"
+                ]
+                task_resolution["composition_resolutions"].append(
+                    composition_resolution
+                )
+                for requested_leaf, binding in constrained_composition[
+                    "leaf_bindings"
+                ]:
+                    binding_attempts[requested_leaf] = (
+                        binding_attempts.get(requested_leaf, 0) + 1
+                    )
+                    if binding:
+                        task_resolution["metric_bindings"][requested_leaf] = binding
+                        binding_votes.setdefault(requested_leaf, set()).add(binding)
+                        binding_successes[requested_leaf] = (
+                            binding_successes.get(requested_leaf, 0) + 1
+                        )
+                if constrained_composition["selected_composition"]:
+                    for profile in constrained_composition["profile_resolutions"]:
+                        for requirement_id in profile.get("requirement_ids") or []:
+                            existing = task_resolution["requirement_bindings"].get(
+                                requirement_id
+                            )
+                            if (
+                                isinstance(existing, dict)
+                                and existing.get("mode") != "unavailable"
+                            ):
+                                continue
+                            task_resolution["requirement_bindings"][requirement_id] = {
+                                "mode": "registered_composition",
+                                "composition_id": composition_id,
+                                "output_metric_ref": metric_ref,
+                                "logical_metric_ref": intent.get("logical_metric_ref"),
+                                "input_bindings": deepcopy(
+                                    profile.get("input_bindings") or {}
+                                ),
+                                "constraints_fingerprint": profile.get(
+                                    "constraints_fingerprint"
+                                ),
+                                "composition_profile_id": profile.get("profile_id"),
+                                "resolution_operation": intent.get(
+                                    "resolution_operation"
+                                ),
+                            }
+                else:
+                    for provisional in composition_provisional_cases.get(
+                        metric_ref
+                    ) or []:
+                        active = deepcopy(provisional)
+                        active["activation"] = "active"
+                        cases.append(active)
+                        task_resolution["resolution_cases"].append(active)
+                continue
             composition_target_grains = {
                 parsed[0]
                 for consumer in intent.get("consumers") or []

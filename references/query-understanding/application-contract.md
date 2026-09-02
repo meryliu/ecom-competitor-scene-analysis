@@ -5,7 +5,7 @@ Query Policy 是标准 IR 生成前的可旁路业务增强层。它只补充业
 ## 运行边界
 
 1. 每个用户显式独立问题先形成一个不可变 `raw_query` task；规则展开留在同一 task 内，不把展开项改造成新的用户问题。
-2. 调用 `scripts/select_query_policy.py` 只取得与当前 Query 相关的有界规则包。`no_match`、`fallback_raw`、命令非零、超时或输出不可解析时，禁止再次尝试 Policy，直接以原始 Query 按 [../analysis-request-contract.md](../analysis-request-contract.md) 生成 IR。
+2. 调用 `scripts/select_query_policy.py --input <raw-query.json> --output <query-policy-packet.json>` 只取得与当前 Query 相关的有界规则包，其中 input 必须是 `{"raw_query":"用户原始 Query"}` JSON 对象。选择器不接受 Query 文本参数或 `--query` 别名。`no_match`、`fallback_raw`、命令非零、超时或输出不可解析时，禁止再次尝试 Policy，直接以原始 Query 按 [../analysis-request-contract.md](../analysis-request-contract.md) 生成 IR。
 3. `selected` 时，在临时语义帧中应用规则。`analysis_task.query` 始终保留原始 Query；默认和展开写入 `analysis_goal`、指标、范围、requirements 与可读业务 assumptions。
 4. 写出 `query_policy_decision/1.0` 和候选 IR 后调用 `scripts/validate_query_policy_application.py`。带 `ir_effect_contract` 的已应用 action 必须用 `produced_refs` 绑定其实际生成的 IR 目标。校验器在同一事务内只对这些目标执行契约允许的协议字段规范化，并在 `commit` 或 `commit_pending_confirmation` 时写出 `committed_ir_path`；后续统一 runner 只消费该文件，不再消费校验前候选 IR。`commit_clarification` 直接向用户询问规则正常产生的业务问题。
 5. `fallback_raw` 表示增强故障，不是业务状态。按 task 丢弃临时语义帧、默认、展开、assumptions、clarifications 和 action 记录，再从原始 Query 生成一次基础 IR。不得因此输出 `blocked`、`waiting_confirmation` 或非零分析状态。
@@ -52,7 +52,7 @@ Policy 降级不放宽主流程校验。回退后的原始 Query 仍可被现有
 
 业务默认以自然语言写入 `analysis_task.assumptions`；rule ID、Policy 版本、失败码和耗时只保留在 `/workspace/runtime` 下的 packet/validation 诊断产物中，不进入最终业务口径。
 
-`produced_refs` 只在 action 带 `ir_effect_contract` 时必填，每项使用 `{"collection":"attribution_targets","id":"实际 target_id"}`。它只声明该 action 新增或拥有的目标，不得绑定用户显式目标或其他 action 的产物。同一目标最多由一个 action 绑定。校验器只补齐缺失或非协议枚举的 `target_semantics`；若 `scenario`、合法语义枚举、拆解方式或公式结构与 action contract 冲突，仍返回 `fallback_raw`，不得覆盖。
+`produced_refs` 只在 action 带 `ir_effect_contract` 时必填。归因契约每项使用 `{"collection":"attribution_targets","id":"实际 target_id"}`；`scoped_expansion` 每项增加契约声明的语义 `role`。它只声明该 action 新增或拥有的目标，不得绑定用户显式目标或其他 action 的产物。同一目标最多由一个 action 绑定。校验器只修改契约明确拥有的字段：归因契约只补齐缺失或非协议枚举的 `target_semantics`；范围展开契约只规范声明维度的 `metric_constraints`，并通过 `analysis_task.metrics` 校验 role 对应的指标身份。其他时期、输出、范围和 requirement 字段均不修改。身份或合法协议字段冲突时返回 `fallback_raw`，不得覆盖。
 
 ## 规则到 IR
 
@@ -60,7 +60,7 @@ Policy 降级不放宽主流程校验。回退后的原始 Query 仍可被现有
 - 单平台支付 GMV 归因：按规则声明完整因子和公式 AST；规则不指定归因算子。对比关系不明确时保留给现有业务参数预检确认。
 - 单平台结算 GMV：结算 GMV 水平/同比、支付 GMV 归因、结算率水平/同比为平行需求。
 - TOP6 结算 GMV：结算 GMV 和支付 GMV 的合计水平使用各自的 `aggregate_level`；结算率不可求和，仍按直接事实、注册组合和平台拆解的既有路径履约。
-- 京东佣金：单平台未指定口径时并列两个事实需求；多平台时不增加京东专属 3P 口径。
+- 京东佣金：单平台未指定口径时并列两个事实需求；通用佣金需求使用 `TOP6平台=京东`，指标名已内含京东和 3P 口径的需求不得再附加平台约束；多平台时不增加京东专属 3P 口径。该非对称归属由 action 的 `scoped_expansion` 契约约束，未声明该契约的其他展开保持原行为。
 
 不要把 Query Policy 规则写入 `business-intent-policy-registry.json`、`resolution-policy-registry.json`、派生注册表或归因算子注册表。
 

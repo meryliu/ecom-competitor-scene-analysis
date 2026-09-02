@@ -59,7 +59,7 @@ python3 scripts/compile_query_policy.py --check <empty-build-dir>
 
 编译器补入 `schema_version`、`policy_version` 和动作 `idempotency`，并检查 rule/action ID、依赖目标、依赖环、深度、允许的动作类型、manifest hash 及动作幂等声明。依赖只表示加载和重新判断，不表示无条件执行依赖动作。
 
-只有 action 确定性地产生归因目标时才声明 `ir_effect_contract`。该契约只约束协议字段和必要结构，不固定指标 ID、平台、时期或 target ID；实际 target ID 由应用 decision 的 `produced_refs` 绑定。例如：
+action 确定性地产生归因目标时可声明归因 `ir_effect_contract`。该契约只约束协议字段和必要结构，不固定指标 ID、平台、时期或 target ID；实际 target ID 由应用 decision 的 `produced_refs` 绑定。例如：
 
 ```json
 {
@@ -76,6 +76,8 @@ python3 scripts/compile_query_policy.py --check <empty-build-dir>
 }
 ```
 
+只有展开项之间存在经审核的非对称范围归属时，才使用 `contract_type=scoped_expansion`。契约逐 role 声明允许的 requirement collection、预期指标名，以及它拥有的 `metric_constraints` 维度效果；decision 用带 `role` 的 `produced_refs` 绑定实际 requirement。不要为普通展开补契约，也不要借此固定时期、输出、其他范围字段或候选解析结果。
+
 维护编译必须拒绝未知 collection、scenario/target semantics 冲突、非法 decomposition 或未知 shape 约束。没有该契约的旧 action 保持原行为。
 
 ## Review 清单
@@ -84,7 +86,7 @@ python3 scripts/compile_query_policy.py --check <empty-build-dir>
 - 语义：applicability、none、用户显式保护、动作顺序和禁止外推边界是否与文档一致。
 - 关系：依赖是否必要、目标是否存在、是否无环；依赖规则是否仍独立判断适用性。
 - 幂等：每个动作 ID 是否稳定；同一 `(task_id, rule_id, action_id, target_scope_fingerprint)` 是否最多提交一次。
-- 效果归属：带 `ir_effect_contract` 的 action 是否只约束自己生成的目标；decision 是否用 `produced_refs` 唯一绑定，用户显式目标是否未被占用。
+- 效果归属：带 `ir_effect_contract` 的 action 是否只约束自己生成的目标；decision 是否用 `produced_refs` 唯一绑定，用户显式目标是否未被占用；`scoped_expansion` 是否只声明真实存在的非对称字段，而未扩大到时期、输出或候选选择。
 - 上下文：索引只做高召回，packet 是否保持在规则数、依赖深度、轮次、requirement 和字节预算内。
 - 降级：资源损坏、依赖错误、重复动作、IR 校验失败等用例是否均返回 `fallback_raw`，且原始 Query 未改变。
 - 边界：候选引擎、Provider、Prepare、编译器、runner 和归因引擎是否没有因业务规则维护而改动。
