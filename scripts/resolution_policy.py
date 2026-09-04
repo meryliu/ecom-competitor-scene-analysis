@@ -25,6 +25,7 @@ from candidate_semantics import (
     constrained_core_evidence,
     full_scope_evidence,
 )
+from constraint_provenance import effective_constraint_provenance
 from fulfillment_candidates import (
     candidate_type_for_path,
     fulfillment_tier_for_path,
@@ -561,6 +562,7 @@ def _candidate_packet(candidate: dict[str, Any]) -> dict[str, Any]:
             "confidence",
             "evidence",
             "conflicts",
+            "soft_conflicts",
             "domain_summary",
         )
         if key in candidate
@@ -617,11 +619,8 @@ def _query_metric_resolution(
         ]
         expected_object = requested.get("metric_object")
         actual_object = _metric_object(metadata)
-        object_provenance = str(
-            requested.get("metric_object_provenance")
-            or requested.get("metric_object_source")
-            or requested.get("provenance")
-            or "model_inferred"
+        object_provenance = effective_constraint_provenance(
+            requested, "metric_object"
         )
         soft_conflicts: list[str] = []
         if (
@@ -634,15 +633,7 @@ def _query_metric_resolution(
                 soft_conflicts.append("model_inferred_metric_object_mismatch")
             else:
                 conflicts.append("metric_object_mismatch")
-        unit_provenance = str(
-            requested.get("unit_provenance")
-            or requested.get("unit_source")
-            or (
-                "model_inferred"
-                if str(requested.get("unit") or "").strip().lower() in UNRESOLVED_UNITS
-                else "user_explicit"
-            )
-        )
+        unit_provenance = effective_constraint_provenance(requested, "unit")
         if (
             "unit_compatible" in configured_gates
             and not _unit_compatible(requested.get("unit"), metadata.get("unit"))
@@ -3359,6 +3350,7 @@ def resolve_request_overlay(
                     "confidence": item["confidence"],
                     "evidence": item["evidence"],
                     "conflicts": list(item.get("conflicts") or []),
+                    "soft_conflicts": list(item.get("soft_conflicts") or []),
                 }
                 for item in resolution.get("candidates") or []
             ]
@@ -3558,6 +3550,7 @@ def resolve_request_overlay(
                         "confidence": candidate["confidence"],
                         "evidence": candidate["evidence"],
                         "conflicts": list(candidate.get("conflicts") or []),
+                        "soft_conflicts": list(candidate.get("soft_conflicts") or []),
                     }
                     for candidate in resolution.get("candidates") or []
                 ]

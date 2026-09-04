@@ -1234,6 +1234,47 @@ class ResolutionPolicyTests(unittest.TestCase):
             result["task_resolutions"]["q"]["metric_bindings"]["支付GMV"], "支付GMV"
         )
 
+    def test_unproven_user_explicit_object_mismatch_is_soft(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {"结算率": {"unit": "亿元", "metric_object": "volume"}},
+            "dimensions": {}, "sheets": {},
+        }
+        request = {"metrics": ["结算率"], "contexts": [{
+            "task_id": "q", "query": "结算率同比表现",
+            "metrics": [{
+                "metric_ref": "rate", "name": "结算率", "metric_object": "ratio",
+                "metric_object_provenance": "user_explicit",
+                "unit": "待元信息解析",
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertEqual(task["metric_bindings"]["结算率"], "结算率")
+        candidate = result["resolution_decisions"][0]["candidates"][0]
+        self.assertIn("model_inferred_metric_object_mismatch", candidate["soft_conflicts"])
+
+    def test_proven_object_mismatch_remains_confirmation_case(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {"结算率": {"unit": "亿元", "metric_object": "volume"}},
+            "dimensions": {}, "sheets": {},
+        }
+        request = {"metrics": ["结算率"], "contexts": [{
+            "task_id": "q", "query": "结算率",
+            "metrics": [{
+                "metric_ref": "rate", "name": "结算率", "metric_object": "ratio",
+                "metric_object_provenance": "user_explicit",
+                "metric_object_evidence": ["Query 明确包含结算率"],
+                "unit": "待元信息解析",
+            }],
+        }]}
+        result = resolve_request_overlay(index, request, self.policy)
+        self.assertNotIn("结算率", result["metric_bindings"])
+        case = result["task_resolutions"]["q"]["resolution_cases"][0]
+        self.assertEqual(case["action"], "block")
+        self.assertIn("metric_object_mismatch", case["candidates"][0]["conflicts"])
+
     def test_joint_domain_evidence_auto_resolves_top6_without_enumerated_mapping(self) -> None:
         request = {
             "metrics": ["支付GMV"],
@@ -1320,10 +1361,12 @@ class ResolutionPolicyTests(unittest.TestCase):
                 "task_id": "q",
                 "query": "结算率",
                 "metrics": [{
-                    "metric_ref": "rate",
-                    "name": "结算率",
-                    "metric_object": "ratio",
-                    "unit": "待元信息解析",
+                "metric_ref": "rate",
+                "name": "结算率",
+                "metric_object": "ratio",
+                "metric_object_provenance": "user_explicit",
+                "metric_object_evidence": ["Query 明确包含结算率"],
+                "unit": "待元信息解析",
                     "provenance": "user_explicit",
                 }],
             }],
@@ -1348,10 +1391,12 @@ class ResolutionPolicyTests(unittest.TestCase):
                 "task_id": "q",
                 "query": "支付GMV",
                 "metrics": [{
-                    "metric_ref": "gmv",
-                    "name": "支付GMV",
-                    "metric_object": "volume",
-                    "unit": "万元",
+                "metric_ref": "gmv",
+                "name": "支付GMV",
+                "metric_object": "volume",
+                "unit_provenance": "user_explicit",
+                "unit_evidence": ["Query 明确指定万元"],
+                "unit": "万元",
                     "provenance": "user_explicit",
                 }],
             }],
@@ -1406,10 +1451,14 @@ class ResolutionPolicyTests(unittest.TestCase):
             "contexts": [
                 {"task_id": "volume", "query": "业务指标", "metrics": [{
                     "metric_ref": "m", "name": "业务指标", "metric_object": "volume",
+                    "metric_object_provenance": "user_explicit",
+                    "metric_object_evidence": ["Query 明确指定规模"],
                     "unit": "待元信息解析", "provenance": "user_explicit",
                 }]},
                 {"task_id": "ratio", "query": "业务指标", "metrics": [{
                     "metric_ref": "m", "name": "业务指标", "metric_object": "ratio",
+                    "metric_object_provenance": "user_explicit",
+                    "metric_object_evidence": ["Query 明确指定比例"],
                     "unit": "待元信息解析", "provenance": "user_explicit",
                 }]},
             ],

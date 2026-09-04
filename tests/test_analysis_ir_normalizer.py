@@ -125,6 +125,18 @@ class AnalysisIRNormalizerTests(unittest.TestCase):
             normalize_analysis_ir(ir)
         self.assertEqual(caught.exception.code, "NORMALIZED_REQUIREMENT_ID_COLLISION")
 
+    def test_period_role_name_is_rejected_before_normalization(self) -> None:
+        ir = {
+            "ir_version": "analysis_ir/1.0",
+            "analysis_task": {
+                "periods": {"analysis": "analysis", "comparison": "2025-06"},
+                "metrics": [],
+            },
+        }
+        with self.assertRaises(AnalysisIRNormalizationError) as caught:
+            normalize_analysis_ir(ir)
+        self.assertEqual(caught.exception.code, "INVALID_PERIOD")
+
     def test_infers_only_structural_factor_kind(self) -> None:
         ir = {
             "ir_version": "analysis_ir/1.0",

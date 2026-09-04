@@ -393,8 +393,20 @@ class PrepareAnalysisTests(unittest.TestCase):
     def test_concrete_declared_unit_conflict_is_blocked(self) -> None:
         ir = base_ir("支付GMV")
         ir["analysis_task"]["metrics"][0]["unit"] = "万元"
+        ir["analysis_task"]["metrics"][0]["unit_source"] = "user_explicit"
+        ir["analysis_task"]["metrics"][0]["unit_evidence"] = ["Query 明确指定万元"]
         with self.assertRaisesRegex(ValueError, "声明单位与源表元信息冲突"):
             prepare_analysis_ir(ir, source_index(), self.compositions, self.derived)
+
+    def test_unproven_concrete_declared_unit_is_corrected_by_source_metadata(self) -> None:
+        ir = base_ir("支付GMV")
+        ir["analysis_task"]["metrics"][0]["unit"] = "万元"
+        prepared, _ = prepare_analysis_ir(
+            ir, source_index(), self.compositions, self.derived
+        )
+        metric = prepared["analysis_task"]["metrics"][0]
+        self.assertEqual(metric["unit"], "亿元")
+        self.assertEqual(metric["unit_source"], "source_metric_metadata")
 
     def test_model_inferred_unit_is_overwritten_by_source_metadata(self) -> None:
         ir = base_ir("支付GMV")

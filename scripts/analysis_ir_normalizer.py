@@ -18,6 +18,42 @@ class AnalysisIRNormalizationError(ValueError):
         self.details = details or {}
 
 
+def validate_period_values(ir: dict[str, Any]) -> None:
+    """Preflight period maps before policy commit or source resolution.
+
+    Role labels (for example ``analysis``) are not period values.  This is a
+    deliberately narrow protocol check; it does not infer missing periods or
+    impose a new period grammar beyond ``normalize_period``.
+    """
+    task = ir.get("analysis_task") if isinstance(ir, dict) else None
+    period_maps: list[tuple[str, Any]] = []
+    if isinstance(task, dict) and isinstance(task.get("periods"), dict):
+        period_maps.append(("analysis_task.periods", task["periods"]))
+    for index, target in enumerate(ir.get("attribution_targets") or []):
+        if isinstance(target, dict) and isinstance(target.get("periods"), dict):
+            period_maps.append((f"attribution_targets[{index}].periods", target["periods"]))
+    role_names = {"analysis", "comparison", "analysis_last_year", "comparison_last_year"}
+    for prefix, values in period_maps:
+        for role, value in values.items():
+            path = f"{prefix}.{role}"
+            if value is None or not str(value).strip():
+                raise AnalysisIRNormalizationError(
+                    "INVALID_PERIOD", f"{path} 不能为空", {"path": path, "value": value}
+                )
+            if str(value).strip().lower() in role_names:
+                raise AnalysisIRNormalizationError(
+                    "INVALID_PERIOD",
+                    f"{path} 不能使用时期角色名作为时期值：{value}",
+                    {"path": path, "value": value},
+                )
+            parsed = normalize_period(value)
+            if parsed is None:
+                raise AnalysisIRNormalizationError(
+                    "INVALID_PERIOD", f"{path} 无法识别时期：{value}",
+                    {"path": path, "value": value},
+                )
+
+
 def _canonical_period(value: Any, path: str) -> str:
     parsed = normalize_period(value)
     if parsed is None:
@@ -144,6 +180,7 @@ def normalize_analysis_ir(ir: dict[str, Any]) -> dict[str, Any]:
     task = normalized.get("analysis_task")
     if not isinstance(task, dict):
         return normalized
+    validate_period_values(normalized)
     periods = task.get("periods")
     if isinstance(periods, dict):
         task["periods"] = {

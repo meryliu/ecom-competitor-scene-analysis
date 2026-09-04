@@ -11,7 +11,11 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from analysis_ir_normalizer import normalize_analysis_input
+from analysis_ir_normalizer import (
+    AnalysisIRNormalizationError,
+    normalize_analysis_input,
+    validate_period_values,
+)
 from business_parameter_preflight import preflight_business_parameters
 from ir_contract_guard import SCENARIO_TARGET_SEMANTICS, validate_analysis_input_contract
 from query_policy_runtime import POLICY_PACKET_SCHEMA, load_json
@@ -431,6 +435,12 @@ def validate_application(
     if requirement_count > requirement_limit:
         raise QueryPolicyApplicationError("QP_REQUIREMENT_BUDGET_EXCEEDED", "enhanced requirements exceed the policy limit")
     canonical_ir, changes = _canonicalize_policy_effects(candidate_ir, effect_bindings)
+    try:
+        validate_period_values(canonical_ir)
+    except AnalysisIRNormalizationError as exc:
+        raise QueryPolicyApplicationError(
+            exc.code, str(exc), details=exc.details
+        ) from exc
     preflight = preflight_business_parameters(canonical_ir)
     if preflight.get("status") == "waiting_confirmation":
         result = {

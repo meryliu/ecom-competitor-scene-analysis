@@ -13,6 +13,7 @@ from analysis_ir_normalizer import (
     normalize_analysis_input,
     normalize_analysis_ir,
 )
+from constraint_provenance import effective_constraint_provenance
 from ir_contract_guard import (
     IRContractError,
     validate_analysis_ir_contract,
@@ -485,9 +486,7 @@ def _bind_declared_metric_metadata(ir: dict[str, Any], index: dict[str, Any]) ->
             )
         declared_object = metric.get("metric_object")
         if source_object and declared_object and declared_object != source_object:
-            object_source = str(
-                metric.get("metric_object_source") or "model_inferred"
-            )
+            object_source = effective_constraint_provenance(metric, "metric_object")
             if object_source == "model_inferred":
                 metric.setdefault("metadata_corrections", []).append({
                     "field": "metric_object",
@@ -509,6 +508,9 @@ def _bind_declared_metric_metadata(ir: dict[str, Any], index: dict[str, Any]) ->
                         "provenance": object_source,
                     },
                 )
+        elif source_object and not declared_object:
+            metric["metric_object"] = source_object
+            metric["metric_object_source"] = "source_metric_metadata"
         if source_object:
             metric["source_metric_object"] = source_object
         source_unit = metadata.get("unit")
@@ -518,7 +520,7 @@ def _bind_declared_metric_metadata(ir: dict[str, Any], index: dict[str, Any]) ->
                 metric["unit"] = source_unit
                 metric["unit_source"] = "source_metric_metadata"
             elif str(declared_unit).strip() != str(source_unit).strip():
-                unit_source = str(metric.get("unit_source") or "user_explicit")
+                unit_source = effective_constraint_provenance(metric, "unit")
                 if unit_source == "model_inferred":
                     metric.setdefault("metadata_corrections", []).append({
                         "field": "unit",

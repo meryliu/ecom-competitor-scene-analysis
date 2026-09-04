@@ -221,13 +221,13 @@ def build_resolve_request(
                     "name": name,
                     "metric_object": metric.get("metric_object"),
                     "metric_object_provenance": metric.get("metric_object_source") or "model_inferred",
+                    "metric_object_evidence": deepcopy(metric.get("metric_object_evidence") or []),
                     "unit": metric.get("unit"),
-                    "unit_provenance": metric.get("unit_source") or (
-                        "model_inferred"
-                        if str(metric.get("unit") or "").strip().lower()
-                        in {"", "unknown", "待元信息解析", "未解析"}
-                        else "user_explicit"
-                    ),
+                    # A concrete unit in an IR is not evidence that the user
+                    # stated it.  Only an explicit unit_source/evidence can
+                    # make it a hard request-side constraint.
+                    "unit_provenance": metric.get("unit_source") or "model_inferred",
+                    "unit_evidence": deepcopy(metric.get("unit_evidence") or []),
                     "consumers": deepcopy(consumers_by_metric.get(metric_ref) or []),
                     "required_periods": sorted({
                         str(period)
@@ -286,7 +286,10 @@ def build_resolve_request(
                     "metric_ref": virtual_ref,
                     "name": semantic_text,
                     "metric_object": resolution_intent.get("output_metric_object") or "ratio",
-                    "metric_object_provenance": "user_explicit",
+                    # This is the output object required by a registered
+                    # resolution intent, not an inferred source-metric type.
+                    "metric_object_provenance": "registered_definition",
+                    "metric_object_evidence": ["resolution_intent.output_metric_object"],
                     "unit": "待元信息解析",
                     "unit_provenance": "model_inferred",
                     "consumers": [virtual_consumer],

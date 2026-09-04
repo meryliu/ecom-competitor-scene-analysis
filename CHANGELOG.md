@@ -5,6 +5,8 @@
 - Add a task-local attribution business-parameter preflight before Provider resolution.
 - Deterministically fill explicit同比/环比 period roles and return bounded confirmation cases for ambiguous periods, scenarios, formulas, or grouping inputs.
 - Preserve fail-fast structural IR errors, Provider boundaries, unit behavior, and complete-request execution hashes.
+- Treat model-inferred and formula-derived unit/metric-object metadata as soft resolver diagnostics; require evidence for request-side hard constraints and canonicalize from source metadata during Prepare.
+- Reject period role names or unparseable period values before Query Policy commit and before source resolution, without inferring missing periods.
 
 ## 1.2.0 - 2026-08-25
 

@@ -65,13 +65,13 @@
 
 每项需求使用唯一 `requirement_id`；归因目标使用唯一 `target_id`。`criticality` 只使用 `core|required|optional`。只声明 Query 实际需要的时期角色和输出。
 
-`unit=待元信息解析` 和 `definition=待元信息解析` 只是模型侧占位状态，不是可执行元信息。统一 runner 在编译前使用当前 source revision 的结构索引补全所有已匹配指标。模型推断具体单位时写 `unit_source=model_inferred`：Resolve 不以该单位硬过滤或加分，Prepare 以源元信息覆盖并记录修正；`user_explicit|user_formula|registered_definition|source_metadata` 等权威单位与源元信息冲突时阻断。后续 Compile/Execution 仍严格校验实际单位和量级。
+`unit=待元信息解析` 和 `definition=待元信息解析` 只是模型侧占位状态，不是可执行元信息。统一 runner 在编译前使用当前 source revision 的结构索引补全所有已匹配指标。模型推断具体单位时写 `unit_source=model_inferred`：Resolve 不以该单位硬过滤或加分，Prepare 以源元信息覆盖并记录修正；`user_formula` 或未附 `unit_evidence` 的 `user_explicit` 也按推断处理，只有 Query 有可追溯证据、注册定义或源元数据声明的单位冲突才进入确认/阻断。后续 Compile/Execution 仍严格校验实际单位和量级。
 
-`metric_object` 是 Query 语义声明。默认视为 `model_inferred`；只有用户明确指定指标对象或公式约束时才写 `metric_object_source=user_explicit|user_formula`。复合“表现、增速、涨幅、相比上期”等语义由 runner 生成有界业务意图假设，并结合实时指标/维度元信息、事实块和时期一次筛成可执行候选；模型不要串行改写指标名称试取数据。
+`metric_object` 是 Query 语义声明。默认视为 `model_inferred`；`user_formula` 只表示公式关系，不证明因子对象。只有 Query 中明确出现对象证据时才写 `metric_object_source=user_explicit`，并同时保留 `metric_object_evidence`；注册定义、源元数据和业务意图规则可作为权威来源。复合“表现、增速、涨幅、相比上期”等语义由 runner 生成有界业务意图假设，并结合实时指标/维度元信息、事实块和时期一次筛成可执行候选；模型不要串行改写指标名称试取数据。
 
 用户可使用非标准业务表述；不要为了迎合当前源表名称改写 Query 或预先枚举别名。Gateway 会基于当前 revision 生成候选。收到 `waiting_confirmation` 时只向用户展示 case 的逻辑候选和证据，确认后把所选候选写入该任务的 `resolution_patches`，保持原 requirement ID 后重跑。
 
-runner 在 Provider 前执行本地业务参数预检。它只读取当前 task 的 Query、IR、显式 assumptions 和当前请求的确认补丁，不读取未结构化历史对话。明确“同比”时可由分析期唯一推导去年同期，明确“环比/上期”时可唯一推导上一期；完整字段不重新解释或改写。缺少分析期、比较关系不明确、归因场景/公式/拆解维度存在多个合理解释时返回 `kind=business_parameter` 的 `resolution_case`。模型推断单位和“待元信息解析”不属于业务缺参，不触发该预检。
+runner 在 Provider 前执行本地业务参数预检和时期协议预检。它只读取当前 task 的 Query、IR、显式 assumptions 和当前请求的确认补丁，不读取未结构化历史对话。明确“同比”时可由分析期唯一推导去年同期，明确“环比/上期”时可唯一推导上一期；完整字段不重新解释或改写。`analysis`、`comparison` 等角色名不能直接作为时期值，空值或不可解析值返回 `INVALID_PERIOD`；该协议预检不猜测缺失时期。缺少分析期、比较关系不明确、归因场景/公式/拆解维度存在多个合理解释时返回 `kind=business_parameter` 的 `resolution_case`。模型推断单位和“待元信息解析”不属于业务缺参，不触发该预检。
 
 单任务根对象只使用 `ir_version=analysis_ir/1.0`；bundle 根对象只使用 `schema_version=analysis_bundle/1.0`，且每个 `analysis_ir` 自身仍声明 `ir_version`。两种版本字段不得互换或同时出现；runner 在能力解析和取数前以 `INPUT_PROTOCOL_INVALID` 阻断错误协议。
 

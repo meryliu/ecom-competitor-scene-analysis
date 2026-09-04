@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from _vendor.ecom_competitor_source import error_json
-from analysis_ir_normalizer import normalize_analysis_input
+from analysis_ir_normalizer import normalize_analysis_input, validate_period_values
 from business_parameter_preflight import preflight_business_parameters
 from compile_plan import compile_and_validate, load_json
 from data_gateway import DataGateway, SOURCE_BINDING_V1, build_resolve_request, load_source_config
@@ -347,6 +347,7 @@ def main() -> int:
             task_dir = args.work_dir / "tasks" / _task_name(task_id)
             task_dir.mkdir(parents=True, exist_ok=True)
             try:
+                validate_period_values(raw_ir)
                 preflight = preflight_business_parameters(raw_ir)
                 prepared_ir = normalize_analysis_input(preflight["analysis_ir"])
                 cases = list(preflight.get("resolution_cases") or [])
