@@ -1,6 +1,6 @@
 {
   "schema_version": "query_policy_rule/1.0",
-  "policy_version": "query-policy/1.0.0",
+  "policy_version": "query-policy/1.0.1",
   "rule_id": "jd-commission",
   "name": "京东闭环电商佣金收入口径",
   "version": "1.0.0",

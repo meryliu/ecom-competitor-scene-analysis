@@ -18,6 +18,7 @@ from query_policy_runtime import (  # noqa: E402
     select_query_policy_fail_open,
     validate_policy,
     validate_rule,
+    normalize_policy_text,
     value_hash,
 )
 from compile_query_policy import QueryPolicyCompileError, _runtime_rule  # noqa: E402
@@ -52,6 +53,58 @@ class QueryPolicyRuntimeTests(unittest.TestCase):
         self.assertLessEqual(len(selected), packet["limits"]["max_selected_rules"])
         encoded = json.dumps(packet, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         self.assertLessEqual(len(encoded.encode("utf-8")), packet["limits"]["max_packet_bytes"])
+
+    def test_route_matching_is_case_unicode_and_spacing_invariant(self) -> None:
+        queries = [
+            "26年7月拼多多gmv同比变化以及归因",
+            "26年7月拼多多GMV同比变化以及归因",
+            "26年7月拼多多ＧＭＶ同比变化以及归因",
+            "26年7月拼多多 G M V，同比变化以及归因",
+        ]
+        selected = [select_query_policy(query)["selected_rule_ids"] for query in queries]
+        self.assertTrue(all(item == selected[0] for item in selected))
+        self.assertIn("gmv-defaults", selected[0])
+        self.assertIn("single-platform-payment-gmv-attribution", selected[0])
+
+    def test_generic_gmv_attribution_reaches_payment_attribution_rule(self) -> None:
+        packet = select_query_policy("26年7月拼多多GMV同比变化以及归因")
+        self.assertEqual(packet["status"], "selected")
+        self.assertIn("gmv-defaults", packet["selected_rule_ids"])
+        self.assertIn("single-platform-payment-gmv-attribution", packet["selected_rule_ids"])
+
+    def test_policy_index_covers_rule_level_routes(self) -> None:
+        # This assertion protects the generated-index invariant: adding a
+        # routing term to a rule must make that rule reachable.
+        for rule_id, rule in self.rules.items():
+            terms = (rule.get("routing") or {}).get("terms")
+            if not isinstance(terms, list):
+                continue
+            for term in terms:
+                normalized = normalize_policy_text(term)
+                self.assertTrue(
+                    any(
+                        rule_id in ids
+                        and normalized in {normalize_policy_text(item) for item in str(route).split("|")}
+                        for route, ids in self.index["routing"].items()
+                    ),
+                    f"unreachable route: {rule_id}/{term}",
+                )
+
+    def test_policy_validation_rejects_unreachable_rule_route(self) -> None:
+        index = deepcopy(self.index)
+        rules = deepcopy(self.rules)
+        for route, rule_ids in index["routing"].items():
+            index["routing"][route] = [
+                rule_id for rule_id in rule_ids
+                if rule_id != "single-platform-payment-gmv-attribution"
+            ]
+        index["routing"] = {
+            route: rule_ids for route, rule_ids in index["routing"].items() if rule_ids
+        }
+        policy = refreshed_policy(index, self.manifest, rules)
+        with self.assertRaises(QueryPolicyError) as caught:
+            validate_policy(*policy)
+        self.assertEqual(caught.exception.code, "QP_INDEX_INCOMPLETE")
 
     def test_unrelated_query_does_not_load_rule_cards(self) -> None:
         packet = select_query_policy("查询昨天的天气")

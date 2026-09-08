@@ -1,6 +1,6 @@
 {
   "schema_version": "query_policy_rule/1.0",
-  "policy_version": "query-policy/1.0.0",
+  "policy_version": "query-policy/1.0.1",
   "rule_id": "single-platform-payment-gmv-attribution",
   "name": "单个平台支付 GMV 归因",
   "version": "1.1.0",

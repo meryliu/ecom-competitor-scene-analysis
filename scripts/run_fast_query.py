@@ -513,12 +513,14 @@ def _metric_basis(
             "unit": row.get("unit"),
             "definition": row.get("definition"),
         }
+        if row.get("definition_source"):
+            item["definition_source"] = row.get("definition_source")
         current = metrics.get(source_name)
         if current is None:
             metrics[source_name] = (row_rank, item)
             continue
         current_rank, current_item = current
-        for key in ("metric", "unit", "definition"):
+        for key in ("metric", "unit", "definition", "definition_source"):
             if current_item.get(key) in {None, ""} and item.get(key) not in {None, ""}:
                 current_item[key] = item[key]
         metrics[source_name] = (min(current_rank, row_rank), current_item)
@@ -828,6 +830,32 @@ def answer_payload(manifest: dict[str, Any], profile: str) -> dict[str, Any]:
             "assumptions": (manifest.get("analysis_task") or {}).get("assumptions", []),
         },
     }
+
+
+def enrich_answer_basis_definitions(
+    answer: dict[str, Any], metric_catalogue: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Project source metadata onto the already-selected answer metrics.
+
+    This is deliberately a terminal presentation step. It never changes facts,
+    formulas, bindings, status, or execution decisions.
+    """
+    if not isinstance(metric_catalogue, dict):
+        return answer
+    basis = answer.get("answer_basis")
+    if not isinstance(basis, dict):
+        return answer
+    for item in basis.get("metrics") or []:
+        if not isinstance(item, dict):
+            continue
+        source_name = item.get("source_metric_name")
+        metadata = metric_catalogue.get(str(source_name)) if source_name else None
+        if not isinstance(metadata, dict) or "definition" not in metadata:
+            continue
+        item["definition"] = metadata.get("definition")
+        if metadata.get("definition_source"):
+            item["definition_source"] = metadata["definition_source"]
+    return answer
 
 
 def finalize_model_nodes(manifest: dict[str, Any]) -> None:

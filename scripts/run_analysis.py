@@ -31,7 +31,7 @@ from providers.feishu_competitor import FeishuCompetitorGateway
 from resolution_policy import DEFAULT_POLICY_PATH as DEFAULT_RESOLUTION_POLICY
 from business_intent_policy import DEFAULT_POLICY_PATH as DEFAULT_BUSINESS_INTENT_POLICY
 from source_capability import project_task_capabilities
-from run_fast_query import answer_payload, finalize_model_nodes
+from run_fast_query import answer_payload, enrich_answer_basis_definitions, finalize_model_nodes
 from run_state import (
     artifact_record,
     atomic_write_json,
@@ -160,6 +160,113 @@ def task_resolution_answer(
         "views": [],
         "derived_results": [],
         "attribution_results": [],
+    }
+
+
+def _metadata_request_ir(value: dict[str, Any]) -> dict[str, Any]:
+    """Build the smallest resolver input for a definition-only request."""
+    raw_metrics = value.get("metrics")
+    if not isinstance(raw_metrics, list) or not raw_metrics:
+        raise InputProtocolError("metric_definition_request requires a non-empty metrics array")
+    metrics: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_metrics):
+        if isinstance(item, str) and item.strip():
+            metrics.append({"metric_id": f"definition_{index}", "name": item.strip()})
+        elif isinstance(item, dict) and isinstance(item.get("name"), str) and item["name"].strip():
+            metrics.append({
+                "metric_id": str(item.get("metric_id") or f"definition_{index}"),
+                "name": item["name"].strip(),
+                "metric_object": item.get("metric_object"),
+                "unit": item.get("unit"),
+            })
+        else:
+            raise InputProtocolError(f"metric_definition_request.metrics[{index}] requires a non-empty name")
+    filters = value.get("filters") or []
+    if not isinstance(filters, (dict, list)):
+        raise InputProtocolError("metric_definition_request.filters must be an object or array")
+    return {
+        "ir_version": "analysis_ir/1.0",
+        "analysis_task": {
+            "query": str(value.get("query") or ""),
+            "analysis_goal": "返回指标口径定义",
+            "metrics": metrics,
+            "periods": {},
+            "scope": "",
+            "filters": deepcopy(filters),
+        },
+        "views": [],
+        "dimension_trees": [],
+        "fact_observations": [],
+        "metric_compositions": [],
+        "derived_requirements": [],
+        "custom_calculations": [],
+        "attribution_targets": [],
+        "output_requirements": [],
+        "clarifications": [],
+    }
+
+
+def _metadata_definition_answer(
+    task_id: str,
+    value: dict[str, Any],
+    capabilities: dict[str, Any],
+) -> dict[str, Any]:
+    task_resolution = (capabilities.get("task_resolutions") or {}).get(task_id) or {}
+    cases = list(task_resolution.get("resolution_cases") or [])
+    if not cases:
+        cases = [
+            deepcopy(case)
+            for case in capabilities.get("resolution_cases") or []
+            if task_id in {str(item) for item in case.get("task_ids") or []}
+        ]
+    if cases:
+        waiting = any(case.get("action") == "confirm" for case in cases)
+        return {
+            "schema_version": "metric_definition_answer/1.0",
+            "status": "waiting_confirmation" if waiting else "blocked",
+            "task_id": task_id,
+            "query": value.get("query"),
+            "resolution_cases": deepcopy(cases),
+            "definitions": [],
+        }
+    bindings = task_resolution.get("metric_bindings") or {}
+    if not bindings:
+        bindings = capabilities.get("metric_bindings") or {}
+    catalogue = capabilities.get("metrics") or {}
+    definitions: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for requested, source_metric in bindings.items():
+        source_name = str(source_metric)
+        if source_name in seen:
+            continue
+        seen.add(source_name)
+        metadata = catalogue.get(source_name) or {}
+        item = {
+            "requested_metric": str(requested),
+            "source_metric_name": source_name,
+            "unit": metadata.get("unit"),
+            "definition": metadata.get("definition"),
+            "definition_source": metadata.get("definition_source") or "指标元信息.口径定义",
+            "supported_grains": deepcopy(metadata.get("supported_grains") or []),
+            "dimensions": deepcopy(metadata.get("dimensions") or []),
+        }
+        definitions.append(item)
+    if not definitions:
+        return {
+            "schema_version": "metric_definition_answer/1.0",
+            "status": "blocked",
+            "task_id": task_id,
+            "query": value.get("query"),
+            "definitions": [],
+            "error": {"code": "metric_not_resolved", "message": "未能唯一绑定请求指标"},
+        }
+    return {
+        "schema_version": "metric_definition_answer/1.0",
+        "status": "success",
+        "task_id": task_id,
+        "query": value.get("query"),
+        "source_revision": (capabilities.get("source") or {}).get("revision"),
+        "definitions": definitions,
     }
 
 
@@ -334,6 +441,47 @@ def main() -> int:
                 atomic_write_json(archive, existing)
             existing = None
         state = existing or new_state(input_digest)
+        if raw_input.get("schema_version") == "metric_definition_request/1.0":
+            if args.response_file is not None:
+                raise InputProtocolError(
+                    "metric_definition_request does not support --response-file; it requires source metadata"
+                )
+            definition_ir = _metadata_request_ir(raw_input)
+            source_config = load_source_config(args.source_config, source_url=args.source_url)
+            gateway = FeishuCompetitorGateway(
+                source_config,
+                identity=args.identity,
+                index_path=args.index,
+                allow_stale=args.allow_stale,
+                dimension_set_registry_path=args.dimension_set_registry,
+                resolution_policy_path=args.resolution_policy,
+                business_intent_policy_path=args.business_intent_policy,
+            )
+            capabilities = gateway.resolve(build_resolve_request(
+                [("default", definition_ir)],
+                load_json(args.composition_registry),
+                load_json(args.derived_registry),
+            ))
+            capabilities_path = args.work_dir / "resolved-capabilities.json"
+            atomic_write_json(capabilities_path, capabilities)
+            state["artifacts"]["resolved_capabilities"] = artifact_record(capabilities_path)
+            state["stages"]["source_prepare"] = {
+                "status": "success",
+                "source_revision": (capabilities.get("source") or {}).get("revision"),
+                "schema_hash": (capabilities.get("source") or {}).get("schema_hash"),
+                "freshness": (capabilities.get("source") or {}).get("freshness"),
+            }
+            answer = _metadata_definition_answer("default", raw_input, capabilities)
+            answer["workflow_duration_ms"] = round((time.perf_counter() - workflow_started) * 1000, 3)
+            answer_path = args.work_dir / "answer-payload.json"
+            atomic_write_json(answer_path, answer)
+            state["stages"]["execute"] = {"status": answer["status"], "task_count": 1}
+            state["status"] = answer["status"]
+            state["timings_ms"]["workflow"] = answer["workflow_duration_ms"]
+            state["artifacts"]["answer"] = artifact_record(answer_path)
+            atomic_write_json(state_path, state)
+            print(json.dumps({"status": answer["status"], "answer": str(answer_path), "fetch_reused": False}, ensure_ascii=False))
+            return 0
         raw_tasks = normalize_input(raw_input)
         task_order = [task_id for task_id, _ in raw_tasks]
         state["stages"]["input"] = {"status": "success", "task_count": len(raw_tasks)}
@@ -719,6 +867,10 @@ def main() -> int:
                     ]
                     raise ValueError(f"final validation failed: {errors[:3]}")
                 answer = answer_payload(manifest, str(plan.get("execution_profile")))
+                # Definition text is a terminal projection from the resolved
+                # source metadata; it does not enter execution or validation.
+                if capabilities is not None:
+                    enrich_answer_basis_definitions(answer, capabilities.get("metrics"))
                 answer["task_id"] = task_id
                 answer["source_revision"] = (payload.get("source") or {}).get("revision")
             except Exception as exc:  # Preserve independent task results.

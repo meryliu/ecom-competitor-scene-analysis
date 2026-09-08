@@ -1,0 +1,59 @@
+{
+  "ir_version": "analysis_ir/1.0",
+  "analysis_task": {
+    "query": "26年7月拼多多gmv同比变化以及归因",
+    "analysis_goal": "回答2026年7月拼多多支付GMV同比变化，并按支付GMV公式进行因子归因",
+    "metrics": [
+      {"metric_id": "payment_gmv", "name": "支付GMV", "metric_object": "volume", "unit": "待元信息解析"},
+      {"metric_id": "mac", "name": "MAC", "metric_object": "volume", "unit": "待元信息解析"},
+      {"metric_id": "mac_monthly_orders", "name": "MAC月单量", "metric_object": "volume", "unit": "待元信息解析"},
+      {"metric_id": "mac_order_price", "name": "MAC订单价", "metric_object": "volume", "unit": "待元信息解析"}
+    ],
+    "periods": {"analysis": "2026-07", "analysis_last_year": "2025-07"},
+    "scope": "拼多多",
+    "filters": [],
+    "assumptions": [
+      {"id": "gmv_default", "description": "用户未区分支付/结算GMV，本次按支付GMV处理", "source": "business_policy"}
+    ]
+  },
+  "views": [{"view_id": "pdd"}],
+  "dimension_trees": [],
+  "input_adaptations": [],
+  "fact_observations": [],
+  "metric_compositions": [],
+  "derived_requirements": [],
+  "custom_calculations": [],
+  "attribution_targets": [{
+    "target_id": "payment_gmv_yoy_attribution",
+    "metric_ref": "payment_gmv",
+    "metric_object": "volume",
+    "scenario": "metric_change",
+    "target_semantics": "absolute_delta",
+    "decomposition": "formula",
+    "periods": {"analysis": "2026-07", "comparison": "2025-07"},
+    "view_id": "pdd",
+    "dimensions": {"TOP6平台": "拼多多"},
+    "factors": [
+      {"factor_id": "mac", "kind": "metric", "metric_ref": "mac"},
+      {"factor_id": "mac_monthly_orders", "kind": "metric", "metric_ref": "mac_monthly_orders"},
+      {"factor_id": "mac_order_price", "kind": "metric", "metric_ref": "mac_order_price"},
+      {"factor_id": "month_days_ratio", "kind": "literal", "values_by_period_role": {"analysis": 1.0333333333333334, "comparison": 1.0333333333333334}}
+    ],
+    "formula": {
+      "op": "multiply",
+      "args": [
+        {"factor_ref": "mac"},
+        {"factor_ref": "mac_monthly_orders"},
+        {"factor_ref": "mac_order_price"},
+        {"factor_ref": "month_days_ratio"}
+      ]
+    },
+    "criticality": "core"
+  }],
+  "output_requirements": [{
+    "requirement_id": "answer",
+    "source_requirement_refs": ["payment_gmv_yoy_attribution"],
+    "criticality": "core"
+  }],
+  "clarifications": []
+}

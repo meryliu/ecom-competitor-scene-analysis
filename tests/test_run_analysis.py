@@ -116,6 +116,57 @@ class RunAnalysisTests(unittest.TestCase):
             "resolution_policy": {"sha256": "policy", "engine_version": "1.0.0"},
         }
 
+    def test_metric_definition_request_resolves_without_compile_or_fetch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_path = root / "definition.json"
+            work_dir = root / "run"
+            input_path.write_text(json.dumps({
+                "schema_version": "metric_definition_request/1.0",
+                "query": "支付GMV的口径是什么",
+                "metrics": ["支付GMV"],
+            }, ensure_ascii=False), encoding="utf-8")
+
+            class Gateway:
+                def __init__(self, *args, **kwargs):
+                    self.fetch_called = False
+
+                def resolve(self, request):
+                    self.request = request
+                    return {
+                        "schema_version": "resolved_capabilities/1.0",
+                        "source": {
+                            "revision": 42,
+                            "schema_hash": "schema",
+                            "freshness": "live",
+                        },
+                        "metric_bindings": {"支付GMV": "支付GMV"},
+                        "task_resolutions": {"default": {
+                            "metric_bindings": {"支付GMV": "支付GMV"},
+                            "resolution_cases": [],
+                        }},
+                        "resolution_cases": [],
+                        "metrics": {"支付GMV": {
+                            "unit": "亿元",
+                            "definition": "用户支付订单金额总和",
+                            "definition_source": "指标元信息.口径定义",
+                            "supported_grains": ["month"],
+                            "dimensions": ["TOP6平台"],
+                        }},
+                    }
+
+                def fetch(self, request):
+                    raise AssertionError("definition-only request must not fetch")
+
+            argv = ["run_analysis.py", "--input", str(input_path), "--work-dir", str(work_dir)]
+            with patch.object(sys, "argv", argv), patch.object(run_analysis, "FeishuCompetitorGateway", Gateway):
+                self.assertEqual(run_analysis.main(), 0)
+            answer = json.loads((work_dir / "answer-payload.json").read_text(encoding="utf-8"))
+            self.assertEqual(answer["schema_version"], "metric_definition_answer/1.0")
+            self.assertEqual(answer["status"], "success")
+            self.assertEqual(answer["definitions"][0]["definition"], "用户支付订单金额总和")
+            self.assertFalse((work_dir / "fetch-request.json").exists())
+
     @staticmethod
     def _ambiguous_attribution_ir() -> dict:
         ir = simple_ir()

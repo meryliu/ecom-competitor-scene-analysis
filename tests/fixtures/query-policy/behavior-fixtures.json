@@ -1,6 +1,6 @@
 {
   "schema_version": "query_policy_fixtures/1.0",
-  "policy_version": "query-policy/1.0.0",
+  "policy_version": "query-policy/1.0.1",
   "cases": [
     {"case_id": "term-payment-order-price", "kind": "positive", "query": "看一下京东8月订单价", "expected_rules": ["terminology-disambiguation"], "expected_contains": ["支付订单价"]},
     {"case_id": "term-explicit-protection", "kind": "negative", "query": "看一下京东8月结算订单价", "expected_rules": ["user-explicit-priority"], "forbidden_contains": ["支付订单价"]},

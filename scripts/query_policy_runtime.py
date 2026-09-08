@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
+import unicodedata
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -41,6 +43,19 @@ def canonical_json(value: Any) -> str:
 
 def value_hash(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def normalize_policy_text(value: Any) -> str:
+    """Return the canonical form used by Query Policy route matching.
+
+    Policy routing is lexical and intentionally conservative: it must not
+    rewrite the user's query, but equivalent Unicode/case/spacing forms
+    should reach the same rule candidates.  Keep this helper local to the
+    policy layer so it does not couple routing to source/provider code.
+    """
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    text = re.sub(r"\s+", "", text).strip().lower()
+    return re.sub(r"[:：,，;；/\\_\-—()（）\[\]【】!?！？。]+", "", text)
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -338,6 +353,32 @@ def validate_policy(
     always_ids = set(_require_strings(index.get("always_rule_ids") or [], "always_rule_ids", allow_empty=True))
     if not (routed_ids | always_ids) <= set(rules):
         raise QueryPolicyError("QP_INDEX_INCONSISTENT", "routing references an unknown rule", stage="validate")
+    indexed_terms: set[tuple[str, str]] = set()
+    for route, rule_ids in routing.items():
+        for term in str(route).split("|"):
+            normalized = normalize_policy_text(term)
+            if not normalized:
+                raise QueryPolicyError(
+                    "QP_INDEX_INCONSISTENT",
+                    "routing contains an empty term after normalization",
+                    stage="validate",
+                )
+            for rule_id in rule_ids:
+                indexed_terms.add((normalized, str(rule_id)))
+    for rule_id, rule in rules.items():
+        rule_routing = rule.get("routing") or {}
+        terms = rule_routing.get("terms") if isinstance(rule_routing, dict) else None
+        if not isinstance(terms, list):
+            continue
+        for term in terms:
+            normalized = normalize_policy_text(term)
+            if normalized and (normalized, rule_id) not in indexed_terms:
+                raise QueryPolicyError(
+                    "QP_INDEX_INCOMPLETE",
+                    "active rule routing term is not reachable from the policy index",
+                    stage="validate",
+                    details={"rule_id": rule_id, "term": term},
+                )
     return limits
 
 
@@ -352,9 +393,10 @@ def load_policy(root: Path = POLICY_ROOT) -> tuple[dict[str, Any], dict[str, Any
 
 def _selected_ids(query: str, index: dict[str, Any], rules: dict[str, dict[str, Any]]) -> list[str]:
     matched: set[str] = set()
+    normalized_query = normalize_policy_text(query)
     for route, rule_ids in (index.get("routing") or {}).items():
-        terms = [term for term in str(route).split("|") if term]
-        if any(term in query for term in terms):
+        terms = [normalize_policy_text(term) for term in str(route).split("|") if term]
+        if any(term and term in normalized_query for term in terms):
             matched.update(str(rule_id) for rule_id in rule_ids)
     if not matched:
         return []

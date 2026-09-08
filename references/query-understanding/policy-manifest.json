@@ -1,20 +1,20 @@
 {
   "schema_version": "query_policy_manifest/1.0",
-  "policy_version": "query-policy/1.0.0",
+  "policy_version": "query-policy/1.0.1",
   "source_revision": 100,
   "source_url": "https://bytedance.larkoffice.com/wiki/EzETw3vCoiNEw3kCx2gcWZt4nvd",
   "document_id": "CH40dppXHoCsMSxE7l9cLXqpnjb",
   "document_sha256": "c77746685a02ec4f4bee920d5c4aa928ff24bd5c51f82fe8bd32263e22411b8c",
-  "index_sha256": "9c36ff5f81fb3f8379e56960cadd5aa3c41543bf13eb9c427c442ff0052e6cc4",
+  "index_sha256": "06c0ea170b3e75dc74be298495eaca6f7bba04e4c908e0739d9e62872f785306",
   "rule_hashes": {
-    "user-explicit-priority": "c833273e18cf042ed5b7f297fb178161bdb4303f3b77d4cc673cf42fe2cc2584",
-    "terminology-disambiguation": "aa704367196c61b3b293d4aac5910a13eee704ffad12382ad403eab9b41b1cb2",
-    "single-platform-payment-gmv-attribution": "a8af2aeba638fbb2199fc9bd1f34dbdac8cf6f7b75d30d9d3ce88abc5afdfeb1",
-    "top6-payment-gmv-performance": "83a91665ac5def893dfe429520d0629773b6c728e4836edc4823ab08e8212e1c",
-    "single-platform-settlement-gmv": "09d00543cffd57c9a1fda62924826f6e4382a2083a532e849ff815704bd04963",
-    "top6-settlement-gmv": "3c351f3f4a4dc6073ec13e3c0c115f1945324aee948262a0f8f7cae21d236240",
-    "jd-commission": "43e498cd1af051d9ff3b91ee9e2b954413931494b518b1bf73b903d6c8930e91",
-    "gmv-defaults": "052f88eae78296203634d80fa46ee7d8809f305c93f0228327db81990e14ac71"
+    "user-explicit-priority": "a6ac726884fd19e9fe64687b4ce1bbba7740f80cd85425a057e935338118d6f2",
+    "terminology-disambiguation": "58f77a2c8c9e52dc35d41d754c2420f390ca0387c37759e266dc71e48046c4db",
+    "single-platform-payment-gmv-attribution": "21035fb94eb72ea09a603d9322252f7651a11ee00103a44a8d77e8687fbc0559",
+    "top6-payment-gmv-performance": "76271a6372b961ac904d50899e2552f43f29798b4547fbfb01dcba1d9fcff2e3",
+    "single-platform-settlement-gmv": "143239e36282ffd7c133e82d067d7f9433d3bfa31b96596bd719fe970128bcc5",
+    "top6-settlement-gmv": "b5d53563629205d02b67593716e6471c4f13c5fddd57e949c9a85ac679bd8aec",
+    "jd-commission": "d330954a66d031a0a90d7f8df409e5ab1af7de87336471bf1180308675e5f333",
+    "gmv-defaults": "256038c93779cb3b500567c6b8c9980f4f10c3aafe4874c6187a3757ade668ad"
   },
-  "policy_sha256": "2a64b69ce869885ceefad510c84db9449cf6ffab4cacb32c9e1abf50194202c2"
+  "policy_sha256": "dec5de801730fcac86d2af0fca35036ed73c8e0e96e95421a3d137c339254448"
 }

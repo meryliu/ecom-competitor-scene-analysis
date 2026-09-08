@@ -5,7 +5,7 @@ Query Policy 是标准 IR 生成前的可旁路业务增强层。它只补充业
 ## 运行边界
 
 1. 每个用户显式独立问题先形成一个不可变 `raw_query` task；规则展开留在同一 task 内，不把展开项改造成新的用户问题。
-2. 调用 `scripts/select_query_policy.py --input <raw-query.json> --output <query-policy-packet.json>` 只取得与当前 Query 相关的有界规则包，其中 input 必须是 `{"raw_query":"用户原始 Query"}` JSON 对象。选择器不接受 Query 文本参数或 `--query` 别名。`no_match`、`fallback_raw`、命令非零、超时或输出不可解析时，禁止再次尝试 Policy，直接以原始 Query 按 [../analysis-request-contract.md](../analysis-request-contract.md) 生成 IR。
+2. 调用 `scripts/select_query_policy.py --input <raw-query.json> --output <query-policy-packet.json>` 只取得与当前 Query 相关的有界规则包，其中 input 必须是 `{"raw_query":"用户原始 Query"}` JSON 对象。选择器不接受 Query 文本参数或 `--query` 别名。Selector 对路由副本执行 Unicode NFKC、去空白、英文大小写和路由标点归一化，但 `raw_query` 不得修改；集中索引由 active rule 的 `routing.terms` 编译补全并校验规则可达性。`no_match`、`fallback_raw`、命令非零、超时或输出不可解析时，禁止再次尝试 Policy，直接以原始 Query 按 [../analysis-request-contract.md](../analysis-request-contract.md) 生成 IR。
 3. `selected` 时，在临时语义帧中应用规则。`analysis_task.query` 始终保留原始 Query；默认和展开写入 `analysis_goal`、指标、范围、requirements 与可读业务 assumptions。
 4. 写出 `query_policy_decision/1.0` 和候选 IR 后调用 `scripts/validate_query_policy_application.py`。带 `ir_effect_contract` 的已应用 action 必须用 `produced_refs` 绑定其实际生成的 IR 目标。校验器在同一事务内只对这些目标执行契约允许的协议字段规范化，并在 `commit` 或 `commit_pending_confirmation` 时写出 `committed_ir_path`；后续统一 runner 只消费该文件，不再消费校验前候选 IR。`commit_clarification` 直接向用户询问规则正常产生的业务问题。
 5. `fallback_raw` 表示增强故障，不是业务状态。按 task 丢弃临时语义帧、默认、展开、assumptions、clarifications 和 action 记录，再从原始 Query 生成一次基础 IR。不得因此输出 `blocked`、`waiting_confirmation` 或非零分析状态。
@@ -26,14 +26,14 @@ Policy 降级不放宽主流程校验。回退后的原始 Query 仍可被现有
 - `rewrite`：规范化结果与现有语义相同时不提交。
 - `clarify`：同一缺失字段和语义作用域只产生一个问题。
 
-选择器先按原始 Query 高召回相关领域规则，再展开显式依赖。`depends_on` 仅确保依赖规则进入规则包，不代表无条件执行；依赖规则仍须独立满足 applicability。对已加载规则做有界不动点判断，最多使用 packet 中的 `max_application_rounds`。没有新语义变化时立即结束。
+选择器先按原始 Query 高召回相关领域规则，再展开显式依赖。`depends_on` 仅确保依赖规则进入规则包，不代表无条件执行；依赖规则仍须独立满足 applicability。应用器维护 task-local 临时语义帧，区分用户显式值、Policy 默认值和未知值，并按用户显式优先、规则优先级和依赖顺序应用已加载规则。前置规则改变语义帧后，后置规则可在同一 packet 内重新判断 applicability，直到没有新语义变化或达到 packet 的 `max_application_rounds`；这不是改写用户 Query，也不是动态无限重路由。比如原始 Query 同时含有“GMV”和“归因”时，Selector 应分别召回 `gmv-defaults` 与 `single-platform-payment-gmv-attribution`，前者将通用 GMV 补为支付 GMV，后者再生成公式归因目标。没有新语义变化时立即结束。
 
 ## 决策格式
 
 ```json
 {
   "schema_version": "query_policy_decision/1.0",
-  "policy_version": "query-policy/1.0.0",
+  "policy_version": "query-policy/1.0.1",
   "raw_query": "用户原始 Query",
   "status": "applied|needs_clarification",
   "application_rounds": 1,

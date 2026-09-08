@@ -1,6 +1,6 @@
 {
   "schema_version": "query_policy_rule/1.0",
-  "policy_version": "query-policy/1.0.0",
+  "policy_version": "query-policy/1.0.1",
   "rule_id": "top6-settlement-gmv",
   "name": "TOP6 合计大盘结算 GMV",
   "version": "1.0.0",

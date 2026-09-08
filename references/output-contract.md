@@ -151,7 +151,8 @@
         "metric": "逻辑指标名",
         "source_metric_name": "实际源指标名",
         "unit": "源单位",
-        "definition": "源指标口径定义"
+        "definition": "指标元信息【口径定义】列原文",
+        "definition_source": "指标元信息.口径定义"
       }
     ],
     "dimensions": [
@@ -168,7 +169,9 @@
 }
 ```
 
-该字段只由答案组装阶段使用当前任务已有的事实、公式和算子契约生成，不触发额外取数或注册表读取，也不改变任务状态。`metrics` 按实际源指标去重且只保留一份源口径定义；筛选值最多保留 20 个，超出时附 `value_count` 与 `values_truncated=true`；拆解维度不复制完整成员枚举。`calculations` 只把受支持的白名单 AST 转成可读关键公式，无法安全格式化时保留名称并令 `formula=null`；周上卷折叠为一条权重规则，不展开各周。归因简介缺失时只保留算子名。顶层不得携带公式 AST、哈希、内部 ID、全量维度枚举或源坐标。
+该字段只由答案组装阶段使用当前任务成功结果的事实血缘、固定 source revision 下已解析的指标元信息、公式和算子契约生成，不触发额外取数或注册表读取，也不改变任务状态。`metrics` 按实际源指标去重且只保留一份【口径定义】原文；候选但未参与成功结果的指标不得展示。筛选值最多保留 20 个，超出时附 `value_count` 与 `values_truncated=true`；拆解维度不复制完整成员枚举。`calculations` 只把受支持的白名单 AST 转成可读关键公式，无法安全格式化时保留名称并令 `formula=null`；周上卷折叠为一条权重规则，不展开各周。归因简介缺失时只保留算子名。顶层不得携带公式 AST、哈希、内部 ID、全量维度枚举或源坐标。
+
+首轮纯口径请求可使用 `metric_definition_request/1.0`，由现有 Gateway Resolve 唯一绑定源指标后返回 `metric_definition_answer/1.0`；该分支不执行取数或计算。分析后的口径追问优先复用上一轮 `answer_basis`，仅在定义缺失时重新 Resolve。
 
 ## 状态
 

@@ -17,7 +17,7 @@ python3 scripts/compile_query_policy.py \
 python3 scripts/compile_query_policy.py --check <empty-build-dir>
 ```
 
-5. 比较构建目录与拟替换资源的 canonical JSON 语义，确认索引、8 条或本次批准数量的规则、依赖、动作和 source refs 均符合评审结论。将构建产物作为同一次代码变更替换 `policy-index.json`、`policy-manifest.json` 与 `rules/`；应用契约和 schema 除非协议本身变化，否则不随业务规则改写。
+5. 比较构建目录与拟替换资源的 canonical JSON 语义，确认索引、8 条或本次批准数量的规则、依赖、动作和 source refs 均符合评审结论。路由索引由 active rule 的 `routing.terms` 自动补全并经过可达性校验；文本归一化只用于路由副本，不改写原始 Query。将构建产物作为同一次代码变更替换 `policy-index.json`、`policy-manifest.json` 与 `rules/`；应用契约和 schema 除非协议本身变化，否则不随业务规则改写。
 6. 运行 Query Policy 行为测试、相关主流程回归、全量测试和 Skill 校验。代码评审至少检查 source revision、policy hash、规则/fixture 覆盖、候选引擎零改动，以及 fail-open 用例。
 
 离线编译或检查失败时停止新版本发布，当前已校验版本保持不变。正常用户分析中的 Policy 失败则按应用契约丢弃增强状态并使用原始 Query；两类失败不可混为业务阻断。

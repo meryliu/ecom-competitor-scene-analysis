@@ -1,6 +1,6 @@
 {
   "schema_version": "query_policy_rule/1.0",
-  "policy_version": "query-policy/1.0.0",
+  "policy_version": "query-policy/1.0.1",
   "rule_id": "top6-payment-gmv-performance",
   "name": "TOP6 合计大盘支付 GMV 表现",
   "version": "1.0.0",

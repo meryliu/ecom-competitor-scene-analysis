@@ -15,6 +15,7 @@ from query_policy_runtime import (
     POLICY_MANIFEST_SCHEMA,
     POLICY_RULE_SCHEMA,
     load_policy,
+    normalize_policy_text,
     validate_policy,
     value_hash,
 )
@@ -96,6 +97,37 @@ def compile_review_bundle(
         str(item.get("rule_id")): _runtime_rule(item, policy_version)
         for item in active_sources
     }
+    routing: dict[str, list[str]] = {}
+    for route, rule_ids in (source_index.get("routing") or {}).items():
+        for term in str(route).split("|"):
+            normalized = normalize_policy_text(term)
+            if not normalized:
+                raise QueryPolicyCompileError(
+                    f"policy index route {route!r} is empty after normalization"
+                )
+            bucket = routing.setdefault(normalized, [])
+            for rule_id in rule_ids if isinstance(rule_ids, list) else []:
+                rule_id = str(rule_id)
+                if rule_id not in bucket:
+                    bucket.append(rule_id)
+    # Rule-level routing is the source of truth for reachability.  Preserve
+    # explicitly reviewed index routes above, then union every active rule's
+    # own terms into the generated runtime index.
+    for rule_id, rule in rules.items():
+        rule_routing = rule.get("routing") or {}
+        terms = rule_routing.get("terms") if isinstance(rule_routing, dict) else None
+        if not isinstance(terms, list):
+            continue
+        for term in terms:
+            normalized = normalize_policy_text(term)
+            if not normalized:
+                raise QueryPolicyCompileError(
+                    f"{rule_id} contains an empty routing term after normalization"
+                )
+            bucket = routing.setdefault(normalized, [])
+            if rule_id not in bucket:
+                bucket.append(rule_id)
+
     index = {
         "schema_version": POLICY_INDEX_SCHEMA,
         "policy_version": policy_version,
@@ -103,7 +135,7 @@ def compile_review_bundle(
         "global_invariants": deepcopy(source_index.get("global_invariants") or []),
         "always_rule_ids": ["user-explicit-priority"],
         "active_rule_ids": list(rules),
-        "routing": deepcopy(source_index.get("routing") or {}),
+        "routing": routing,
         "limits": {
             "max_selected_rules": 8,
             "max_dependency_depth": 4,

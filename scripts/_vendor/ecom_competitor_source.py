@@ -514,7 +514,11 @@ def parse_metric_metadata(rows: list[list[str]]) -> dict[str, dict[str, Any]]:
                 "supported_grains": _header_index(row, ["可支持时间粒度", "支持时间粒度", "时间粒度"]),
                 "dimensions": _header_index(row, ["可支持拆解维度", "支持维度", "拆解维度"]),
                 "aggregation": aggregation_pos,
-                "notes": _header_index(row, ["口径备注", "备注", "口径说明"]),
+                # The source-of-truth column is 口径定义. Keep the legacy
+                # aliases as a read-only compatibility fallback for older
+                # snapshots; do not index usage notes or source formulas.
+                "definition": _header_index(row, ["口径定义"]),
+                "legacy_notes": _header_index(row, ["口径备注", "备注", "口径说明"]),
             }
             break
     if header_row is None:
@@ -535,6 +539,7 @@ def parse_metric_metadata(rows: list[list[str]]) -> dict[str, dict[str, Any]]:
         aggregation = cell("aggregation")
         additive = "不可聚合" not in aggregation and "可聚合" in aggregation
         supported_grains = split_grains(cell("supported_grains"))
+        definition = cell("definition") if positions["definition"] is not None else cell("legacy_notes")
         metrics[name] = {
             "aliases": split_terms(cell("aliases")),
             "unit": cell("unit"),
@@ -544,7 +549,10 @@ def parse_metric_metadata(rows: list[list[str]]) -> dict[str, dict[str, Any]]:
             "aggregation_mode": "additive" if additive else "non_additive" if aggregation else "unknown",
             "additive": additive,
             "arithmetic": "加减乘除" in aggregation,
-            "notes": cell("notes"),
+            "definition": definition,
+            # Retain the old key for cached indexes and downstream callers.
+            "notes": definition,
+            "definition_source": "指标元信息.口径定义" if positions["definition"] is not None else "指标元信息.legacy_notes",
         }
     if not metrics:
         raise SkillError("invalid_metric_metadata", "指标元信息中没有可用指标")

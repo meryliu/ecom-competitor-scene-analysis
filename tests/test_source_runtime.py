@@ -24,6 +24,17 @@ import io  # noqa: E402
 
 
 class SourceRuntimeTests(unittest.TestCase):
+    def test_metric_metadata_uses_definition_column_only_for_definition(self) -> None:
+        rows = list(csv.reader(io.StringIO(
+            "指标名称,数值单位,可支持时间粒度,可支持拆解维度,聚合方式,口径定义,使用说明,指标公式\n"
+            "综合TR,%,月度,TOP6平台,可聚合,平台佣金收入/GMV,京东另有3P专项口径,佣金收入/GMV\n"
+        )))
+        metadata = parse_metric_metadata(rows)["综合TR"]
+        self.assertEqual(metadata["definition"], "平台佣金收入/GMV")
+        self.assertEqual(metadata["definition_source"], "指标元信息.口径定义")
+        self.assertNotIn("usage_notes", metadata)
+        self.assertNotIn("source_formula", metadata)
+
     def test_metric_metadata_parses_supported_grain_and_aggregation_mode(self) -> None:
         rows = list(csv.reader(io.StringIO(
             "指标名称,指标别名,数值单位,可支持时间粒度,可支持拆解维度,聚合方式,口径备注\n"

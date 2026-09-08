@@ -1,6 +1,6 @@
 {
   "schema_version": "query_policy_index/1.0",
-  "policy_version": "query-policy/1.0.0",
+  "policy_version": "query-policy/1.0.1",
   "source_revision": 100,
   "global_invariants": [
     "user_explicit_over_default",
@@ -21,12 +21,33 @@
     "gmv-defaults"
   ],
   "routing": {
-    "订单价|单价|平均单价|客单价|用户平均单价|用户单均价|MAC单价": ["terminology-disambiguation"],
-    "电商大盘GMV": ["terminology-disambiguation", "top6-payment-gmv-performance"],
-    "支付GMV": ["single-platform-payment-gmv-attribution", "top6-payment-gmv-performance", "gmv-defaults"],
-    "结算GMV": ["single-platform-settlement-gmv", "top6-settlement-gmv", "gmv-defaults"],
-    "京东闭环电商佣金收入|闭环电商佣金收入": ["jd-commission"],
-    "GMV": ["gmv-defaults"]
+    "订单价": ["terminology-disambiguation"],
+    "单价": ["terminology-disambiguation"],
+    "平均单价": ["terminology-disambiguation"],
+    "客单价": ["terminology-disambiguation"],
+    "用户平均单价": ["terminology-disambiguation"],
+    "用户单均价": ["terminology-disambiguation"],
+    "mac单价": ["terminology-disambiguation"],
+    "电商大盘gmv": ["terminology-disambiguation", "top6-payment-gmv-performance"],
+    "支付gmv": ["single-platform-payment-gmv-attribution", "top6-payment-gmv-performance", "gmv-defaults"],
+    "结算gmv": ["single-platform-settlement-gmv", "top6-settlement-gmv", "gmv-defaults"],
+    "京东闭环电商佣金收入": ["jd-commission"],
+    "闭环电商佣金收入": ["jd-commission"],
+    "gmv": ["gmv-defaults"],
+    "归因": ["single-platform-payment-gmv-attribution", "single-platform-settlement-gmv"],
+    "拆解": ["single-platform-payment-gmv-attribution"],
+    "原因": ["single-platform-payment-gmv-attribution"],
+    "驱动": ["single-platform-payment-gmv-attribution"],
+    "贡献": ["single-platform-payment-gmv-attribution"],
+    "拉动": ["single-platform-payment-gmv-attribution"],
+    "拖累": ["single-platform-payment-gmv-attribution"],
+    "结算率": ["single-platform-settlement-gmv", "top6-settlement-gmv"],
+    "表现": ["single-platform-settlement-gmv", "top6-payment-gmv-performance"],
+    "top6": ["top6-settlement-gmv", "top6-payment-gmv-performance"],
+    "大盘": ["top6-settlement-gmv"],
+    "京东": ["jd-commission"],
+    "3p佣金": ["jd-commission"],
+    "可比口径": ["jd-commission"]
   },
   "limits": {
     "max_selected_rules": 8,

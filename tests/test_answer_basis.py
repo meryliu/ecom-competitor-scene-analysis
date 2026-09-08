@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from run_analysis import compact_task_answer  # noqa: E402
-from run_fast_query import build_answer_basis  # noqa: E402
+from run_fast_query import build_answer_basis, enrich_answer_basis_definitions  # noqa: E402
 
 
 def fact(
@@ -94,6 +94,25 @@ class AnswerBasisTests(unittest.TestCase):
             "unit": "亿元",
             "definition": "含税支付金额；按类目拆解时以支付商品所属类目为准",
         }])
+
+    def test_definition_source_is_preserved_when_present(self) -> None:
+        manifest = base_manifest()
+        manifest["normalized_facts"][0]["definition_source"] = "指标元信息.口径定义"
+        metric = build_answer_basis(manifest)["metrics"][0]
+        self.assertEqual(metric["definition_source"], "指标元信息.口径定义")
+
+    def test_terminal_metadata_projection_only_updates_selected_metrics(self) -> None:
+        answer = {"answer_basis": build_answer_basis(base_manifest())}
+        enrich_answer_basis_definitions(answer, {
+            "源销售额": {
+                "definition": "源索引中的最新口径",
+                "definition_source": "指标元信息.口径定义",
+            },
+            "未使用指标": {"definition": "不应展示"},
+        })
+        metric = answer["answer_basis"]["metrics"][0]
+        self.assertEqual(metric["definition"], "源索引中的最新口径")
+        self.assertNotIn("未使用指标", json.dumps(answer, ensure_ascii=False))
 
     def test_same_source_metric_across_periods_is_deduplicated(self) -> None:
         manifest = base_manifest()

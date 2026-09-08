@@ -1,6 +1,6 @@
 {
   "schema_version": "query_policy_rule/1.0",
-  "policy_version": "query-policy/1.0.0",
+  "policy_version": "query-policy/1.0.1",
   "rule_id": "user-explicit-priority",
   "name": "用户明确表达优先",
   "version": "1.0.0",

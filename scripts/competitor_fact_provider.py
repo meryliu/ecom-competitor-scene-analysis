@@ -622,7 +622,7 @@ def fetch_facts_from_index(
                 "dimensions": {} if cell["dimension"] is None else {cell["dimension"]: cell["dimension_value"]},
                 "value": value,
                 "unit": metadata.get("unit", demand.get("unit", "")),
-                "definition": metadata.get("notes") or cell["metric"],
+                "definition": metadata.get("definition") or metadata.get("notes") or cell["metric"],
                 "additive": metadata.get("additive"),
                 "aggregation": metadata.get("aggregation"),
                 "missing": value is None,
