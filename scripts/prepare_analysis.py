@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from copy import deepcopy
+from datetime import date
 from typing import Any
 
 from analysis_ir_normalizer import (
@@ -17,6 +18,13 @@ from constraint_provenance import effective_constraint_provenance
 from ir_contract_guard import (
     IRContractError,
     validate_analysis_ir_contract,
+)
+from period_resolution import (
+    default_grains,
+    native_period,
+    parse_span_token,
+    periods_for_grain,
+    span_token,
 )
 from source_capability import (
     evaluate_direct_capability,
@@ -34,7 +42,7 @@ from set_materialization import (
     materialize_set_spec,
     set_aggregate_expression,
 )
-from time_rollup import iso_weeks_covering
+from time_rollup import iso_weeks_covering, overlap_days
 from unit_scale import UnitScaleError, conversion_factor, formula_scale
 
 
@@ -46,6 +54,11 @@ class PreparationError(ValueError):
 
 
 UNRESOLVED_METADATA_VALUES = {"", "unknown", "待元信息解析", "未解析"}
+PERFORMANCE_YOY_SUPPLEMENT = "performance_yoy_supplement"
+OPTIONAL_POLICY_ENRICHMENT_ROLES = frozenset({PERFORMANCE_YOY_SUPPLEMENT})
+SAFE_OPTIONAL_COMPARISON_ROLES = frozenset({
+    "analysis_last_year", "comparison", "comparison_last_year",
+})
 
 
 def _is_unresolved_metadata(value: Any) -> bool:
@@ -54,6 +67,8 @@ def _is_unresolved_metadata(value: Any) -> bool:
 
 def _canonical_period(value: Any, path: str) -> str:
     """Compatibility helper for internal rollup materialization."""
+    if parse_span_token(value) is not None:
+        return str(value)
     parsed = normalize_period(value)
     if parsed is None:
         raise PreparationError("INVALID_PERIOD", f"{path} 无法识别时期：{value}")
@@ -245,11 +260,177 @@ def _materialize_composition_input_binding(
     }
 
 
-def _apply_requirement_bindings(ir: dict[str, Any], index: dict[str, Any]) -> None:
+def _is_optional_policy_enrichment(requirement: dict[str, Any]) -> bool:
+    return (
+        requirement.get("default_output_role") in OPTIONAL_POLICY_ENRICHMENT_ROLES
+        and requirement.get("criticality") == "optional"
+        and requirement.get("provenance") == "business_policy"
+    )
+
+
+def _derived_requirement_roles(
+    requirement: dict[str, Any], derived_registry: dict[str, Any]
+) -> set[str]:
+    if requirement.get("fulfillment_mode") == "source_derived_fact":
+        return {str(requirement.get("source_period_role") or "analysis")}
+    definition = (derived_registry.get("definitions") or {}).get(
+        requirement.get("derived_metric_id")
+    ) or {}
+    return {
+        str(role) for role in (
+            requirement.get("required_period_roles")
+            or definition.get("required_period_roles")
+            or []
+        )
+    }
+
+
+def _effective_derived_period_roles(
+    requirement: dict[str, Any], derived_registry: dict[str, Any]
+) -> list[str]:
+    """Resolve logical derived roles to the physical roles selected by Prepare."""
+    if requirement.get("fulfillment_mode") == "source_derived_fact":
+        return [str(requirement.get("source_period_role") or "analysis")]
+    definition = (derived_registry.get("definitions") or {}).get(
+        requirement.get("derived_metric_id")
+    ) or {}
+    logical_roles = list(
+        requirement.get("required_period_roles")
+        or definition.get("required_period_roles")
+        or []
+    )
+    bindings = requirement.get("period_role_bindings") or {}
+    return [str(bindings.get(str(role), role)) for role in logical_roles]
+
+
+def _nested_period_roles(value: Any) -> set[str]:
+    roles: set[str] = set()
+    if isinstance(value, list):
+        for item in value:
+            roles.update(_nested_period_roles(item))
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            if key in {
+                "fact_role", "period_role", "source_period_role",
+                "target_period_role",
+            } and isinstance(item, str):
+                roles.add(item)
+            elif key in {
+                "period_roles", "required_period_roles", "source_period_roles",
+            } and isinstance(item, list):
+                roles.update(str(role) for role in item)
+            else:
+                roles.update(_nested_period_roles(item))
+    return roles
+
+
+def _remaining_period_role_consumers(
+    ir: dict[str, Any], derived_registry: dict[str, Any]
+) -> set[str]:
+    roles: set[str] = set()
+    for collection in ("fact_observations", "metric_compositions"):
+        for requirement in ir.get(collection) or []:
+            if isinstance(requirement, dict):
+                roles.update(str(role) for role in requirement.get("period_roles") or [])
+    for requirement in ir.get("derived_requirements") or []:
+        if isinstance(requirement, dict):
+            roles.update(_derived_requirement_roles(requirement, derived_registry))
+    for collection in ("custom_calculations", "attribution_targets"):
+        for requirement in ir.get(collection) or []:
+            if not isinstance(requirement, dict):
+                continue
+            roles.update(_nested_period_roles(requirement))
+            if collection == "attribution_targets":
+                roles.update(str(role) for role in (requirement.get("periods") or {}))
+    return roles
+
+
+def _drop_policy_supplements(
+    ir: dict[str, Any], omitted_ids: set[str], derived_registry: dict[str, Any]
+) -> set[str]:
+    if not omitted_ids:
+        return set()
+    known_supplements = {
+        str(item.get("requirement_id")): item
+        for item in ir.get("derived_requirements") or []
+        if isinstance(item, dict)
+        and _is_optional_policy_enrichment(item)
+    }
+    invalid = omitted_ids - set(known_supplements)
+    if invalid:
+        raise PreparationError(
+            "POLICY_SUPPLEMENT_OMISSION_INVALID",
+            "only validated performance YoY supplements may be omitted",
+            {"requirement_ids": sorted(invalid)},
+        )
+    removed_dependency_roles = {
+        role
+        for requirement_id in omitted_ids
+        for role in _derived_requirement_roles(
+            known_supplements[requirement_id], derived_registry
+        )
+    }
+    for collection in (
+        "fact_observations", "metric_compositions", "derived_requirements",
+        "custom_calculations", "attribution_targets",
+    ):
+        id_field = "target_id" if collection == "attribution_targets" else "requirement_id"
+        ir[collection] = [
+            item for item in ir.get(collection) or []
+            if not isinstance(item, dict)
+            or str(item.get(id_field) or "") not in omitted_ids
+        ]
+    outputs: list[dict[str, Any]] = []
+    for output in ir.get("output_requirements") or []:
+        if not isinstance(output, dict):
+            outputs.append(output)
+            continue
+        clone = deepcopy(output)
+        refs = [
+            ref for ref in clone.get("source_requirement_refs") or []
+            if str(ref) not in omitted_ids
+        ]
+        if refs:
+            clone["source_requirement_refs"] = refs
+            outputs.append(clone)
+    ir["output_requirements"] = outputs
+    ir["resolution_blocks"] = [
+        block for block in ir.get("resolution_blocks") or []
+        if not isinstance(block, dict)
+        or str(block.get("requirement_id") or "") not in omitted_ids
+    ]
+    remaining_roles = _remaining_period_role_consumers(ir, derived_registry)
+    removable_roles = (
+        removed_dependency_roles
+        & SAFE_OPTIONAL_COMPARISON_ROLES
+        - remaining_roles
+    )
+    task = ir.get("analysis_task") or {}
+    for field in ("periods", "period_requests"):
+        values = task.get(field)
+        if not isinstance(values, dict):
+            continue
+        for role in removable_roles:
+            values.pop(role, None)
+        if field == "period_requests" and not values:
+            task.pop(field, None)
+    return removable_roles
+
+
+def _apply_requirement_bindings(
+    ir: dict[str, Any], index: dict[str, Any], derived_registry: dict[str, Any]
+) -> None:
     """Materialize requirement-scoped source bindings without changing the core metric."""
     bindings = index.get("requirement_bindings") or {}
     if not bindings:
         return
+    omitted_ids = {
+        str(requirement_id)
+        for requirement_id, binding in bindings.items()
+        if isinstance(binding, dict)
+        and binding.get("mode") == "omit_policy_supplement"
+    }
+    _drop_policy_supplements(ir, omitted_ids, derived_registry)
     metrics = _metric_map(ir)
     requirements: dict[str, dict[str, Any]] = {}
     for collection, id_field in (
@@ -728,6 +909,356 @@ def _composition_input_refs(
     return refs
 
 
+def _composition_period_policy(
+    metric: dict[str, Any], composition_registry: dict[str, Any]
+) -> tuple[str | None, dict[str, Any] | None]:
+    composition = _composition_for_metric(metric, composition_registry)
+    if composition is None:
+        return None, None
+    composition_id, definition = composition
+    policy = definition.get("period_aggregation", "period_only")
+    if policy not in {"sum", "recompute", "period_only"}:
+        raise PreparationError(
+            "INVALID_PERIOD_AGGREGATION",
+            f"指标组合 {composition_id} 的 period_aggregation 非法：{policy}",
+        )
+    return str(policy), definition
+
+
+def _period_executable(
+    index: dict[str, Any],
+    metric: dict[str, Any],
+    period: str,
+    dimensions: dict[str, Any],
+    dimension_refs: list[str],
+    composition_registry: dict[str, Any],
+    prepared_inputs: dict[str, Any] | None = None,
+    metrics: dict[str, dict[str, Any]] | None = None,
+) -> bool:
+    if _direct_available(
+        index, str(metric.get("name") or ""), period, dimensions, dimension_refs
+    ):
+        return True
+    policy, definition = _composition_period_policy(metric, composition_registry)
+    if policy is None or definition is None:
+        return _aggregation_children(
+            index,
+            str(metric.get("name") or ""),
+            period,
+            dimensions,
+            dimension_refs,
+        ) is not None
+    for item in definition.get("inputs") or []:
+        input_role = str((item or {}).get("role") or "")
+        prepared_input = (prepared_inputs or {}).get(input_role) or {}
+        input_metric = (metrics or {}).get(str(prepared_input.get("metric_ref"))) or {}
+        name = str(
+            input_metric.get("name")
+            or (item or {}).get("metric")
+            or ""
+        )
+        input_dimensions = prepared_input.get("dimensions", dimensions)
+        input_dimension_refs = prepared_input.get("dimension_refs", dimension_refs)
+        if not _direct_available(
+            index, name, period, input_dimensions, input_dimension_refs
+        ) and _aggregation_children(
+            index, name, period, input_dimensions, input_dimension_refs
+        ) is None:
+            return False
+    return True
+
+
+def _series_periods(
+    request: dict[str, Any],
+    index: dict[str, Any],
+    metric: dict[str, Any],
+    dimensions: dict[str, Any],
+    dimension_refs: list[str],
+    composition_registry: dict[str, Any],
+    prepared_inputs: dict[str, Any] | None = None,
+    metrics: dict[str, dict[str, Any]] | None = None,
+) -> tuple[str, list[str], bool]:
+    start = date.fromisoformat(request["start"])
+    end = date.fromisoformat(request["end"])
+    explicit = request.get("requested_grain")
+    grains = [str(explicit)] if explicit else default_grains(start, end)
+    for grain in grains:
+        periods = periods_for_grain(
+            start,
+            end,
+            grain,
+            allow_intersecting_weeks=grain == "week",
+        )
+        if periods and all(
+            _period_executable(
+                index,
+                metric,
+                period,
+                dimensions,
+                dimension_refs,
+                composition_registry,
+                prepared_inputs,
+                metrics,
+            )
+            for period in periods
+        ):
+            boundary_spill = grain == "week" and not periods_for_grain(
+                start, end, "week"
+            )
+            return grain, periods, boundary_spill
+    requested = f"按{explicit}" if explicit else "按可支持粒度"
+    raise PreparationError(
+        "SOURCE_PATH_UNAVAILABLE",
+        f"指标 {metric.get('name')} 在 {request.get('label')} 无法{requested}逐期执行",
+        {"metric": metric.get("name"), "period_request": deepcopy(request)},
+    )
+
+
+def _span_role_consumers(
+    ir: dict[str, Any], derived_registry: dict[str, Any]
+) -> list[tuple[str, dict[str, Any], str, str]]:
+    consumers: list[tuple[str, dict[str, Any], str, str]] = []
+    for collection in ("fact_observations", "metric_compositions"):
+        for requirement in ir.get(collection) or []:
+            for role in requirement.get("period_roles") or []:
+                consumers.append((
+                    collection,
+                    requirement,
+                    str(role),
+                    str(requirement.get("metric_ref")),
+                ))
+    for requirement in ir.get("derived_requirements") or []:
+        definition = (derived_registry.get("definitions") or {}).get(
+            requirement.get("derived_metric_id")
+        ) or {}
+        roles = requirement.get("required_period_roles") or definition.get(
+            "required_period_roles"
+        ) or []
+        for role in roles:
+            consumers.append((
+                "derived_requirements",
+                requirement,
+                str(role),
+                str(requirement.get("metric_ref")),
+            ))
+    return consumers
+
+
+def _rewrite_period_expansion_refs(
+    ir: dict[str, Any], replacement_ids: dict[str, list[str]]
+) -> None:
+    for output in ir.get("output_requirements") or []:
+        refs: list[str] = []
+        for ref in output.get("source_requirement_refs") or []:
+            refs.extend(replacement_ids.get(str(ref), [str(ref)]))
+        if refs:
+            output["source_requirement_refs"] = list(dict.fromkeys(refs))
+
+
+def _resolve_period_requests(
+    ir: dict[str, Any],
+    index: dict[str, Any],
+    composition_registry: dict[str, Any],
+    derived_registry: dict[str, Any],
+) -> list[dict[str, Any]]:
+    task = ir.get("analysis_task") or {}
+    requests = task.get("period_requests") or {}
+    if not requests:
+        return []
+    periods = task.setdefault("periods", {})
+    metrics = _metric_map(ir)
+    resolutions: list[dict[str, Any]] = []
+    expansions: dict[tuple[str, str], dict[str, Any]] = {}
+    consumers = _span_role_consumers(ir, derived_registry)
+
+    for role, request in requests.items():
+        start = date.fromisoformat(request["start"])
+        end = date.fromisoformat(request["end"])
+        role_consumers = [item for item in consumers if item[2] == str(role)]
+        if not role_consumers:
+            raise PreparationError(
+                "UNBOUND_PERIOD_REQUEST", f"时期跨度 {role} 没有绑定任何指标需求"
+            )
+        native = native_period(start, end)
+        if native and request.get("requested_grain") is None and all(
+            _period_executable(
+                index,
+                metrics.get(metric_ref) or {},
+                native,
+                requirement.get("dimensions") or {},
+                requirement.get("dimension_refs") or [],
+                composition_registry,
+                requirement.get("composition_input_bindings"),
+                metrics,
+            )
+            for _, requirement, _, metric_ref in role_consumers
+        ):
+            periods[str(role)] = native
+            resolutions.append({
+                "period_role": str(role),
+                "label": request["label"],
+                "mode": "native",
+                "target_period": native,
+                "requested_grain": None,
+            })
+            continue
+
+        periods[str(role)] = span_token(start, end)
+        for collection, requirement, _, metric_ref in role_consumers:
+            metric = metrics.get(metric_ref) or {}
+            policy, _ = _composition_period_policy(metric, composition_registry)
+            if policy is None:
+                policy = "sum" if metric.get("additive") is True else "period_only"
+            mode = "period_only" if request.get("requested_grain") else policy
+            item = {
+                "period_role": str(role),
+                "requirement_id": requirement.get("requirement_id"),
+                "metric_ref": metric_ref,
+                "label": request["label"],
+                "start": request["start"],
+                "end": request["end"],
+                "mode": mode,
+                "target_period": periods[str(role)],
+                "requested_grain": request.get("requested_grain"),
+            }
+            if mode == "period_only":
+                grain, child_periods, spill = _series_periods(
+                    request,
+                    index,
+                    metric,
+                    requirement.get("dimensions") or {},
+                    requirement.get("dimension_refs") or [],
+                    composition_registry,
+                    requirement.get("composition_input_bindings"),
+                    metrics,
+                )
+                child_roles = [
+                    f"{role}__period_{re.sub(r'[^0-9A-Za-z]+', '_', child).strip('_')}"
+                    for child in child_periods
+                ]
+                for child_role, child_period in zip(child_roles, child_periods):
+                    existing = periods.get(child_role)
+                    if existing is not None and existing != child_period:
+                        raise PreparationError(
+                            "PERIOD_ROLE_COLLISION",
+                            f"生成时期角色 {child_role} 与已有时期冲突",
+                        )
+                    periods[child_role] = child_period
+                item.update({
+                    "output_grain": grain,
+                    "source_periods": child_periods,
+                    "output_period_roles": child_roles,
+                    "boundary_spill": spill,
+                })
+                expansions[(str(requirement.get("requirement_id")), str(role))] = item
+            elif mode in {"sum", "recompute"}:
+                item["candidate_partitions"] = [
+                    [str(component["period"]) for component in path]
+                    for path in _aggregation_candidate_paths(periods[str(role)])
+                ]
+            resolutions.append(item)
+
+    if ir.get("custom_calculations") and expansions:
+        raise PreparationError(
+            "PERIOD_SERIES_CUSTOM_CALCULATION_UNSUPPORTED",
+            "逐期跨度不能自动改写用户自定义计算",
+        )
+
+    replacement_ids: dict[str, list[str]] = {}
+    for collection in ("fact_observations", "metric_compositions"):
+        replaced: list[dict[str, Any]] = []
+        for requirement in ir.get(collection) or []:
+            old_id = str(requirement.get("requirement_id"))
+            expanded_roles: list[str] = []
+            expanded = False
+            for role in requirement.get("period_roles") or []:
+                resolution = expansions.get((old_id, str(role)))
+                if resolution:
+                    expanded_roles.extend(resolution["output_period_roles"])
+                    expanded = True
+                else:
+                    expanded_roles.append(str(role))
+            metric = metrics.get(str(requirement.get("metric_ref"))) or {}
+            keep_multi_role = (
+                collection == "fact_observations"
+                and _composition_for_metric(metric, composition_registry) is None
+            )
+            if not expanded or keep_multi_role:
+                clone = deepcopy(requirement)
+                clone["period_roles"] = expanded_roles
+                replaced.append(clone)
+                replacement_ids[old_id] = [old_id]
+                continue
+            ids: list[str] = []
+            for number, expanded_role in enumerate(expanded_roles, start=1):
+                clone = deepcopy(requirement)
+                clone_id = old_id if number == 1 else f"{old_id}__period_{number:02d}"
+                clone["requirement_id"] = clone_id
+                clone["period_roles"] = [expanded_role]
+                clone["generated_from_period_span"] = old_id
+                replaced.append(clone)
+                ids.append(clone_id)
+            replacement_ids[old_id] = ids
+        ir[collection] = replaced
+
+    derived_replaced: list[dict[str, Any]] = []
+    for requirement in ir.get("derived_requirements") or []:
+        old_id = str(requirement.get("requirement_id"))
+        definition = (derived_registry.get("definitions") or {}).get(
+            requirement.get("derived_metric_id")
+        ) or {}
+        logical_roles = list(
+            requirement.get("required_period_roles")
+            or definition.get("required_period_roles")
+            or []
+        )
+        expanded_by_role = {
+            str(role): expansions.get((old_id, str(role))) for role in logical_roles
+        }
+        expanded = [value for value in expanded_by_role.values() if value]
+        if not expanded:
+            derived_replaced.append(requirement)
+            replacement_ids[old_id] = [old_id]
+            continue
+        lengths = {len(value["output_period_roles"]) for value in expanded}
+        grains = {str(value.get("output_grain")) for value in expanded}
+        if (
+            len(expanded) != len(logical_roles)
+            or len(lengths) != 1
+            or len(grains) != 1
+        ):
+            raise PreparationError(
+                "PERIOD_SERIES_ALIGNMENT_REQUIRED",
+                f"派生需求 {old_id} 的各时期角色必须提供等长、同粒度的跨度请求",
+            )
+        count = lengths.pop()
+        ids: list[str] = []
+        for index_number in range(count):
+            clone = deepcopy(requirement)
+            clone_id = (
+                old_id
+                if index_number == 0
+                else f"{old_id}__period_{index_number + 1:02d}"
+            )
+            clone["requirement_id"] = clone_id
+            clone["period_role_bindings"] = {
+                str(logical_role): expanded_by_role[str(logical_role)][
+                    "output_period_roles"
+                ][index_number]
+                for logical_role in logical_roles
+            }
+            clone["required_period_roles"] = list(logical_roles)
+            clone["generated_from_period_span"] = old_id
+            derived_replaced.append(clone)
+            ids.append(clone_id)
+        replacement_ids[old_id] = ids
+    ir["derived_requirements"] = derived_replaced
+    _rewrite_period_expansion_refs(ir, replacement_ids)
+    task["period_resolutions"] = resolutions
+    task.pop("period_requests", None)
+    return resolutions
+
+
 def _child_period_candidates(period: str) -> list[list[str]]:
     """Compatibility view of candidate paths without rollup metadata."""
     return [
@@ -737,6 +1268,36 @@ def _child_period_candidates(period: str) -> list[list[str]]:
 
 
 def _aggregation_candidate_paths(period: str) -> list[list[dict[str, Any]]]:
+    span = parse_span_token(period)
+    if span is not None:
+        start, end = span
+        paths: list[list[dict[str, Any]]] = []
+        for grain in default_grains(start, end):
+            child_periods = periods_for_grain(
+                start,
+                end,
+                grain,
+                allow_intersecting_weeks=grain == "week",
+            )
+            if not child_periods:
+                continue
+            if grain == "week":
+                components = []
+                for child in child_periods:
+                    days = overlap_days(child, period)
+                    components.append({
+                        "period": child,
+                        "overlap_days": days,
+                        "weight": days / 7.0,
+                        "calendar": "iso8601",
+                    })
+                paths.append(components)
+            else:
+                paths.append([
+                    {"period": child, "overlap_days": None, "weight": 1.0}
+                    for child in child_periods
+                ])
+        return paths
     parsed = normalize_period(period)
     if parsed is None:
         return []
@@ -845,14 +1406,11 @@ def _requirement_roles(
                 "role": requirement.get("source_period_role", "analysis"),
             })
             continue
-        definition = (derived_registry.get("definitions") or {}).get(
-            requirement.get("derived_metric_id")
-        ) or {}
-        roles = requirement.get("required_period_roles") or definition.get(
-            "required_period_roles"
-        ) or []
-        for role in roles:
-            consumers.append({**requirement, "role": role})
+        for role in _effective_derived_period_roles(requirement, derived_registry):
+            consumers.append({
+                **requirement,
+                "role": role,
+            })
     for target in ir.get("attribution_targets") or []:
         if str(target.get("target_id")) in blocked:
             continue
@@ -1267,7 +1825,7 @@ def prepare_analysis_ir(
     except SelectorContextError as exc:
         raise PreparationError("SELECTOR_CONTEXT_INVALID", str(exc)) from exc
     _apply_business_intent_selection(prepared, index)
-    _apply_requirement_bindings(prepared, index)
+    _apply_requirement_bindings(prepared, index, derived_registry)
     unresolved_intents = [
         str(item.get("requirement_id") or item.get("target_id") or "")
         for collection in (
@@ -1284,11 +1842,14 @@ def prepare_analysis_ir(
             {"requirement_ids": sorted(unresolved_intents)},
         )
     _bind_declared_metric_metadata(prepared, index)
+    period_decisions = _resolve_period_requests(
+        prepared, index, composition_registry, derived_registry
+    )
     _materialize_set_adaptations(prepared, index, derived_registry)
     task = prepared.get("analysis_task") or {}
     metrics = _metric_map(prepared)
     periods = task.get("periods") or {}
-    decisions: list[dict[str, Any]] = []
+    decisions: list[dict[str, Any]] = list(period_decisions)
     active_resolution_cases: list[dict[str, Any]] = []
 
     # A declared composition is a fallback. Replace it with a direct fact when the
@@ -1414,6 +1975,28 @@ def prepare_analysis_ir(
             )
 
     if active_resolution_cases:
+        supplement_ids = {
+            str(item.get("requirement_id"))
+            for item in prepared.get("derived_requirements") or []
+            if isinstance(item, dict)
+            and item.get("default_output_role") == PERFORMANCE_YOY_SUPPLEMENT
+            and item.get("criticality") == "optional"
+            and item.get("provenance") == "business_policy"
+        }
+        omitted_ids = {
+            str(case.get("requirement_id"))
+            for case in active_resolution_cases
+            if isinstance(case, dict)
+            and str(case.get("requirement_id") or "") in supplement_ids
+        }
+        _drop_policy_supplements(prepared, omitted_ids, derived_registry)
+        active_resolution_cases = [
+            case for case in active_resolution_cases
+            if not isinstance(case, dict)
+            or str(case.get("requirement_id") or "") not in omitted_ids
+        ]
+
+    if active_resolution_cases:
         core_cases = [
             case for case in active_resolution_cases
             if case.get("criticality") == "core"
@@ -1439,6 +2022,37 @@ def prepare_analysis_ir(
             {"mode": "resolution_block", "block": block}
             for block in prepared["resolution_blocks"]
         )
+
+    unavailable_supplements: set[str] = set()
+    for requirement in prepared.get("derived_requirements") or []:
+        if (
+            not isinstance(requirement, dict)
+            or requirement.get("default_output_role")
+            != PERFORMANCE_YOY_SUPPLEMENT
+        ):
+            continue
+        requirement_id = str(requirement.get("requirement_id") or "")
+        metric_ref = str(requirement.get("metric_ref") or "")
+        roles = _effective_derived_period_roles(requirement, derived_registry)
+        if requirement.get("fulfillment_mode") == "source_derived_fact":
+            metric_ref = str(requirement.get("source_metric_ref") or "")
+        metric = metrics.get(metric_ref) or {}
+        if not metric or any(
+            not isinstance(periods.get(str(role)), str)
+            or not _period_executable(
+                index,
+                metric,
+                str(periods.get(str(role))),
+                requirement.get("dimensions") or {},
+                requirement.get("dimension_refs") or [],
+                composition_registry,
+                requirement.get("composition_input_bindings"),
+                metrics,
+            )
+            for role in roles
+        ):
+            unavailable_supplements.add(requirement_id)
+    _drop_policy_supplements(prepared, unavailable_supplements, derived_registry)
 
     existing_targets = {
         (
@@ -1705,6 +2319,30 @@ def prepare_analysis_ir(
             "source_periods": children,
             "adaptation_id": adaptation_id,
         })
+
+        for resolution in task.get("period_resolutions") or []:
+            if (
+                resolution.get("requirement_id") == consumer.get("requirement_id")
+                and resolution.get("period_role") == role
+                and resolution.get("target_period") == actual_period
+            ):
+                adaptation_summary = {
+                    "metric_ref": metric_ref,
+                    "source_periods": list(children),
+                    "aggregate_components": deepcopy(components),
+                    "adaptation_id": adaptation_id,
+                }
+                summaries = resolution.setdefault("input_adaptations", [])
+                if adaptation_summary not in summaries:
+                    summaries.append(adaptation_summary)
+                source_period_sets = {
+                    tuple(item.get("source_periods") or []) for item in summaries
+                }
+                if len(source_period_sets) == 1:
+                    resolution["source_periods"] = list(children)
+                else:
+                    resolution.pop("source_periods", None)
+                break
 
     prepared["input_adaptations"] = adaptations
     prepared["fact_capability_plan"] = capability_plan

@@ -1768,7 +1768,12 @@ def compute_run_status(nodes: dict[str, dict[str, Any]], results: dict[str, dict
     for node_id, result in results.items():
         if nodes[node_id].get("criticality") == "required" and result.get("status") != "success":
             return "partial_success"
-    if any(result.get("status") == "partial_success" for result in results.values()):
+    if any(
+        result.get("status") == "partial_success"
+        and nodes[node_id].get("default_output_role")
+        != "performance_yoy_supplement"
+        for node_id, result in results.items()
+    ):
         return "partial_success"
     return "success"
 

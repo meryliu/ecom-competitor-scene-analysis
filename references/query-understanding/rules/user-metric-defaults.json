@@ -1,0 +1,43 @@
+{
+  "schema_version": "query_policy_rule/1.0",
+  "policy_version": "query-policy/1.0.1",
+  "rule_id": "user-metric-defaults",
+  "name": "模糊用户指标默认展开",
+  "version": "1.0.1",
+  "priority": 70,
+  "routing": {
+    "terms": ["用户指标", "用户相关指标", "用户侧指标", "用户表现", "用户侧表现"]
+  },
+  "applicability": {
+    "all": ["Query 询问用户侧指标或用户侧表现", "用户未明确具体目标指标"],
+    "none": [
+      "用户已明确指定 MAC、MAC月单量或 DAC",
+      "用户已明确指定其他具体用户指标，例如新增用户数、DAU、留存率或复购率",
+      "用户平均单价、客单价、用户单均价或 MAC单价等已有术语消歧规则可处理的表达",
+      "用户指标仅作为元语言出现，例如用户指定的指标、指标定义或指标列表"
+    ]
+  },
+  "actions": [
+    {
+      "action_id": "expand_ambiguous_user_metrics",
+      "op": "expand_sub_queries",
+      "idempotency": "application_key",
+      "when": "用户指标语义明确但具体目标指标为空",
+      "instructions": ["MAC", "MAC月单量", "DAC"],
+      "assumption": "用户未指定具体用户指标，本次按 MAC、MAC月单量、DAC 展开。"
+    }
+  ],
+  "relations": {"depends_on": ["user-explicit-priority"]},
+  "user_explicit_protection": [
+    "用户明确指定的指标、平台、时期、比较关系、拆解和输出要求不得被展开规则覆盖"
+  ],
+  "boundaries": [
+    "仅处理用户侧指标语义缺少具体指标的场景",
+    "不把未审核的用户域口语表达作为本规则的触发词",
+    "不改变候选引擎、指标注册表、时间粒度判断或执行能力"
+  ],
+  "source_ref": {
+    "heading_path": "全局约定/模糊用户指标默认展开",
+    "block_id": "local-user-metric-defaults"
+  }
+}

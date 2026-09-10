@@ -118,6 +118,39 @@ class BusinessIntentPolicyTests(unittest.TestCase):
             [item["intent_id"] for item in hypotheses],
         )
 
+    def test_vague_level_phrases_have_the_same_performance_hypotheses(self) -> None:
+        expected = [
+            item["intent_id"]
+            for item in generate_metric_hypotheses(
+                {"query": "线上社零表现怎么样"},
+                {
+                    "name": "线上社零", "metric_object": "volume",
+                    "metric_object_provenance": "model_inferred",
+                    "consumers": [{
+                        "requirement_type": "fact_observations",
+                        "semantic_text": "线上社零表现怎么样",
+                    }],
+                },
+                self.policy,
+            )
+        ]
+        for phrase in ("水平如何", "水平怎么样"):
+            with self.subTest(phrase=phrase):
+                hypotheses = generate_metric_hypotheses(
+                    {"query": f"线上社零{phrase}"},
+                    {
+                        "name": "线上社零",
+                        "metric_object": "volume",
+                        "metric_object_provenance": "model_inferred",
+                        "consumers": [{
+                            "requirement_type": "fact_observations",
+                            "semantic_text": f"线上社零{phrase}",
+                        }],
+                    },
+                    self.policy,
+                )
+                self.assertEqual([item["intent_id"] for item in hypotheses], expected)
+
     def test_explicit_volume_does_not_expand_performance_to_growth(self) -> None:
         hypotheses = generate_metric_hypotheses(
             {"query": "线上社零规模表现"},

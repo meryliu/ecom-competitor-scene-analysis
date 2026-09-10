@@ -1730,6 +1730,146 @@ class ResolutionPolicyTests(unittest.TestCase):
             by_metric["实物商品网上零售额同比增速"]["semantic_tier"],
         )
 
+    def test_policy_yoy_supplement_does_not_change_original_metric_binding(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "线上社零": {
+                    "aliases": [], "unit": "亿元", "metric_object": "volume",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                },
+                "线上社零同比增速": {
+                    "aliases": ["线上社零同比"], "unit": "%", "metric_object": "ratio",
+                    "supported_grains": ["month"], "dimensions": ["无"],
+                },
+            },
+            "dimensions": {}, "sheets": {},
+        }
+        fact = {
+            "requirement_id": "level", "requirement_type": "fact_observations",
+            "periods": ["2026-05"], "breakdown_dimensions": [],
+            "semantic_text": "线上社零水平怎么样",
+        }
+        supplement = {
+            "requirement_id": "yoy", "requirement_type": "derived_requirements",
+            "derived_metric_id": "yoy_growth", "allowed_metric_objects": ["volume", "ratio"],
+            "periods": ["2026-05", "2025-05"], "breakdown_dimensions": [],
+            "semantic_text": "线上社零同比增速",
+            "criticality": "optional",
+            "default_output_role": "performance_yoy_supplement",
+            "provenance": "business_policy",
+        }
+
+        def resolve(consumers: list[dict]) -> dict:
+            request = {"metrics": ["线上社零"], "contexts": [{
+                "task_id": "q", "query": "线上社零水平怎么样",
+                "periods": ["2026-05", "2025-05"], "metrics": [{
+                    "metric_ref": "m", "name": "线上社零", "metric_object": "volume",
+                    "metric_object_provenance": "model_inferred", "unit": "待元信息解析",
+                    "consumers": consumers,
+                }],
+            }]}
+            return resolve_request_overlay(index, request, self.policy)["task_resolutions"]["q"]
+
+        original = resolve([fact])
+        expanded = resolve([fact, supplement])
+        self.assertEqual(expanded["metric_bindings"], original["metric_bindings"])
+        self.assertEqual(expanded["resolution_cases"], original["resolution_cases"])
+        self.assertEqual(
+            expanded["requirement_bindings"]["yoy"]["source_metric"],
+            "线上社零同比增速",
+        )
+
+    def test_duplicate_precomputed_performance_supplement_is_omitted(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {"实物商品网上零售额同比增速": {
+                "aliases": ["线上社零同比"], "unit": "%", "metric_object": "ratio",
+                "supported_grains": ["month"], "dimensions": ["无"],
+            }},
+            "dimensions": {}, "sheets": {},
+        }
+        fact = {
+            "requirement_id": "level", "requirement_type": "fact_observations",
+            "periods": ["2026-05"], "breakdown_dimensions": [],
+            "semantic_text": "线上社零表现怎么样",
+        }
+        supplement = {
+            "requirement_id": "yoy", "requirement_type": "derived_requirements",
+            "derived_metric_id": "yoy_growth", "allowed_metric_objects": ["volume", "ratio"],
+            "periods": ["2026-05", "2025-05"], "breakdown_dimensions": [],
+            "semantic_text": "线上社零同比增速", "criticality": "optional",
+            "default_output_role": "performance_yoy_supplement",
+            "provenance": "business_policy",
+        }
+        request = {"metrics": ["线上社零"], "contexts": [{
+            "task_id": "q", "query": "线上社零表现怎么样",
+            "periods": ["2026-05", "2025-05"], "metrics": [{
+                "metric_ref": "m", "name": "线上社零", "metric_object": "volume",
+                "metric_object_provenance": "model_inferred", "unit": "待元信息解析",
+                "consumers": [fact, supplement],
+            }],
+        }]}
+        task = resolve_request_overlay(index, request, self.policy)["task_resolutions"]["q"]
+        self.assertEqual(
+            task["metric_bindings"]["线上社零"], "实物商品网上零售额同比增速"
+        )
+        self.assertEqual(
+            task["requirement_bindings"]["yoy"]["mode"],
+            "omit_policy_supplement",
+        )
+
+    def test_base_fact_and_formula_yoy_on_same_source_are_not_duplicates(self) -> None:
+        constraint = {
+            "kind": "dimension_filter", "operator": "eq", "values": ["拼多多"],
+            "dimension_hint": "平台", "provenance": "user_explicit",
+        }
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {"MAC": {
+                "aliases": [], "unit": "万人", "metric_object": "volume",
+                "supported_grains": ["month"], "dimensions": ["TOP6平台"],
+                "aggregation_mode": "non_additive",
+            }},
+            "dimensions": {
+                "TOP6平台": {"aliases": ["平台"], "values": ["拼多多", "京东"]},
+            },
+            "sheets": {},
+        }
+        fact = {
+            "requirement_id": "level", "requirement_type": "fact_observations",
+            "period_roles": ["analysis"], "periods": ["2025-07"],
+            "breakdown_dimensions": [], "semantic_text": "MAC表现怎么样",
+            "metric_constraints": [constraint],
+        }
+        supplement = {
+            "requirement_id": "yoy", "requirement_type": "derived_requirements",
+            "derived_metric_id": "yoy_growth",
+            "allowed_metric_objects": ["volume", "ratio"],
+            "period_roles": ["analysis", "analysis_last_year"],
+            "periods": ["2025-07", "2024-07"], "breakdown_dimensions": [],
+            "semantic_text": "MAC同比增速", "metric_constraints": [constraint],
+            "criticality": "optional",
+            "default_output_role": "performance_yoy_supplement",
+            "provenance": "business_policy",
+        }
+        request = {"metrics": ["MAC"], "contexts": [{
+            "task_id": "q", "query": "拼多多MAC表现怎么样",
+            "periods": ["2025-07", "2024-07"], "dimensions": ["平台"],
+            "metrics": [{
+                "metric_ref": "mac", "name": "MAC", "metric_object": "volume",
+                "metric_object_provenance": "model_inferred", "unit": "待元信息解析",
+                "consumers": [fact, supplement],
+            }],
+        }]}
+        task = resolve_request_overlay(index, request, self.policy)[
+            "task_resolutions"
+        ]["q"]
+        bindings = task["requirement_bindings"]
+        self.assertEqual(bindings["level"]["source_metric"], "MAC")
+        self.assertEqual(bindings["yoy"]["source_metric"], "MAC")
+        self.assertNotEqual(bindings["yoy"]["mode"], "omit_policy_supplement")
+
     def test_explicit_volume_performance_rejects_growth_only_alias(self) -> None:
         index = {
             "source": {"url": "source", "revision": 1, "schema_hash": "schema"},

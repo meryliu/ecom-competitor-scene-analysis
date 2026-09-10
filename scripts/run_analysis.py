@@ -286,6 +286,7 @@ def compact_task_answer(answer: dict[str, Any]) -> dict[str, Any]:
             "task_id",
             "source_revision",
             "answer_basis",
+            "period_resolutions",
             "quality",
             "scope_and_assumptions",
         )
@@ -301,6 +302,8 @@ def compact_task_answer(answer: dict[str, Any]) -> dict[str, Any]:
             compact["views"].append({"view_id": view.get("view_id"), "rows": rows})
     compact["derived_results"] = []
     for result in answer.get("derived_results") or []:
+        if result.get("definition_status") == "adaptation":
+            continue
         compact["derived_results"].append({
             key: deepcopy(result[key])
             for key in (
@@ -309,6 +312,8 @@ def compact_task_answer(answer: dict[str, Any]) -> dict[str, Any]:
                 "status",
                 "unit",
                 "value",
+                "display_value",
+                "display_unit",
                 "definition_source",
                 "definition_version",
                 "definition_status",
@@ -866,7 +871,11 @@ def main() -> int:
                         if isinstance(item, dict) and item.get("severity") == "ERROR"
                     ]
                     raise ValueError(f"final validation failed: {errors[:3]}")
-                answer = answer_payload(manifest, str(plan.get("execution_profile")))
+                answer = answer_payload(
+                    manifest,
+                    str(plan.get("execution_profile")),
+                    composition_registry,
+                )
                 # Definition text is a terminal projection from the resolved
                 # source metadata; it does not enter execution or validation.
                 if capabilities is not None:

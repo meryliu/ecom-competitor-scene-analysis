@@ -18,7 +18,9 @@
     "single-platform-settlement-gmv",
     "top6-settlement-gmv",
     "jd-commission",
-    "gmv-defaults"
+    "gmv-defaults",
+    "user-metric-defaults",
+    "performance-defaults"
   ],
   "routing": {
     "订单价": ["terminology-disambiguation"],
@@ -47,7 +49,16 @@
     "大盘": ["top6-settlement-gmv"],
     "京东": ["jd-commission"],
     "3p佣金": ["jd-commission"],
-    "可比口径": ["jd-commission"]
+    "可比口径": ["jd-commission"],
+    "用户指标": ["user-metric-defaults"],
+    "用户相关指标": ["user-metric-defaults"],
+    "用户侧指标": ["user-metric-defaults"],
+    "用户表现": ["user-metric-defaults"],
+    "用户侧表现": ["user-metric-defaults"],
+    "表现如何": ["performance-defaults"],
+    "表现怎么样": ["performance-defaults"],
+    "水平如何": ["performance-defaults"],
+    "水平怎么样": ["performance-defaults"]
   },
   "limits": {
     "max_selected_rules": 8,

@@ -37,7 +37,10 @@ from metric_constraints import (
     normalize_metric_constraints,
 )
 from semantic_context_guard import extract_current_core_hint
-from source_capability import evaluate_structural_grain_capability
+from source_capability import (
+    evaluate_structural_grain_capability,
+    evaluate_structural_span_capability,
+)
 from time_rollup import normalize_period as _normalize_time_period
 
 
@@ -75,6 +78,81 @@ ALLOWED_POLICY_KEYS = {
     "candidate_evaluation",
     "grain_rollup",
 }
+PERFORMANCE_YOY_SUPPLEMENT = "performance_yoy_supplement"
+OPTIONAL_POLICY_ENRICHMENT_ROLES = frozenset({PERFORMANCE_YOY_SUPPLEMENT})
+
+
+def _is_optional_policy_enrichment(consumer: dict[str, Any]) -> bool:
+    return (
+        consumer.get("default_output_role") in OPTIONAL_POLICY_ENRICHMENT_ROLES
+        and consumer.get("criticality") == "optional"
+        and consumer.get("provenance") == "business_policy"
+    )
+
+
+def _is_performance_yoy_supplement(consumer: dict[str, Any]) -> bool:
+    return (
+        consumer.get("default_output_role") == PERFORMANCE_YOY_SUPPLEMENT
+        and _is_optional_policy_enrichment(consumer)
+    )
+
+
+def _without_performance_supplements(metric: dict[str, Any]) -> dict[str, Any]:
+    consumers = [
+        item for item in metric.get("consumers") or []
+        if isinstance(item, dict) and not _is_performance_yoy_supplement(item)
+    ]
+    if len(consumers) == len(metric.get("consumers") or []):
+        return metric
+    selected = deepcopy(metric)
+    selected["consumers"] = consumers
+    selected["required_periods"] = sorted({
+        str(period) for consumer in consumers
+        for period in consumer.get("periods") or []
+    })
+    selected["required_period_requests"] = {
+        str(role): deepcopy(request)
+        for consumer in consumers
+        for role, request in (consumer.get("period_requests") or {}).items()
+    }
+    selected["required_dimensions"] = sorted({
+        str(dimension) for consumer in consumers
+        for dimension in consumer.get("dimensions") or []
+    })
+    selected["required_breakdown_dimensions"] = sorted({
+        str(dimension) for consumer in consumers
+        for dimension in consumer.get("breakdown_dimensions") or []
+    })
+    return selected
+
+
+def _is_vague_performance_text(value: Any) -> bool:
+    text = normalize_match_text(value)
+    explicit_level = (
+        "指标值", "数值", "金额", "规模", "数量", "多少", "水平值", "具体水平",
+    )
+    if any(token in text for token in explicit_level):
+        return False
+    return "表现" in text or "水平如何" in text or "水平怎么样" in text
+
+
+def _structural_period_checks(
+    metadata: dict[str, Any],
+    periods: list[Any],
+    period_requests: dict[str, Any],
+    rollup_edges: list[list[str]],
+) -> list[dict[str, Any]]:
+    checks = [
+        evaluate_structural_grain_capability(metadata, parsed[0], rollup_edges)
+        for period in periods
+        if (parsed := _normalize_time_period(period)) is not None
+    ]
+    checks.extend(
+        evaluate_structural_span_capability(metadata, request, rollup_edges)
+        for request in period_requests.values()
+        if isinstance(request, dict)
+    )
+    return checks
 ALLOWED_RULE_KEYS = {"hard_gates", "strong_evidence", "auto", "confirm"}
 ALLOWED_AUTO_KEYS = {
     "require_unique_viable",
@@ -1033,6 +1111,9 @@ def _resolve_constrained_requirement(
         for period in consumer.get("periods") or metric.get("required_periods") or []
         if (parsed := _normalize_period(period)) is not None
     }
+    period_requests = consumer.get("period_requests") or metric.get(
+        "required_period_requests"
+    ) or {}
     phrase = _constraint_phrase(consumer)
     viable: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
@@ -1044,10 +1125,12 @@ def _resolve_constrained_requirement(
             requested_core, name, metadata, constraints, policy
         )
         core_score = float(core_evidence.get("score") or 0.0)
-        grain_checks = [
-            evaluate_structural_grain_capability(metadata, grain, rollup_edges)
-            for grain in sorted(target_grains)
-        ]
+        grain_checks = _structural_period_checks(
+            metadata,
+            list(consumer.get("periods") or metric.get("required_periods") or []),
+            period_requests,
+            rollup_edges,
+        )
         structural_available = bool(grain_checks) and all(
             item.get("status") == "available" for item in grain_checks
         )
@@ -1881,6 +1964,9 @@ def _resolve_business_intent_single(
     planning_context["periods"] = list(
         metric.get("required_periods") or context.get("periods") or []
     )
+    planning_context["period_requests"] = deepcopy(
+        metric.get("required_period_requests") or context.get("period_requests") or {}
+    )
     planning_context["breakdown_dimensions"] = list(
         metric.get("required_breakdown_dimensions")
         if "required_breakdown_dimensions" in metric
@@ -1888,7 +1974,7 @@ def _resolve_business_intent_single(
         if "breakdown_dimensions" in context
         else context.get("dimensions") or []
     )
-    if not planning_context.get("periods"):
+    if not planning_context.get("periods") and not planning_context.get("period_requests"):
         return None
     hypotheses = generate_metric_hypotheses(planning_context, metric, business_policy)
     if not hypotheses:
@@ -2013,10 +2099,12 @@ def _resolve_business_intent_single(
                 requested_breakdowns = list(
                     planning_context.get("breakdown_dimensions") or []
                 )
-                grain_checks = [
-                    evaluate_structural_grain_capability(metadata, grain, rollup_edges)
-                    for grain in sorted(target_grains)
-                ]
+                grain_checks = _structural_period_checks(
+                    metadata,
+                    list(planning_context.get("periods") or []),
+                    planning_context.get("period_requests") or {},
+                    rollup_edges,
+                )
                 structural_available = bool(grain_checks) and all(
                     item.get("status") == "available" for item in grain_checks
                 )
@@ -2258,9 +2346,11 @@ def _resolve_business_intent(
     if not resolutions:
         return None
     viable: dict[tuple[Any, ...], dict[str, Any]] = {}
+    all_viable: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
     for resolution in resolutions:
         for candidate in resolution.get("viable_candidates") or []:
+            all_viable.append(deepcopy(candidate))
             key = (
                 candidate.get("metric"), candidate.get("metric_object"),
                 candidate.get("intent_id"),
@@ -2294,6 +2384,7 @@ def _resolve_business_intent(
         "identity": identity,
         "candidates": bounded,
         "viable_candidates": bounded,
+        "all_viable_candidates": all_viable,
         "rejected_candidates": rejected,
     }
 
@@ -2360,7 +2451,8 @@ def _performance_requirement_bindings(
     """Let a proven precomputed performance fact fulfill a broad performance output.
 
     This is limited to sibling Requirements with the same breakdown. Explicit
-    level requests (amount, scale, level, how much) are never rewritten.
+    level requests are never rewritten; vague "水平如何/怎么样" remains a
+    performance request rather than an explicit value request.
     """
     consumers = [item for item in metric.get("consumers") or [] if isinstance(item, dict)]
     by_id = {
@@ -2372,9 +2464,7 @@ def _performance_requirement_bindings(
         if consumer.get("requirement_type") != "fact_observations":
             continue
         semantic_text = str(consumer.get("semantic_text") or "")
-        if "表现" not in semantic_text or any(
-            token in semantic_text for token in ("金额", "规模", "水平", "多少")
-        ):
+        if not _is_vague_performance_text(semantic_text):
             continue
         breakdown = set(str(value) for value in consumer.get("breakdown_dimensions") or [])
         periods = set(str(value) for value in consumer.get("periods") or [])
@@ -2399,8 +2489,108 @@ def _performance_requirement_bindings(
             "source_metric": next(iter(physical_metrics)),
             "candidate_id": selected.get("candidate_id"),
             "fulfillment_basis": "sibling_precomputed_performance_fact",
+            "source_output_semantics": selected.get("derived_metric_id"),
+            "source_period_role": selected.get("source_period_role", "analysis"),
+            "metric_constraints": deepcopy(selected.get("metric_constraints") or []),
+            "constraints_fingerprint": selected.get("constraints_fingerprint"),
         }
     return additions
+
+
+def _effective_source_period(
+    consumer: dict[str, Any], binding: dict[str, Any]
+) -> tuple[str, str]:
+    role = str(binding.get("source_period_role") or "analysis")
+    periods = [str(value) for value in consumer.get("periods") or []]
+    roles = [str(value) for value in consumer.get("period_roles") or []]
+    if role in roles:
+        position = roles.index(role)
+        if position < len(periods):
+            return role, periods[position]
+    if role == "analysis" and periods:
+        return role, periods[0]
+    return role, ""
+
+
+def _result_identity(
+    consumer: dict[str, Any], binding: dict[str, Any]
+) -> dict[str, Any] | None:
+    source_metric = str(binding.get("source_metric") or "")
+    output_semantics = str(
+        binding.get("source_output_semantics")
+        or (
+            binding.get("derived_metric_id")
+            if binding.get("mode") == "source_derived_fact"
+            else ""
+        )
+        or ""
+    )
+    if not source_metric or not output_semantics:
+        return None
+    constraints = binding.get("metric_constraints") or consumer.get(
+        "metric_constraints"
+    ) or []
+    return {
+        "source_metric": source_metric,
+        "output_semantics": output_semantics,
+        "source_period": _effective_source_period(consumer, binding),
+        "constraints": binding.get("constraints_fingerprint")
+        or canonical_json(constraints),
+        "dimensions": canonical_json(consumer.get("dimensions") or {}),
+        "dimension_refs": tuple(sorted(
+            str(value) for value in consumer.get("dimension_refs") or []
+        )),
+        "breakdown_dimensions": tuple(sorted(
+            str(value) for value in consumer.get("breakdown_dimensions") or []
+        )),
+        "view_id": str(consumer.get("view_id") or ""),
+        "scope": canonical_json(consumer.get("scope") or {}),
+    }
+
+
+def _is_duplicate_enrichment(
+    core_result: dict[str, Any] | None,
+    enrichment_result: dict[str, Any] | None,
+) -> bool:
+    return (
+        core_result is not None
+        and enrichment_result is not None
+        and core_result == enrichment_result
+    )
+
+
+def _deduplicate_performance_supplement_bindings(
+    metric: dict[str, Any], bindings: dict[str, dict[str, Any]]
+) -> None:
+    consumers = {
+        str(item.get("requirement_id")): item
+        for item in metric.get("consumers") or []
+        if isinstance(item, dict) and item.get("requirement_id")
+    }
+    for requirement_id, consumer in consumers.items():
+        if not _is_performance_yoy_supplement(consumer):
+            continue
+        supplement = bindings.get(requirement_id) or {}
+        if supplement.get("mode") != "source_derived_fact":
+            continue
+        enrichment_result = _result_identity(consumer, supplement)
+        duplicate = any(
+            other_id != requirement_id
+            and other_id in consumers
+            and not _is_performance_yoy_supplement(consumers.get(other_id) or {})
+            and binding.get("fulfillment_basis")
+            == "sibling_precomputed_performance_fact"
+            and _is_duplicate_enrichment(
+                _result_identity(consumers[other_id], binding), enrichment_result
+            )
+            for other_id, binding in bindings.items()
+            if isinstance(binding, dict)
+        )
+        if duplicate:
+            bindings[requirement_id] = {
+                "mode": "omit_policy_supplement",
+                "reason": "duplicate_of_original_performance_fact",
+            }
 
 
 def _joint_block_candidates(
@@ -2884,6 +3074,15 @@ def resolve_request_overlay(
             metric_consumers = [
                 item for item in metric.get("consumers") or [] if isinstance(item, dict)
             ]
+            selection_metric = _without_performance_supplements(metric)
+            selection_consumers = [
+                item for item in selection_metric.get("consumers") or []
+                if isinstance(item, dict)
+            ]
+            supplement_consumers = [
+                item for item in metric_consumers
+                if _is_performance_yoy_supplement(item)
+            ]
             if metric.get("resolution_operation") == "aggregate_level":
                 aggregate_resolution = _aggregate_level_resolution(
                     overlay, context, metric, policy
@@ -2968,7 +3167,7 @@ def resolve_request_overlay(
                     task_resolution["resolution_cases"].append(aggregate_case)
                 continue
             constrained_consumers = [
-                item for item in metric_consumers if item.get("metric_constraints")
+                item for item in selection_consumers if item.get("metric_constraints")
             ]
             constrained_bound: set[str] = set()
             for consumer in constrained_consumers:
@@ -3122,7 +3321,55 @@ def resolve_request_overlay(
                 ):
                     cases.append(constraint_case)
                     task_resolution["resolution_cases"].append(constraint_case)
-            if constrained_consumers and len(constrained_consumers) == len(metric_consumers):
+            for consumer in supplement_consumers:
+                if not consumer.get("metric_constraints"):
+                    continue
+                requirement_id = str(consumer.get("requirement_id") or "")
+                supplement_resolution = _resolve_constrained_requirement(
+                    overlay, context, metric, consumer, policy, intent_policy
+                )
+                supplement_resolution = _try_context_fallback(
+                    overlay,
+                    context,
+                    metric,
+                    consumer,
+                    policy,
+                    intent_policy,
+                    supplement_resolution,
+                )
+                selected_supplement = supplement_resolution.get("binding")
+                if selected_supplement is None:
+                    task_resolution["requirement_bindings"][requirement_id] = {
+                        "mode": "omit_policy_supplement",
+                        "reason": "supplement_not_uniquely_executable",
+                    }
+                    continue
+                binding_packet = {
+                    "mode": selected_supplement.get("path"),
+                    "source_metric": selected_supplement.get("metric"),
+                    "candidate_id": selected_supplement.get("candidate_id"),
+                    "metric_constraints": deepcopy(
+                        selected_supplement.get("constraints") or []
+                    ),
+                    "constraints_fingerprint": (
+                        supplement_resolution.get("identity") or {}
+                    ).get("constraints_fingerprint"),
+                }
+                if selected_supplement.get("path") == "source_derived_fact":
+                    binding_packet["derived_metric_id"] = consumer.get(
+                        "derived_metric_id"
+                    )
+                    binding_packet["source_period_role"] = next(
+                        iter(consumer.get("period_roles") or ["analysis"]),
+                        "analysis",
+                    )
+                task_resolution["requirement_bindings"][requirement_id] = binding_packet
+
+            _deduplicate_performance_supplement_bindings(
+                metric, task_resolution["requirement_bindings"]
+            )
+
+            if constrained_consumers and len(constrained_consumers) == len(selection_consumers):
                 all_requirement_ids = {
                     str(item.get("requirement_id") or "")
                     for item in constrained_consumers
@@ -3155,9 +3402,15 @@ def resolve_request_overlay(
                 }
                 continue
             intent_resolution = _resolve_business_intent(
-                overlay, context, metric, policy, intent_policy
+                overlay, context, selection_metric, policy, intent_policy
             )
             if intent_resolution is not None:
+                binding_resolution = (
+                    _resolve_business_intent(
+                        overlay, context, metric, policy, intent_policy
+                    )
+                    if supplement_consumers else intent_resolution
+                ) or intent_resolution
                 intent_identity = intent_resolution["identity"]
                 intent_case_id = stable_id(
                     "resolution_case", {**intent_identity, "kind": "interpretation"}
@@ -3176,7 +3429,7 @@ def resolve_request_overlay(
                 )
                 viable_candidates = intent_resolution["viable_candidates"]
                 requirement_bindings = _source_derived_requirement_bindings(
-                    intent_resolution, metric, intent_policy
+                    binding_resolution, metric, intent_policy
                 )
                 requirement_bindings.update(
                     _performance_requirement_bindings(metric, requirement_bindings)
@@ -3188,6 +3441,12 @@ def resolve_request_overlay(
                         unresolved_id = str(consumer.get("requirement_id") or "")
                         if not unresolved_id or unresolved_id in requirement_bindings:
                             continue
+                        if _is_performance_yoy_supplement(consumer):
+                            requirement_bindings[unresolved_id] = {
+                                "mode": "omit_policy_supplement",
+                                "reason": "supplement_not_uniquely_executable",
+                            }
+                            continue
                         requirement_bindings[unresolved_id] = {
                             "mode": "unavailable",
                             "reason": "no_complete_requirement_candidate",
@@ -3196,15 +3455,14 @@ def resolve_request_overlay(
                                 consumer.get("breakdown_dimensions") or []
                             ),
                         }
-                task_resolution["requirement_bindings"].update(requirement_bindings)
                 consumer_requirement_ids = {
                     str(item.get("requirement_id") or "")
-                    for item in metric.get("consumers") or []
+                    for item in selection_metric.get("consumers") or []
                     if isinstance(item, dict) and item.get("requirement_id")
                 }
                 requirement_only_resolution = (
                     bool(consumer_requirement_ids)
-                    and consumer_requirement_ids == set(requirement_bindings)
+                    and consumer_requirement_ids.issubset(requirement_bindings)
                 )
                 best_tier = min(
                     (int(item.get("semantic_tier") or 0) for item in viable_candidates),
@@ -3226,6 +3484,65 @@ def resolve_request_overlay(
                 )
                 if selected_intent is None and len(auto_candidates) == 1:
                     selected_intent = auto_candidates[0]
+                selected_metric = (
+                    str(selected_intent.get("metric")) if selected_intent else None
+                )
+                if selected_metric:
+                    original_viable = intent_resolution.get(
+                        "all_viable_candidates", []
+                    )
+                    for requirement_id, binding in list(requirement_bindings.items()):
+                        if (
+                            binding.get("fulfillment_basis")
+                            != "sibling_precomputed_performance_fact"
+                        ):
+                            continue
+                        if any(
+                            str(candidate.get("requirement_id") or "")
+                            == requirement_id
+                            and str(candidate.get("metric") or "") == selected_metric
+                            for candidate in original_viable
+                        ):
+                            requirement_bindings.pop(requirement_id, None)
+                _deduplicate_performance_supplement_bindings(
+                    metric, requirement_bindings
+                )
+                if (
+                    selected_metric
+                    and selected_intent
+                    and selected_intent.get("semantic_role")
+                    == "compatible_alternative"
+                ):
+                    for consumer in supplement_consumers:
+                        if consumer.get("metric_constraints"):
+                            continue
+                        requirement_id = str(consumer.get("requirement_id") or "")
+                        binding = requirement_bindings.get(requirement_id) or {}
+                        if str(binding.get("source_metric") or "") == selected_metric:
+                            requirement_bindings[requirement_id] = {
+                                "mode": "omit_policy_supplement",
+                                "reason": "duplicate_of_original_performance_fact",
+                            }
+                supplement_viable = binding_resolution.get(
+                    "all_viable_candidates", []
+                )
+                for consumer in supplement_consumers:
+                    if consumer.get("metric_constraints"):
+                        continue
+                    requirement_id = str(consumer.get("requirement_id") or "")
+                    if not requirement_id or requirement_id in requirement_bindings:
+                        continue
+                    can_reuse_original = bool(selected_metric) and any(
+                        str(candidate.get("requirement_id") or "") == requirement_id
+                        and str(candidate.get("metric") or "") == selected_metric
+                        for candidate in supplement_viable
+                    )
+                    if not can_reuse_original:
+                        requirement_bindings[requirement_id] = {
+                            "mode": "omit_policy_supplement",
+                            "reason": "supplement_not_executable_on_original_binding",
+                        }
+                task_resolution["requirement_bindings"].update(requirement_bindings)
                 intent_action = (
                     "auto"
                     if selected_intent is not None or requirement_only_resolution
@@ -3329,7 +3646,9 @@ def resolve_request_overlay(
                     "binding": binding,
                 }
                 continue
-            resolution = _query_metric_resolution(metric, overlay.get("metrics") or {}, query, policy)
+            resolution = _query_metric_resolution(
+                selection_metric, overlay.get("metrics") or {}, query, policy
+            )
             semantics_fingerprint = stable_id("metric_semantics", {
                 "metric_object": metric.get("metric_object"),
                 "unit": str(metric.get("unit") or "").strip().lower(),

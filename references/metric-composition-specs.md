@@ -2,6 +2,10 @@
 
 本文件说明同周期业务指标组合的注册和执行边界。机器可执行定义唯一来自 [metric-composition-registry.json](metric-composition-registry.json)；本说明与注册表不一致时，以机器注册表为准并修正文档。
 
+每个组合必须显式维护 `period_aggregation`：`recompute` 表示跨非固有跨度时分别安全累计输入后执行一次原公式；`sum` 表示组合输出自身可以跨期求和；`period_only` 表示只能按源支持粒度逐期执行。该字段只决定已选中组合的时间物化方式，不参与组合召回或指标候选评分。缺失字段按 `period_only` 处理，防止未知公式被误聚合。
+
+组合可以使用可选 `display={"unit": string, "multiplier": positive_number}` 声明最终答案的线性展示转换。`unit` 仍是计算和校验单位；答案组装阶段只在成功结果的计算单位与注册定义一致时生成 `display_value=value*multiplier` 和 `display_unit`，不得覆盖原始 `value/unit`。`display` 缺失、非法或无法转换时沿用原始结果，不得改变 Query 状态。该配置不进入候选、Resolve、Prepare、Compile 或 Execution；非线性转换不在本机制范围内。
+
 ## 适用边界
 
 指标组合定义“指标是什么”，例如收入除以 GMV，或已登记的两个业务指标构成的跨指标占比。同比、环比、期间变化和同指标选择集占比仍由 [derived-metric-registry.json](derived-metric-registry.json) 管理。组合结果可以继续作为通用派生的输入，例如“综合支付TR同比”先计算综合支付TR，再复用 `yoy_growth`。
@@ -19,7 +23,7 @@
 | `competitor_comprehensive_payment_tr` | 综合支付TR | 广告收入 / 支付GMV + 佣金收入 / 支付GMV |
 | `competitor_comprehensive_settlement_tr` | 综合结算TR | 广告收入 / 结算GMV + 佣金收入 / 结算GMV |
 
-六个指标均为 `metric_object=ratio`、`unit=rate`。`rate` 使用小数值契约，例如 `value=0.15` 展示为 `15%`。计算继承需求的时期、范围、过滤、视角和拆解维度；事实缺失、叶子不可唯一解析、维度不兼容或分母为零时不得输出成功结果。
+六个指标均为 `metric_object=ratio`、`unit=rate`，并登记 `display={"unit":"%","multiplier":100}`。例如计算结果 `value=0.15, unit=rate` 在答案载荷中保留原值，同时生成 `display_value=15, display_unit=%`。计算继承需求的时期、范围、过滤、视角和拆解维度；事实缺失、叶子不可唯一解析、维度不兼容或分母为零时不得输出成功结果。
 
 ## 已注册占比
 

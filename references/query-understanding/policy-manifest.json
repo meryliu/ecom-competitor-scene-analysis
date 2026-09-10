@@ -5,7 +5,7 @@
   "source_url": "https://bytedance.larkoffice.com/wiki/EzETw3vCoiNEw3kCx2gcWZt4nvd",
   "document_id": "CH40dppXHoCsMSxE7l9cLXqpnjb",
   "document_sha256": "c77746685a02ec4f4bee920d5c4aa928ff24bd5c51f82fe8bd32263e22411b8c",
-  "index_sha256": "06c0ea170b3e75dc74be298495eaca6f7bba04e4c908e0739d9e62872f785306",
+  "index_sha256": "ab7a7b2fbf80a092563e852c508802b9de5a860de3496964aacb72ab68a9f3da",
   "rule_hashes": {
     "user-explicit-priority": "a6ac726884fd19e9fe64687b4ce1bbba7740f80cd85425a057e935338118d6f2",
     "terminology-disambiguation": "58f77a2c8c9e52dc35d41d754c2420f390ca0387c37759e266dc71e48046c4db",
@@ -14,7 +14,9 @@
     "single-platform-settlement-gmv": "143239e36282ffd7c133e82d067d7f9433d3bfa31b96596bd719fe970128bcc5",
     "top6-settlement-gmv": "b5d53563629205d02b67593716e6471c4f13c5fddd57e949c9a85ac679bd8aec",
     "jd-commission": "d330954a66d031a0a90d7f8df409e5ab1af7de87336471bf1180308675e5f333",
-    "gmv-defaults": "256038c93779cb3b500567c6b8c9980f4f10c3aafe4874c6187a3757ade668ad"
+    "gmv-defaults": "256038c93779cb3b500567c6b8c9980f4f10c3aafe4874c6187a3757ade668ad",
+    "user-metric-defaults": "86f918dea2580f6277ece785ee2a6dfe65ce42a1d20e151e55b1198f8a18e554",
+    "performance-defaults": "d81b23437b639a3c7335230e0a703e9c61fded5e453b3fe9421cef5453bf842e"
   },
-  "policy_sha256": "dec5de801730fcac86d2af0fca35036ed73c8e0e96e95421a3d137c339254448"
+  "policy_sha256": "90ea0ca3bba7665ab4af640683533cc4161ef61b346dc9428396e83168531ac1"
 }

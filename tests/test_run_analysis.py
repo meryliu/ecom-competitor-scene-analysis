@@ -84,6 +84,32 @@ def scene_payload(request: dict, *, revision: int = 11) -> dict:
 
 
 class RunAnalysisTests(unittest.TestCase):
+    def test_failed_performance_supplement_does_not_trigger_model_completion(self) -> None:
+        manifest = {
+            "analysis_task": {"query": "支付GMV表现如何"},
+            "nodes": [
+                {
+                    "node_id": "fact_artifact", "criticality": "core",
+                    "status": "success", "execution": {"handler": "fact_artifact"},
+                },
+                {
+                    "node_id": "optional_yoy", "criticality": "optional",
+                    "status": "failed", "execution": {"handler": "derived"},
+                    "default_output_role": "performance_yoy_supplement",
+                },
+                {
+                    "node_id": "conclusion_organization", "criticality": "core",
+                    "status": "planned", "execution": {"handler": "model_owned"},
+                    "depends_on": ["fact_artifact", "optional_yoy"],
+                },
+            ],
+        }
+        finalize_model_nodes(manifest)
+        self.assertEqual(manifest["status"], "success")
+        self.assertEqual(manifest["conclusions"][0]["status"], "success")
+        self.assertFalse(manifest["model_completion"]["required"])
+        self.assertEqual(manifest["model_completion"]["incomplete_node_ids"], [])
+
     @staticmethod
     def _gateway_capabilities(cases: list[dict]) -> dict:
         return {
@@ -507,6 +533,11 @@ class RunAnalysisTests(unittest.TestCase):
                 "competitor_comprehensive_settlement_tr",
             )
             self.assertAlmostEqual(derived["value"], (573.0 + 87.0) / 7734.0)
+            self.assertAlmostEqual(
+                derived["display_value"],
+                (573.0 + 87.0) / 7734.0 * 100,
+            )
+            self.assertEqual(derived["display_unit"], "%")
 
     def test_attribution_ir_guard_blocks_before_provider_resolve(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -38,7 +38,8 @@ description: WHEN 用户需要从飞书竞品宏观数据源查询、计算或�
    ```
 2. `selected` 时只读取返回的有界规则包和 [references/query-understanding/application-contract.md](references/query-understanding/application-contract.md)，在临时语义帧中按用户显式优先、规则优先级和依赖顺序应用已召回规则。规则应用可以在同一 packet 内重新评估后续规则：例如 `gmv-defaults` 将缺少子口径的 `GMV` 设为 `支付GMV` 后，已召回的单平台支付 GMV 归因规则再基于更新后的语义帧判断 applicability 并生成公式归因目标；这不是改写 Query，也不是动态无限重路由。规则 action 必须幂等且只能修改其契约拥有的 IR 字段，再生成候选 IR，随后运行 `scripts/validate_query_policy_application.py`。带 `ir_effect_contract` 的已应用 action 必须在 decision 中用 `produced_refs` 绑定其生成的 IR 目标。只有 `commit|commit_pending_confirmation` 才提交校验器返回的 `committed_ir_path`；不得继续使用校验前的候选 IR。`commit_clarification` 询问规则正常产生的业务问题；`fallback_raw` 按 task 丢弃全部默认、展开、assumptions、clarifications 和 action 记录，从原始 Query 生成一次基础 IR。Query Policy 故障不得成为 `blocked`、`waiting_confirmation` 或非零分析状态。
 3. 从提交后的语义生成精简 `analysis_ir/1.0`；同一轮多个独立问题生成一个 `analysis_bundle/1.0`。`analysis_task.query` 必须保留原始 Query；规则只补缺失语义，用户明确指标、平台、时期、视角、拆解、口径和输出优先。
-4. 只声明用户要求或通过 Query Policy 正常补充的业务指标、时期、范围、派生和归因目标。派生与归因并存时分别保留各自时期角色：归因使用目标内 `periods`，不得为了复用事实而覆盖任务级派生时期。不要为标准指标组合补写基础指标，不要为年/季/月粒度降级手写 `input_adaptations` 或计算 AST；统一 runner 根据源表能力生成这些执行细节。
+   对“表现如何/表现怎么样/水平如何/水平怎么样”且未限定输出的非归因 task，若 Query Policy 命中 `performance-defaults`，按目标作用域检查结构化输出槽位：指标可由用户明确，也可由上游 Policy 仅展开指标集合；只要该作用域尚无指标值、同比、环比、份额等具体输出，就必须保留原模糊 fact requirement，并仅追加同指标、同时期、同范围和同拆解的 `yoy_growth`。不得用 `analysis_goal` 自由文本代替槽位判断；上游已生成完整输出的作用域不得重复展开。追加项固定使用 `criticality=optional`、`default_output_role=performance_yoy_supplement`、`provenance=business_policy`。归因性 query、显式指标值或比较要求、纯口径问题及已有更具体输出均不应用该默认。
+4. 只声明用户要求或通过 Query Policy 正常补充的业务指标、时期、范围、派生和归因目标。单个原生年、季、月、ISO 周写入 `analysis_task.periods`；上半年、截至目前或任意闭区间等非固有跨度写入 `analysis_task.period_requests`，保留起止日期，只有用户明确要求按年/季/月/周展示时才填写 `requested_grain`。派生与归因并存时分别保留各自时期角色：归因仍使用目标内 `periods`，不得为了复用事实而覆盖任务级派生时期。不要为标准指标组合补写基础指标，不要为时间跨度累计或逐期展示手写 `input_adaptations`、子时期角色或计算 AST；统一 runner 根据源表能力生成这些执行细节。
    5. 统一 runner 在 Provider 调用前先执行任务级业务参数预检和时期协议预检，再执行原有归因 IR 严格校验。预检只使用当前 task 的 Query、结构化 IR 和请求级确认补丁；明确“同比/环比”且时期唯一时可确定性补齐，存在多个会改变结果的时期、场景、公式或拆解维度解释时返回 `waiting_confirmation`，不得从未结构化历史对话补充指标或范围。时期字段不得把 `analysis`、`comparison` 等角色名当作实际时期值，缺失或不可解析时期按 `INVALID_PERIOD` fail-fast；预检不猜测缺失时期。完整参数不改写，非法版本、引用、AST 和冲突补丁仍按原错误码 fail-fast。之后按需求生成有界候选。每个需求分别保留核心指标语义、时间粒度提示、注册派生意图和可选 `metric_constraints`；核心度量词（如订单量、订单价、GMV）不得被当成派生词剥离，时间粒度词不参与派生得分。无约束需求保留既有候选路径；有约束需求联合完整短语、核心指标、维度元信息子集及按需派生假设召回，再以核心语义硬门、约束满足、派生履约、粒度与可加性分层排序，维度或派生证据不能挽救错误核心指标。指标对象仅由模型推断的模糊“表现”需求可召回低一层的兼容增长事实：同核心且满足结构要求的主事实始终优先，只有兼容增长事实唯一可履约时才自动绑定；用户明确规模、金额、增长或比例时不得借此改写对象。完整语义置信度与原始词面分分别记录，完整口径候选不能被词面 TopK 提前丢弃。Resolve 只判断逻辑可得性，不读取物理坐标；完整口径事实优先。单位和指标对象按 provenance 分级：模型推断以及未附 Query 证据的 `user_formula/user_explicit` 只产生 soft conflict，不淘汰精确候选，也不增加排序分；Query 有可追溯证据、注册定义或业务意图规则才可作为强约束。Prepare 以源表元数据规范化实际单位和指标对象，保留声明值、源值和冲突诊断；明确用户约束冲突时进入确认或由 Compile 阻断。Compile/Execution 继续严格校验单位、对象、公式和量级。维度回退先在当前指标支持的物理维度中匹配规范名/别名，再按实时枚举域唯一性绑定；该规则适用于所有维度，多个可行物理维度必须确认，不维护值到维度的静态映射。binding 按需求隔离，不覆盖共享指标。若旧路径没有可行候选且拒绝原因包含核心语义门槛失败，才在同一请求内用当前 Query 提取一次保守核心提示并重评；成功绑定不走回退，不继承历史指标，不增加 Provider 调用。Prepare 再校验实际事实块、时期、维度和值域覆盖，并仅对同指标成员关系、用户显式公式或注册定义生成安全 AST；两个独立指标不得仅凭名称自动相减。其余粒度上卷、组合和源侧派生行为遵循 [references/fact-resolution.md](references/fact-resolution.md)。
    用户明确或 Query Policy 审核默认的源维度全域合计用 Requirement 级 `aggregate_level` 声明，成员由当前 revision 动态物化；模糊范围不得从自由文本 scope 强制聚合。
 6. 只运行一次统一分析入口：
@@ -76,8 +77,7 @@ python3 scripts/run_analysis.py \
 
 结论输出遵循以下通用原则：
 
-- `success` 和 `partial_success` 的最终答案必须以 `answer_basis` 为唯一依据，在末尾稳定输出以下结构；数据口径列出实际引用的逻辑指标、源指标、单位和源口径定义，维度口径只列实际筛选值与拆解维度，计算口径只列关键可读公式，归因方法只列算子名称及已有简介。不得从 Query 或指标名补写口径；`calculations` 或 `attribution` 为空时省略对应行，其他字段缺失时如实写“未提供”。
-- `success` 和 `partial_success` 的最终答案必须以 `answer_basis` 为唯一依据，在末尾稳定输出以下结构；数据口径列出实际引用的逻辑指标、源指标、单位和【口径定义】原文，维度口径只列实际筛选值与拆解维度，计算口径只列关键可读公式，归因方法只列算子名称及已有简介。不得从 Query、指标名或未参与成功结果的候选指标补写口径；`calculations` 或 `attribution` 为空时省略对应行，其他字段缺失时如实写“未提供”。
+- `success` 和 `partial_success` 的最终答案必须以 `answer_basis` 为唯一依据，在末尾稳定输出以下结构。数据口径只列实际成功结果血缘中的逻辑指标、实际指标名、单位及非空 `definition`：有定义时直接展示原文，不添加“源表”“元信息字段”或“【口径定义】”等内部来源前缀；定义缺失或空白时只保留指标名和已有单位，静默省略定义文本，不写“未提供”“源表没有定义”等提示。事实结果按上述方式展示；派生或组合结果同时在计算口径展示 `calculations` 中已有的关键可读公式，并在数据口径展示其实际引用事实指标的非空定义。相同实际指标和相同公式各展示一次。维度口径只列实际筛选值与拆解维度，归因方法只列算子名称及已有简介。不得从 Query、指标名、候选指标或公式文本推测定义，也不得为补口径读取中间产物、重算血缘或触发额外 Resolve/Fetch；对应数组为空时省略该行。
 
   ```markdown
   **口径说明**
@@ -91,6 +91,8 @@ python3 scripts/run_analysis.py \
 - 归因结果完整展示通过质量闸门的业务结果。除非用户明确只要摘要，不得只输出相对贡献率；同时输出结果中有效的周期值、变化表现、绝对贡献、相对贡献、贡献方向，以及必要的整体摘要和边界说明。完整展示不等于额外扩展 Query 未要求的时期或计算。
 - 最终答案优先按指标组织。同一指标且指标定义、视角、范围或分母域、维度粒度、父级边界、时期语义和单位兼容的事实、派生与归因结果尽量放在同一表格；不能安全合并时分开并说明口径差异。
 - 每个数值必须有明确单位，可放在列名、表名或紧邻表格的口径说明中。单位未解析时明确披露，不得根据指标名称推测；百分比、百分点和指标原始单位不得混用。标准数值契约中 `%` 和 `pp` 均使用声明单位下的数值，例如 `28.1%` 为 `value=28.1, unit=%`，`+0.6pp` 为 `value=0.6, unit=pp`；不得将它们当作 `0.281%` 或 `0.006pp` 输出。
+- 注册型指标组合结果存在 `display_value/display_unit` 时，最终结论必须直接使用展示值和展示单位，不得再次换算；缺失展示字段时沿用原始 `value/unit`。展示配置只影响最终呈现，不得据此改变指标候选、公式、状态或补充计算。
+- 可选 Query Policy 补充未出现在 `answer-payload.json` 中，不构成源表缺数或历史值不可用的证据；只有载荷中的 missing fact、resolution block 或质量诊断明确支持时才说明不可用，否则只陈述实际成功结果。
 - 用户公式中的全部显式因子都属于归因输入，包括来源指标、常量和派生子表达式。因子值跨期不变或贡献为 0 时仍按 runner 结果展示，不得在答案组织阶段删除。
 
 只输出通过质量闸门的事实和计算结果。不得编造数据、指标定义、维度层级、聚合资格或归因能力。没有归因要求时不要输出贡献率章节。

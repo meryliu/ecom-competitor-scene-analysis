@@ -72,6 +72,7 @@ python3 scripts/validate_execution.py --input <execution.json> --phase final --r
 33. 目标标量维度必须传播到目标、metric 因子、derived 因子事实叶子及全部时期角色；因子维度与目标维度冲突、selector grain 不完整或重复 selector 在 fetch 前报错。标量过滤不得隐式生成 fanout。
 34. 分析 IR 不得覆盖 runner-owned 残差阈值。残差超阈值的有效引擎结果必须保存为 `partial_success`；`execution_summary.partial_nodes` 与节点终态完全一致。
 35. `success` 节点只能依赖 `success`；结论组织、任务汇总和 bundle 汇总不得把 `partial_success`、失败、跳过或阻断依赖升级为 `success`。
+36. 非固有跨度解析模式只允许 `native|sum|recompute|period_only`。显式展示粒度只能生成 `period_only`；逐期派生的逻辑角色必须映射到同粒度、等长的物理周期；ISO 周累计权重与跨度交集一致，逐周原值展示不得伪装为区间累计。
 
 ## 轻量执行器校验
 

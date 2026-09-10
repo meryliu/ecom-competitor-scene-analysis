@@ -65,7 +65,7 @@
 }
 ```
 
-每项需求使用唯一 `requirement_id`；归因目标使用唯一 `target_id`。`criticality` 只使用 `core|required|optional`。只声明 Query 实际需要的时期角色和输出。
+每项需求使用唯一 `requirement_id`；归因目标使用唯一 `target_id`。`criticality` 只使用 `core|required|optional`。只声明 Query 实际需要的时期角色和输出。Query Policy 为模糊表现新增的同比项是唯一可使用 `default_output_role=performance_yoy_supplement` 的需求：它必须位于 `derived_requirements`，同时声明 `derived_metric_id=yoy_growth`、`criticality=optional` 和 `provenance=business_policy`，并与一个非补充 fact requirement 使用相同 `metric_ref`。用户显式需求不得使用该标记。
 
 `unit=待元信息解析` 和 `definition=待元信息解析` 只是模型侧占位状态，不是可执行元信息。统一 runner 在编译前使用当前 source revision 的结构索引补全所有已匹配指标。模型推断具体单位时写 `unit_source=model_inferred`：Resolve 不以该单位硬过滤或加分，Prepare 以源元信息覆盖并记录修正；`user_formula` 或未附 `unit_evidence` 的 `user_explicit` 也按推断处理，只有 Query 有可追溯证据、注册定义或源元数据声明的单位冲突才进入确认/阻断。后续 Compile/Execution 仍严格校验实际单位和量级。
 
@@ -137,8 +137,31 @@ runner 在 Provider 前执行本地业务参数预检和时期协议预检。它
 - 两个时期的同比差或同比趋势才创建两组同期角色。
 - “环比”按 Query 粒度选择直接上期。
 - 季度、年度等目标粒度保留目标时期；不要预先展开月份。runner 根据实时结构索引优先读取目标粒度，缺失时自动生成并复用细粒度适配结果。
+- 单个固有年、季、月或 ISO 周继续写入 `analysis_task.periods`。不能表示为单个固有周期的闭区间（如上半年、截至某日、任意起止日期）写入 `analysis_task.period_requests`，同一角色不得同时出现在两处：
+
+  ```json
+  {
+    "period_requests": {
+      "analysis": {
+        "type": "bounded_span",
+        "label": "2026年上半年",
+        "start": "2026-01-01",
+        "end": "2026-06-30",
+        "requested_grain": null,
+        "grain_source": "not_specified"
+      }
+    }
+  }
+  ```
+
+- 只有 Query 明确要求“按季度/按月/按周”等展示粒度时设置 `requested_grain=quarter|month|week|year` 和 `grain_source=user_explicit`；不得根据源表能力预填该字段。无显式粒度时，Prepare 对可加基础指标生成跨度累计，对注册组合按 `period_aggregation` 执行，对不可加指标选择完整可执行的最粗逐期粒度。显式粒度始终要求逐期输出，即使指标可加，也不得替换为累计标量或其他粒度。
+- 注册组合的 `period_aggregation=recompute` 表示每个基础输入先按同一跨度安全累计，再执行一次原注册公式；`sum` 表示组合结果本身可求和；`period_only` 表示只逐期展示。注册派生不另设聚合字段：其基础指标或组合先按上述规则物化；若得到标量则原公式执行一次，若得到序列则所有时期角色必须同粒度、等长、逐期对齐后分别执行原公式。
+- 默认逐期只使用完整覆盖且实际可执行的粒度。半年及更长的完整月区间依次尝试季度、月、ISO 周；较短完整月区间依次尝试月、ISO 周；非完整月区间只尝试 ISO 周。按周逐期展示所有与跨度相交的完整 ISO 周值，不对不可加指标加权，并在首尾周超出边界时披露 `boundary_spill=true`。可加指标按周累计仍使用 `overlap_days/7` 权重。
+- 跨度规则只扩展 task 级事实、注册组合和注册派生。归因目标继续使用其既有原生 `periods` 契约；自定义计算需要逐期自动改写时返回不支持，不推测公式广播语义。
 - 自动展开得到的相同物理时期在整个任务中只注册一个内部时期角色，供不同指标和适配共同引用；`__fact_` 是 runner 保留前缀，模型不得创建或依赖内部角色名称。
 - 不为 Query 未要求的趋势或比较期额外取数。
+
+时间跨度不改变指标候选的核心语义、对象、维度、Query Policy 或绑定优先级。Resolve 仅把 `period_requests` 纳入原有结构可执行性检查；Prepare 仍优先保留原生直接路径，新分支只处理原路径不能表达或不能直接执行的跨度。物理单元格为空属于执行结果缺失，保持 `missing`，不得改换粒度或指标重试。
 
 季度求和适配包含 `requirement_id, metric_ref, target_period_role, view_id, dimensions, dimension_refs, expression, rule_source, validation, criticality`。其中 `expression` 使用 `sum` 引用对应三个月的事实角色，`rule_source=source_metric_metadata`，`validation` 至少包含 `facts_present, unit_consistent, metric_additive`。
 
@@ -161,6 +184,8 @@ runner 在 Provider 前执行本地业务参数预检和时期协议预检。它
 计算节点的 `group_dimensions` 使用真实分组维度，例如 `TOP6平台`。命名集合是选择域，不是独立维度值；源表中的 `TOP6平台` 则是独立物理维度。
 
 ## 5. 输出和依赖
+
+模糊表现补充同比的 `output_requirement.source_requirement_refs` 可以与原 fact requirement 并列。Resolve 必须仅用非补充需求确定原指标绑定，再判断补充项能否沿该绑定或唯一的源同比事实执行；不允许补充项改变原绑定。不可用、歧义或不兼容的补充项由 Prepare 连同对应输出引用静默删除。成功补充项沿用现有同比编译和执行路径；运行时缺失也不改变原任务状态或触发模型补算。
 
 每个 `output_requirement` 必须通过 `source_requirement_refs` 指向实际承接结果的事实、组合、派生或归因需求：
 

@@ -5,9 +5,11 @@ from __future__ import annotations
 import re
 import unicodedata
 from copy import deepcopy
+from datetime import date
 from typing import Any
 
 from data_gateway import RESOLVED_CAPABILITIES_V1
+from period_resolution import default_grains, periods_for_grain
 from time_rollup import normalize_period as _normalize_period
 
 
@@ -116,6 +118,64 @@ def evaluate_structural_grain_capability(
         ),
         "target_grain": target_grain,
         "supported_grains": supported,
+        "aggregation_mode": metadata.get("aggregation_mode") or "unknown",
+    }
+
+
+def evaluate_structural_span_capability(
+    metadata: dict[str, Any],
+    period_request: dict[str, Any],
+    edges: list[list[str]] | tuple[tuple[str, str], ...] | None = None,
+) -> dict[str, Any]:
+    """Evaluate bounded-span reachability without reading physical periods or cells."""
+    supported = [str(value) for value in metadata.get("supported_grains") or []]
+    if not supported:
+        return {"status": "unknown", "reason": "metadata_grain_unknown"}
+    try:
+        start = date.fromisoformat(str(period_request["start"]))
+        end = date.fromisoformat(str(period_request["end"]))
+    except (KeyError, ValueError):
+        return {"status": "unavailable", "reason": "invalid_period_request"}
+    explicit = period_request.get("requested_grain")
+    aggregation = metric_aggregation_eligibility(metadata)
+    grains = [str(explicit)] if explicit else default_grains(start, end)
+    for target_grain in grains:
+        output_periods = periods_for_grain(
+            start,
+            end,
+            target_grain,
+            allow_intersecting_weeks=target_grain == "week",
+        )
+        if not output_periods:
+            continue
+        if target_grain in supported:
+            return {
+                "status": "available",
+                "path": "period_series" if explicit or not aggregation["allowed"] else "aggregate_span",
+                "source_grain": target_grain,
+                "output_grain": target_grain,
+            }
+        if aggregation["allowed"]:
+            source_grain = next(
+                (
+                    grain for grain in supported
+                    if can_rollup_grain(grain, target_grain, edges)
+                ),
+                None,
+            )
+            if source_grain is not None:
+                return {
+                    "status": "available",
+                    "path": "period_series" if explicit else "aggregate_span",
+                    "source_grain": source_grain,
+                    "output_grain": target_grain,
+                    "aggregation_reason": aggregation["reason"],
+                }
+    return {
+        "status": "unavailable",
+        "reason": "explicit_grain_unsupported" if explicit else "span_grain_unsupported",
+        "supported_grains": supported,
+        "requested_grain": explicit,
         "aggregation_mode": metadata.get("aggregation_mode") or "unknown",
     }
 

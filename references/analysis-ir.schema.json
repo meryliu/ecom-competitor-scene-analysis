@@ -12,7 +12,23 @@
       "properties": {
         "query": {"type": "string"},
         "metrics": {"type": "array", "items": {"type": "object"}},
-        "periods": {"type": "object", "additionalProperties": {"type": "string"}}
+        "periods": {"type": "object", "additionalProperties": {"type": "string"}},
+        "period_requests": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["type", "start", "end"],
+            "properties": {
+              "type": {"const": "bounded_span"},
+              "label": {"type": "string"},
+              "start": {"type": "string", "format": "date"},
+              "end": {"type": "string", "format": "date"},
+              "requested_grain": {"enum": ["year", "quarter", "month", "week", null]},
+              "grain_source": {"enum": ["user_explicit", "not_specified"]}
+            }
+          }
+        },
+        "period_resolutions": {"type": "array", "items": {"type": "object"}}
       }
     },
     "fact_observations": {"type": "array", "items": {"$ref": "#/$defs/requirement"}},

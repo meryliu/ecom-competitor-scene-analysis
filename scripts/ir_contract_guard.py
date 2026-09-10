@@ -126,6 +126,56 @@ def validate_analysis_ir_contract(
     }
     task_periods = task.get("periods") if isinstance(task, dict) else {}
     task_periods = task_periods if isinstance(task_periods, dict) else {}
+    performance_supplement_role = "performance_yoy_supplement"
+    attribution_tokens = (
+        "归因", "原因", "为什么", "拆解", "驱动", "贡献", "拉动", "拖累",
+        "影响因素", "下滑原因", "增长原因",
+    )
+    query = str(task.get("query") or "") if isinstance(task, dict) else ""
+    facts = [
+        item for item in ir.get("fact_observations") or []
+        if isinstance(item, dict)
+        and item.get("default_output_role") != performance_supplement_role
+    ]
+    for requirement_index, requirement in enumerate(ir.get("derived_requirements") or []):
+        if (
+            not isinstance(requirement, dict)
+            or requirement.get("default_output_role") != performance_supplement_role
+        ):
+            continue
+        path = f"derived_requirements[{requirement_index}]"
+        if (
+            requirement.get("derived_metric_id") != "yoy_growth"
+            or requirement.get("criticality") != "optional"
+            or requirement.get("provenance") != "business_policy"
+        ):
+            raise IRContractError(
+                "POLICY-SUPPLEMENT-001",
+                f"{path} has an invalid performance YoY supplement contract",
+                {"path": path},
+            )
+        if ir.get("attribution_targets") or any(token in query for token in attribution_tokens):
+            raise IRContractError(
+                "POLICY-SUPPLEMENT-002",
+                f"{path} is not allowed in an attribution task",
+                {"path": path},
+            )
+        peers = [
+            fact for fact in facts
+            if fact.get("metric_ref") == requirement.get("metric_ref")
+            and fact.get("view_id") == requirement.get("view_id")
+            and (fact.get("dimensions") or {}) == (requirement.get("dimensions") or {})
+            and (fact.get("dimension_refs") or [])
+            == (requirement.get("dimension_refs") or [])
+            and (fact.get("metric_constraints") or [])
+            == (requirement.get("metric_constraints") or [])
+        ]
+        if not peers:
+            raise IRContractError(
+                "POLICY-SUPPLEMENT-003",
+                f"{path} must have a matching non-supplement fact requirement",
+                {"path": path, "metric_ref": requirement.get("metric_ref")},
+            )
     for collection in (
         "fact_observations", "metric_compositions", "derived_requirements",
         "attribution_targets",

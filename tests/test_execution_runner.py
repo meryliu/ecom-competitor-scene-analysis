@@ -503,6 +503,20 @@ class NormalizeFactsTests(unittest.TestCase):
         }
         self.assertEqual(compute_run_status(nodes, results), "partial_success")
 
+    def test_partial_performance_supplement_does_not_downgrade_run_status(self) -> None:
+        nodes = {
+            "core_fact": {"criticality": "core", "status": "planned"},
+            "optional_yoy": {
+                "criticality": "optional", "status": "planned",
+                "default_output_role": "performance_yoy_supplement",
+            },
+        }
+        results = {
+            "core_fact": {"status": "success"},
+            "optional_yoy": {"status": "partial_success"},
+        }
+        self.assertEqual(compute_run_status(nodes, results), "success")
+
     def test_core_partial_result_is_not_promoted_to_blocked(self) -> None:
         nodes = {"core_attribution": {"criticality": "core", "status": "planned"}}
         results = {"core_attribution": {"status": "partial_success"}}

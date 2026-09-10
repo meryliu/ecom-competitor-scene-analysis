@@ -119,6 +119,60 @@ class CompilePlanTests(unittest.TestCase):
         self.assertEqual(plan["execution_runtime"]["periods"]["analysis_last_year"], "2025-05")
         self.assertEqual(plan["execution_runtime"]["periods"]["comparison"], "2025-05")
 
+    def test_performance_yoy_supplement_marker_reaches_derived_node(self) -> None:
+        ir = base_ir()
+        ir["analysis_task"]["query"] = "26年5月支付GMV水平怎么样"
+        common = {
+            "metric_ref": "payment", "view_id": "platform_view",
+            "dimensions": {}, "dimension_refs": [],
+        }
+        ir["fact_observations"] = [{
+            **common, "requirement_id": "payment_level",
+            "period_roles": ["analysis"], "criticality": "core",
+        }]
+        ir["derived_requirements"] = [{
+            **common, "requirement_id": "payment_yoy",
+            "derived_metric_id": "yoy_growth", "definition_status": "registered",
+            "metric_object": "volume", "criticality": "optional",
+            "default_output_role": "performance_yoy_supplement",
+            "provenance": "business_policy",
+        }]
+        plan, report = self.compile(ir)
+        self.assertTrue(report["valid"], report)
+        node = next(
+            item for item in plan["nodes"]
+            if item.get("type") == "derived_metric"
+            and "payment_yoy" in item.get("requirement_refs", [])
+        )
+        self.assertEqual(
+            node["default_output_role"], "performance_yoy_supplement"
+        )
+        compilation = next(
+            item for item in plan["requirement_compilation"]
+            if item["requirement_id"] == "payment_yoy"
+        )
+        self.assertEqual(
+            compilation["default_output_role"], "performance_yoy_supplement"
+        )
+
+    def test_attribution_task_rejects_performance_supplement_marker(self) -> None:
+        ir = base_ir()
+        ir["analysis_task"]["query"] = "支付GMV表现如何并分析原因"
+        ir["fact_observations"] = [{
+            "requirement_id": "payment_level", "metric_ref": "payment",
+            "period_roles": ["analysis"], "view_id": "platform_view",
+        }]
+        ir["derived_requirements"] = [{
+            "requirement_id": "payment_yoy", "metric_ref": "payment",
+            "metric_object": "volume", "derived_metric_id": "yoy_growth",
+            "definition_status": "registered", "view_id": "platform_view",
+            "criticality": "optional",
+            "default_output_role": "performance_yoy_supplement",
+            "provenance": "business_policy",
+        }]
+        with self.assertRaisesRegex(CompileError, "not allowed in an attribution task"):
+            self.compile(ir)
+
     def test_yoy_growth_and_attribution_keep_target_local_period_roles(self) -> None:
         ir = base_ir()
         ir["analysis_task"].update({

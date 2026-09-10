@@ -102,6 +102,7 @@ def build_resolve_request(
     for task_id, ir in tasks:
         task = ir.get("analysis_task") or {}
         task_periods = task.get("periods") or {}
+        task_period_requests = task.get("period_requests") or {}
         task_metrics_by_ref = {
             str(item.get("metric_id")): item
             for item in task.get("metrics") or []
@@ -190,10 +191,16 @@ def build_resolve_request(
                     "requirement_id": str(requirement.get(id_field) or ""),
                     "requirement_type": collection,
                     "criticality": str(requirement.get("criticality") or "required"),
+                    "default_output_role": requirement.get("default_output_role"),
+                    "provenance": requirement.get("provenance"),
                     "period_roles": period_roles,
                     "periods": [
                         str(task_periods[role]) for role in period_roles if role in task_periods
                     ],
+                    "period_requests": {
+                        str(role): deepcopy(task_period_requests[role])
+                        for role in period_roles if role in task_period_requests
+                    },
                     "dimensions": sorted(requirement_dimensions),
                     "breakdown_dimensions": sorted(breakdown_dimensions),
                     "derived_metric_id": requirement.get("derived_metric_id"),
@@ -234,6 +241,11 @@ def build_resolve_request(
                         for consumer in consumers_by_metric.get(metric_ref) or []
                         for period in consumer.get("periods") or []
                     }),
+                    "required_period_requests": {
+                        str(role): deepcopy(request)
+                        for consumer in consumers_by_metric.get(metric_ref) or []
+                        for role, request in (consumer.get("period_requests") or {}).items()
+                    },
                     "required_dimensions": sorted({
                         str(dimension)
                         for consumer in consumers_by_metric.get(metric_ref) or []
@@ -349,6 +361,7 @@ def build_resolve_request(
             "composition_intents": composition_intents,
             "dimensions": sorted(task_dimensions),
             "periods": sorted(str(item) for item in (task.get("periods") or {}).values()),
+            "period_requests": deepcopy(task_period_requests),
             "resolution_patches": deepcopy(ir.get("resolution_patches") or []),
         })
 

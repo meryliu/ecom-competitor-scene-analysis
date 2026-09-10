@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sys
 import unittest
 from copy import deepcopy
@@ -10,7 +11,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from run_analysis import compact_task_answer  # noqa: E402
-from run_fast_query import build_answer_basis, enrich_answer_basis_definitions  # noqa: E402
+from run_fast_query import (  # noqa: E402
+    answer_payload,
+    build_answer_basis,
+    enrich_answer_basis_definitions,
+    enrich_composition_display_values,
+)
 
 
 def fact(
@@ -77,6 +83,150 @@ def base_manifest() -> dict:
 
 
 class AnswerBasisTests(unittest.TestCase):
+    def test_final_presentation_contract_uses_non_empty_lineage_definitions(self) -> None:
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        output_contract = (
+            ROOT / "references" / "output-contract.md"
+        ).read_text(encoding="utf-8")
+        conclusion_rules = skill.split(
+            "结论输出遵循以下通用原则：", 1
+        )[1].split("- 归因结果完整展示", 1)[0]
+
+        for token in (
+            "实际成功结果血缘",
+            "派生或组合结果",
+            "静默省略定义文本",
+            "不得从 Query、指标名、候选指标或公式文本推测定义",
+        ):
+            self.assertIn(token, conclusion_rules)
+        self.assertNotIn("其他字段缺失时如实写“未提供”", conclusion_rules)
+
+        for token in (
+            "最终结论中的口径说明只做 `answer_basis` 的展示投影",
+            "源侧预计算指标仍按事实结果处理",
+            "省略定义文本",
+            "不得触发额外 Resolve、Prepare、Compile、Fetch、Execute",
+        ):
+            self.assertIn(token, output_contract)
+
+    def test_registered_composition_projects_scalar_display_value(self) -> None:
+        manifest = base_manifest()
+        manifest["derived_results"] = [{
+            "derived_metric_id": "competitor_comprehensive_settlement_tr",
+            "node_id": "tr",
+            "status": "success",
+            "definition_status": "registered",
+            "definition_source": "references/metric-composition-registry.json",
+            "unit": "rate",
+            "value": 0.09326,
+        }]
+        registry = {
+            "definitions": {
+                "competitor_comprehensive_settlement_tr": {
+                    "unit": "rate",
+                    "display": {"unit": "%", "multiplier": 100},
+                }
+            }
+        }
+
+        answer = answer_payload(manifest, "fast_fact", registry)
+        result = answer["derived_results"][0]
+        self.assertEqual(result["value"], 0.09326)
+        self.assertEqual(result["unit"], "rate")
+        self.assertAlmostEqual(result["display_value"], 9.326)
+        self.assertEqual(result["display_unit"], "%")
+        self.assertNotIn("display_value", manifest["derived_results"][0])
+
+    def test_registered_composition_projects_grouped_display_values(self) -> None:
+        answer = {"derived_results": [{
+            "derived_metric_id": "competitor_settlement_rate",
+            "status": "partial_success",
+            "definition_status": "registered",
+            "definition_source": "references/metric-composition-registry.json",
+            "unit": "rate",
+            "value": [
+                {"dimensions": {"平台": "京东"}, "value": 0.08},
+                {"dimensions": {"平台": "拼多多"}, "value": 0.12},
+                {"dimensions": {"平台": "缺失"}, "value": None},
+            ],
+        }]}
+        registry = {"definitions": {"competitor_settlement_rate": {
+            "unit": "rate",
+            "display": {"unit": "%", "multiplier": 100},
+        }}}
+
+        enrich_composition_display_values(answer, registry)
+        result = answer["derived_results"][0]
+        self.assertEqual(result["display_unit"], "%")
+        self.assertEqual(result["value"][0]["display_value"], 8.0)
+        self.assertEqual(result["value"][1]["display_value"], 12.0)
+        self.assertNotIn("display_value", result["value"][2])
+
+    def test_composition_display_metadata_is_fail_open_and_source_scoped(self) -> None:
+        base_result = {
+            "derived_metric_id": "competitor_settlement_rate",
+            "status": "success",
+            "definition_status": "registered",
+            "definition_source": "references/metric-composition-registry.json",
+            "unit": "rate",
+            "value": 0.1,
+        }
+        registry = {"definitions": {"competitor_settlement_rate": {
+            "unit": "rate",
+            "display": {"unit": "%", "multiplier": "100"},
+        }}}
+        answer = {"status": "success", "derived_results": [deepcopy(base_result)]}
+        enrich_composition_display_values(answer, registry)
+        self.assertNotIn("display_value", answer["derived_results"][0])
+        self.assertEqual(answer["status"], "success")
+
+        generic = deepcopy(base_result)
+        generic["definition_source"] = "references/derived-metric-registry.json"
+        valid_registry = {"definitions": {"competitor_settlement_rate": {
+            "unit": "rate",
+            "display": {"unit": "%", "multiplier": 100},
+        }}}
+        answer = {"derived_results": [generic]}
+        enrich_composition_display_values(answer, valid_registry)
+        self.assertNotIn("display_value", answer["derived_results"][0])
+
+    def test_configured_composition_displays_are_valid(self) -> None:
+        registry = json.loads(
+            (ROOT / "references" / "metric-composition-registry.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        configured_ids = {
+            "competitor_settlement_rate",
+            "competitor_ad_payment_tr",
+            "competitor_ad_settlement_tr",
+            "competitor_commission_payment_tr",
+            "competitor_commission_settlement_tr",
+            "competitor_comprehensive_payment_tr",
+            "competitor_comprehensive_settlement_tr",
+        }
+        for composition_id in configured_ids:
+            definition = registry["definitions"][composition_id]
+            self.assertEqual(definition["unit"], "rate")
+            self.assertEqual(definition["display"], {
+                "unit": "%", "multiplier": 100,
+            })
+        for composition_id, definition in registry["definitions"].items():
+            display = definition.get("display")
+            if display is None:
+                continue
+            with self.subTest(composition_id=composition_id):
+                self.assertIsInstance(definition.get("unit"), str)
+                self.assertTrue(definition["unit"].strip())
+                self.assertIsInstance(display, dict)
+                self.assertIsInstance(display.get("unit"), str)
+                self.assertTrue(display["unit"].strip())
+                multiplier = display.get("multiplier")
+                self.assertIsInstance(multiplier, (int, float))
+                self.assertNotIsInstance(multiplier, bool)
+                self.assertTrue(math.isfinite(multiplier))
+                self.assertGreater(multiplier, 0)
+
     def test_direct_fact_uses_source_metadata_and_output_refs(self) -> None:
         manifest = base_manifest()
         manifest["normalized_facts"].append(fact(
@@ -332,6 +482,87 @@ class AnswerBasisTests(unittest.TestCase):
         self.assertEqual(
             compact_task_answer(answer)["answer_basis"],
             answer["answer_basis"],
+        )
+
+    def test_compact_answer_preserves_period_resolutions(self) -> None:
+        resolutions = [{
+            "period_role": "analysis", "label": "2026年上半年",
+            "mode": "period_only", "output_grain": "month",
+            "source_periods": ["2026-01", "2026-02"],
+        }]
+        answer = {
+            "schema_version": "fast_query_answer/1.0", "status": "success",
+            "period_resolutions": resolutions, "views": [],
+            "derived_results": [], "attribution_results": [],
+        }
+        self.assertEqual(
+            compact_task_answer(answer)["period_resolutions"], resolutions
+        )
+
+    def test_compact_answer_preserves_composition_display_fields(self) -> None:
+        answer = {
+            "schema_version": "fast_query_answer/1.0",
+            "status": "success",
+            "views": [],
+            "derived_results": [{
+                "derived_metric_id": "competitor_settlement_rate",
+                "status": "success",
+                "unit": "rate",
+                "value": 0.1,
+                "display_value": 10.0,
+                "display_unit": "%",
+            }],
+            "attribution_results": [],
+        }
+        result = compact_task_answer(answer)["derived_results"][0]
+        self.assertEqual(result["display_value"], 10.0)
+        self.assertEqual(result["display_unit"], "%")
+
+    def test_answer_payload_hides_internal_span_source_facts(self) -> None:
+        manifest = base_manifest()
+        manifest["normalized_facts"].append({
+            **manifest["normalized_facts"][0],
+            "fact_slot_id": "internal", "period_role": "__fact_2026_01",
+            "period": "2026-01",
+        })
+        manifest["analysis_task"]["period_resolutions"] = [{
+            "period_role": "analysis", "label": "2026年上半年",
+            "start": "2026-01-01", "end": "2026-06-30",
+            "mode": "sum", "target_period": "span:2026-01-01/2026-06-30",
+            "source_periods": ["2026-01", "2026-02"],
+            "candidate_partitions": [["internal detail"]],
+        }]
+        answer = answer_payload(manifest, "fast_fact")
+        rows = [row for view in answer["views"] for row in view["rows"]]
+        self.assertFalse(any(row["period_role"].startswith("__fact_") for row in rows))
+        self.assertNotIn("candidate_partitions", answer["period_resolutions"][0])
+
+    def test_span_rollup_formula_is_collapsed(self) -> None:
+        manifest = base_manifest()
+        manifest["analysis_ir"]["output_requirements"][0]["source_requirement_refs"] = ["span"]
+        manifest["analysis_ir"]["input_adaptations"] = [{
+            "requirement_id": "span",
+            "rollup": {
+                "calendar": "iso8601",
+                "target_period": "span:2026-01-01/2026-06-30",
+                "components": [{"period": "2026-Q1", "weight": 1.0}],
+            },
+        }]
+        manifest["requirement_compilation"] = [{
+            "requirement_id": "span", "node_ids": ["span_node"],
+            "fact_slot_ids": ["slot_1"],
+        }]
+        manifest["nodes"].append({
+            "node_id": "span_node", "depends_on": [],
+            "execution": {"handler": "derived"},
+        })
+        manifest["derived_results"] = [{
+            "node_id": "span_node", "status": "success",
+            "metric": "销售额", "formula": {"literal": 1},
+        }]
+        self.assertEqual(
+            build_answer_basis(manifest)["calculations"],
+            [{"name": "区间累计", "formula": "区间累计 = Σ(完整子周期值)"}],
         )
 
     def test_task_basis_is_isolated_and_ordering_is_deterministic(self) -> None:

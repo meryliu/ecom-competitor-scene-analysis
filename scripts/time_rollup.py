@@ -8,6 +8,8 @@ import unicodedata
 from datetime import date, timedelta
 from typing import Any
 
+from period_resolution import parse_span_token
+
 
 ISO_WEEK_CALENDAR = "iso8601"
 
@@ -46,6 +48,9 @@ def normalize_period(value: Any) -> tuple[str, str] | None:
 
 
 def period_bounds(period: str) -> tuple[date, date]:
+    span = parse_span_token(period)
+    if span is not None:
+        return span
     parsed = normalize_period(period)
     if parsed is None:
         raise ValueError(f"invalid period: {period!r}")
@@ -94,5 +99,4 @@ def iso_weeks_covering(target: str) -> list[dict[str, Any]]:
             })
         cursor += timedelta(days=7)
     return result
-
 

@@ -8,6 +8,7 @@ from copy import deepcopy
 from typing import Any
 
 from ir_contract_guard import normalize_attribution_period_roles
+from period_resolution import normalize_period_request, parse_span_token
 from source_capability import normalize_period
 
 
@@ -29,6 +30,28 @@ def validate_period_values(ir: dict[str, Any]) -> None:
     period_maps: list[tuple[str, Any]] = []
     if isinstance(task, dict) and isinstance(task.get("periods"), dict):
         period_maps.append(("analysis_task.periods", task["periods"]))
+    if isinstance(task, dict) and task.get("period_requests") is not None:
+        requests = task.get("period_requests")
+        if not isinstance(requests, dict):
+            raise AnalysisIRNormalizationError(
+                "INVALID_PERIOD_REQUEST",
+                "analysis_task.period_requests 必须是对象",
+                {"path": "analysis_task.period_requests"},
+            )
+        overlap = sorted(set(requests) & set(task.get("periods") or {}))
+        if overlap:
+            raise AnalysisIRNormalizationError(
+                "INVALID_PERIOD_REQUEST",
+                f"时期角色不能同时出现在 periods 和 period_requests：{overlap}",
+                {"roles": overlap},
+            )
+        for role, value in requests.items():
+            try:
+                normalize_period_request(value, f"analysis_task.period_requests.{role}")
+            except ValueError as exc:
+                raise AnalysisIRNormalizationError(
+                    "INVALID_PERIOD_REQUEST", str(exc), {"role": str(role)}
+                ) from exc
     for index, target in enumerate(ir.get("attribution_targets") or []):
         if isinstance(target, dict) and isinstance(target.get("periods"), dict):
             period_maps.append((f"attribution_targets[{index}].periods", target["periods"]))
@@ -47,6 +70,15 @@ def validate_period_values(ir: dict[str, Any]) -> None:
                     {"path": path, "value": value},
                 )
             parsed = normalize_period(value)
+            if parsed is None and parse_span_token(value) is not None:
+                resolutions = task.get("period_resolutions") if isinstance(task, dict) else None
+                generated_targets = {
+                    str(item.get("target_period"))
+                    for item in resolutions or []
+                    if isinstance(item, dict)
+                }
+                if str(value) in generated_targets:
+                    continue
             if parsed is None:
                 raise AnalysisIRNormalizationError(
                     "INVALID_PERIOD", f"{path} 无法识别时期：{value}",
@@ -55,6 +87,8 @@ def validate_period_values(ir: dict[str, Any]) -> None:
 
 
 def _canonical_period(value: Any, path: str) -> str:
+    if parse_span_token(value) is not None:
+        return str(value)
     parsed = normalize_period(value)
     if parsed is None:
         raise AnalysisIRNormalizationError(
@@ -187,6 +221,19 @@ def normalize_analysis_ir(ir: dict[str, Any]) -> dict[str, Any]:
             str(role): _canonical_period(value, f"analysis_task.periods.{role}")
             for role, value in periods.items()
         }
+    period_requests = task.get("period_requests")
+    if isinstance(period_requests, dict):
+        try:
+            task["period_requests"] = {
+                str(role): normalize_period_request(
+                    value, f"analysis_task.period_requests.{role}"
+                )
+                for role, value in period_requests.items()
+            }
+        except ValueError as exc:
+            raise AnalysisIRNormalizationError(
+                "INVALID_PERIOD_REQUEST", str(exc)
+            ) from exc
     for index, target in enumerate(normalized.get("attribution_targets") or []):
         if not isinstance(target, dict):
             continue

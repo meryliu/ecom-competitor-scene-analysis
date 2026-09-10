@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from period_resolution import parse_span_token
 from compile_plan import compile_and_validate, load_json
 from dimension_domain_registry import DEFAULT_REGISTRY_PATH as DEFAULT_DIMENSION_SET_REGISTRY
 from execution_runner import execute_plan
@@ -27,6 +28,9 @@ class FastQueryFallback(ValueError):
         super().__init__(detail)
         self.trigger = trigger
         self.detail = detail
+
+
+COMPOSITION_DEFINITION_SOURCE = "references/metric-composition-registry.json"
 
 
 def utc_now() -> str:
@@ -667,6 +671,17 @@ def _rollup_formula(rollup: dict[str, Any]) -> tuple[str, str] | None:
         target = "季度"
     elif len(target_period) == 4 and target_period.isdigit():
         target = "年"
+    elif parse_span_token(target_period) is not None:
+        components = rollup.get("components") or []
+        if any(
+            isinstance(item, dict) and item.get("overlap_days") is not None
+            for item in components
+        ):
+            return (
+                "ISO周加权区间累计",
+                "区间累计 = Σ(周值 × 当周落入目标区间的天数 / 7)",
+            )
+        return "区间累计", "区间累计 = Σ(完整子周期值)"
     else:
         return None
     name = f"周上卷{target}"
@@ -791,11 +806,103 @@ def build_answer_basis(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def answer_payload(manifest: dict[str, Any], profile: str) -> dict[str, Any]:
+def _answer_period_resolutions(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    visible_fields = (
+        "period_role", "label", "start", "end", "mode", "target_period",
+        "requested_grain", "output_grain", "source_periods", "boundary_spill",
+    )
+    compact: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in (manifest.get("analysis_task") or {}).get("period_resolutions") or []:
+        if not isinstance(item, dict):
+            continue
+        projected = {
+            field: deepcopy(item[field]) for field in visible_fields if field in item
+        }
+        token = json.dumps(projected, ensure_ascii=False, sort_keys=True)
+        if token not in seen:
+            seen.add(token)
+            compact.append(projected)
+    return compact
+
+
+def _is_finite_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def enrich_composition_display_values(
+    answer: dict[str, Any],
+    composition_registry: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Add optional presentation values without changing computational results."""
+    if not isinstance(composition_registry, dict):
+        return answer
+    definitions = composition_registry.get("definitions")
+    if not isinstance(definitions, dict):
+        return answer
+    for result in answer.get("derived_results") or []:
+        if not isinstance(result, dict):
+            continue
+        if result.get("status") not in {"success", "partial_success"}:
+            continue
+        if result.get("definition_status") != "registered":
+            continue
+        if result.get("definition_source") != COMPOSITION_DEFINITION_SOURCE:
+            continue
+        definition = definitions.get(str(result.get("derived_metric_id") or ""))
+        if not isinstance(definition, dict):
+            continue
+        if result.get("unit") != definition.get("unit"):
+            continue
+        display = definition.get("display")
+        if not isinstance(display, dict):
+            continue
+        display_unit = display.get("unit")
+        multiplier = display.get("multiplier")
+        if (
+            not isinstance(display_unit, str)
+            or not display_unit.strip()
+            or not _is_finite_number(multiplier)
+            or multiplier <= 0
+        ):
+            continue
+
+        value = result.get("value")
+        converted = False
+        if _is_finite_number(value):
+            display_value = value * multiplier
+            if _is_finite_number(display_value):
+                result["display_value"] = display_value
+                converted = True
+        elif isinstance(value, list):
+            for member in value:
+                if not isinstance(member, dict) or not _is_finite_number(member.get("value")):
+                    continue
+                display_value = member["value"] * multiplier
+                if not _is_finite_number(display_value):
+                    continue
+                member["display_value"] = display_value
+                converted = True
+        if converted:
+            result["display_unit"] = display_unit
+    return answer
+
+
+def answer_payload(
+    manifest: dict[str, Any],
+    profile: str,
+    composition_registry: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     facts = manifest.get("normalized_facts") if isinstance(manifest.get("normalized_facts"), list) else []
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in facts:
         if not isinstance(row, dict):
+            continue
+        if str(row.get("period_role") or "").startswith("__fact_"):
             continue
         grouped.setdefault(str(row.get("view_id") or "default"), []).append({
             "metric": row.get("metric"),
@@ -806,7 +913,26 @@ def answer_payload(manifest: dict[str, Any], profile: str) -> dict[str, Any]:
             "unit": row.get("unit"),
             "missing": row.get("missing"),
         })
-    return {
+    nodes = {
+        str(item.get("node_id")): item
+        for item in manifest.get("nodes") or []
+        if isinstance(item, dict) and item.get("node_id")
+    }
+    derived_results = [
+        deepcopy(item) for item in manifest.get("derived_results", [])
+        if not (
+            isinstance(item, dict)
+            and item.get("definition_status") == "adaptation"
+        )
+        and not (
+            isinstance(item, dict)
+            and item.get("status") != "success"
+            and (
+                nodes.get(str(item.get("node_id"))) or {}
+            ).get("default_output_role") == "performance_yoy_supplement"
+        )
+    ]
+    answer = {
         "schema_version": "fast_query_answer/1.0",
         "status": manifest.get("status"),
         "execution_profile": profile,
@@ -814,9 +940,10 @@ def answer_payload(manifest: dict[str, Any], profile: str) -> dict[str, Any]:
             {"view_id": view_id, "rows": rows}
             for view_id, rows in sorted(grouped.items())
         ],
-        "derived_results": manifest.get("derived_results", []),
+        "derived_results": derived_results,
         "attribution_results": manifest.get("attribution_results", []),
         "answer_basis": build_answer_basis(manifest),
+        "period_resolutions": _answer_period_resolutions(manifest),
         "model_completion": manifest.get("model_completion"),
         "quality": {
             "logical_facts": len(facts),
@@ -830,6 +957,7 @@ def answer_payload(manifest: dict[str, Any], profile: str) -> dict[str, Any]:
             "assumptions": (manifest.get("analysis_task") or {}).get("assumptions", []),
         },
     }
+    return enrich_composition_display_values(answer, composition_registry)
 
 
 def enrich_answer_basis_definitions(
@@ -868,6 +996,11 @@ def finalize_model_nodes(manifest: dict[str, Any]) -> None:
         dependency_statuses = [
             by_id.get(str(dependency), {}).get("status")
             for dependency in node.get("depends_on", [])
+            if (
+                by_id.get(str(dependency), {}).get("default_output_role")
+                != "performance_yoy_supplement"
+                or by_id.get(str(dependency), {}).get("status") == "success"
+            )
         ]
         node["status"] = (
             "success"
@@ -896,6 +1029,8 @@ def finalize_model_nodes(manifest: dict[str, Any]) -> None:
         node_id
         for node_id in set(failed + partial + skipped + blocked)
         if (by_id.get(node_id, {}).get("execution") or {}).get("handler") != "model_owned"
+        and by_id.get(node_id, {}).get("default_output_role")
+        != "performance_yoy_supplement"
     )
     manifest["conclusions"] = [{
         "conclusion_id": "fast_query_result",
@@ -929,7 +1064,11 @@ def finalize_model_nodes(manifest: dict[str, Any]) -> None:
         for node in nodes
     ):
         final_status = "partial_success"
-    elif any(node.get("status") == "partial_success" for node in nodes):
+    elif any(
+        node.get("status") == "partial_success"
+        and node.get("default_output_role") != "performance_yoy_supplement"
+        for node in nodes
+    ):
         final_status = "partial_success"
     else:
         final_status = "success"
@@ -1001,6 +1140,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--index", type=Path, help="competitor structure cache path")
     parser.add_argument("--response-file", type=Path, help="offline scene_facts/1.0 response for tests/replay")
     parser.add_argument("--derived-registry", type=Path, default=root / "references" / "derived-metric-registry.json")
+    parser.add_argument("--composition-registry", type=Path, default=root / "references" / "metric-composition-registry.json")
     parser.add_argument("--dimension-set-registry", type=Path, default=DEFAULT_DIMENSION_SET_REGISTRY)
     return parser.parse_args()
 
@@ -1129,7 +1269,15 @@ def legacy_main() -> int:
         write_json(final_report_path, final_report)
         if not final_report.get("valid"):
             raise FastQueryFallback("final_validation_failed", "fast execution failed final validation")
-        answer = answer_payload(manifest, str(plan["execution_profile"]))
+        try:
+            composition_registry = load_json(args.composition_registry)
+        except (OSError, ValueError, json.JSONDecodeError):
+            composition_registry = None
+        answer = answer_payload(
+            manifest,
+            str(plan["execution_profile"]),
+            composition_registry,
+        )
         answer["workflow_duration_ms"] = round((time.perf_counter() - started) * 1000, 3)
         answer["post_fetch_to_answer_ms"] = round((time.perf_counter() - fetch_completed) * 1000, 3)
         answer["artifacts"] = {

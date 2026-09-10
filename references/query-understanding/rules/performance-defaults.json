@@ -1,0 +1,38 @@
+{
+  "schema_version": "query_policy_rule/1.0",
+  "policy_version": "query-policy/1.0.1",
+  "rule_id": "performance-defaults",
+  "name": "模糊表现补同比",
+  "version": "1.1.0",
+  "priority": 65,
+  "routing": {
+    "terms": ["表现如何", "表现怎么样", "水平如何", "水平怎么样"]
+  },
+  "applicability": {
+    "all": [
+      "路由短语为模糊输出",
+      "当前目标作用域的指标已经由用户或上游 Policy 明确",
+      "当前目标作用域尚无具体输出要求"
+    ],
+    "none": [
+      "当前目标作用域的指标仍未明确",
+      "用户或上游 Policy 已为当前目标作用域指定显式指标值、同比、环比、份额或其他具体输出",
+      "已有显式输出限制或口径语义",
+      "存在归因语义、目标或因子"
+    ]
+  },
+  "actions": [
+    {
+      "action_id": "supplement_vague_performance_yoy",
+      "op": "expand_sub_queries",
+      "idempotency": "application_key",
+      "instructions": [
+        "按目标作用域逐一判断结构化输出槽位，不使用 analysis_goal 自由文本判断是否已满足；上游仅展开指标集合时，对每个展开指标保留原 fact，并按同 metric_ref/时期/范围/视图/拆解追加 yoy_growth，标记 optional|performance_yoy_supplement|business_policy；不可唯一执行则静默省略且不影响原需求"
+      ]
+    }
+  ],
+  "source_ref": {
+    "heading_path": "全局约定/模糊指标表现默认补充同比",
+    "block_id": "local-performance-defaults"
+  }
+}

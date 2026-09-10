@@ -13,6 +13,15 @@
     {"case_id": "top6-payment-performance", "kind": "positive", "query": "看一下8月电商大盘GMV表现", "expected_rules": ["terminology-disambiguation", "top6-payment-gmv-performance"], "expected_sub_queries": ["指标值", "同比增速", "TOP6各平台占比"]},
     {"case_id": "top6-settlement-performance", "kind": "positive", "query": "看一下8月大盘结算GMV表现", "expected_rules": ["top6-settlement-gmv"], "expected_contains": ["大盘结算GMV", "大盘支付GMV", "大盘结算率"]},
     {"case_id": "jd-single-unspecified", "kind": "positive", "query": "看一下8月京东闭环电商佣金收入", "expected_rules": ["jd-commission"], "expected_sub_queries": ["闭环电商佣金收入，平台为京东", "京东闭环电商佣金收入（3P佣金）"]},
-    {"case_id": "jd-multi-platform", "kind": "negative", "query": "对比京东和抖音8月闭环电商佣金收入", "expected_rules": ["jd-commission"], "forbidden_contains": ["额外增加京东3P佣金口径"]}
+    {"case_id": "jd-multi-platform", "kind": "negative", "query": "对比京东和抖音8月闭环电商佣金收入", "expected_rules": ["jd-commission"], "forbidden_contains": ["额外增加京东3P佣金口径"]},
+    {"case_id": "ambiguous-user-metrics", "kind": "positive", "query": "看一下26年7月京东用户指标表现", "expected_rules": ["user-metric-defaults"], "expected_contains": ["MAC", "MAC月单量", "DAC"]},
+    {"case_id": "explicit-user-metric-protection", "kind": "negative", "query": "看一下26年7月京东MAC月单量同比", "expected_rules": ["user-explicit-priority"], "forbidden_rules": ["user-metric-defaults"], "assert_forbidden_rules": true},
+    {"case_id": "customer-price-protection", "kind": "negative", "query": "看一下26年7月京东用户平均单价", "expected_rules": ["terminology-disambiguation"], "forbidden_rules": ["user-metric-defaults"], "assert_forbidden_rules": true},
+    {"case_id": "user-frequency-not-routed", "kind": "negative", "query": "看一下26年7月京东用户频次", "forbidden_rules": ["user-metric-defaults"], "assert_forbidden_rules": true},
+    {"case_id": "vague-performance-how", "kind": "positive", "query": "26年7月指标A表现如何", "expected_rules": ["performance-defaults"]},
+    {"case_id": "vague-performance-how-about", "kind": "positive", "query": "26年7月指标A表现怎么样", "expected_rules": ["performance-defaults"]},
+    {"case_id": "vague-level-how", "kind": "positive", "query": "26年7月指标A水平如何", "expected_rules": ["performance-defaults"]},
+    {"case_id": "vague-level-how-about", "kind": "positive", "query": "26年7月指标A水平怎么样", "expected_rules": ["performance-defaults"]},
+    {"case_id": "upstream-metric-only-then-performance", "kind": "positive", "query": "25年下半年拼多多的用户指标表现怎么样", "expected_rules": ["user-metric-defaults", "performance-defaults"], "expected_contains": ["MAC", "MAC月单量", "DAC", "performance_yoy_supplement"]}
   ]
 }

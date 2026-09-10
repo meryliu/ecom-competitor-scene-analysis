@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from fact_contract import stable_id
-from time_rollup import normalize_period, overlap_days
+from time_rollup import normalize_period, overlap_days, period_bounds
 
 
 NODE_STATUSES = {
@@ -120,6 +120,7 @@ class Validator:
     def validate(self) -> dict[str, Any]:
         self._validate_top_level()
         self._validate_compiler_contract()
+        self._validate_period_resolutions()
         self._validate_execution_profile()
         self._validate_attribution_targets()
         self._validate_nodes()
@@ -206,6 +207,91 @@ class Validator:
                 valid = isinstance(value, dict)
             if not valid:
                 self.add("FAST-008", "ERROR", f"$.fast_query_admission.{field}", f"{field} 结构非法", "重新运行确定性准入")
+
+    def _validate_period_resolutions(self) -> None:
+        task = self.document.get("analysis_task") or {}
+        resolutions = task.get("period_resolutions", [])
+        if not isinstance(resolutions, list):
+            self.add(
+                "PERIOD-001", "ERROR", "$.analysis_task.period_resolutions",
+                "period_resolutions 必须是数组", "由 Prepare 重新生成时期解析",
+            )
+            return
+        periods = task.get("periods") or {}
+        allowed_modes = {"native", "sum", "recompute", "period_only"}
+        for index, item in enumerate(resolutions):
+            path = f"$.analysis_task.period_resolutions[{index}]"
+            if not isinstance(item, dict) or item.get("mode") not in allowed_modes:
+                self.add(
+                    "PERIOD-002", "ERROR", path,
+                    "时期解析模式非法", "只使用 native、sum、recompute 或 period_only",
+                )
+                continue
+            if item.get("requested_grain") is not None and item.get("mode") != "period_only":
+                self.add(
+                    "PERIOD-003", "ERROR", path,
+                    "显式展示粒度必须逐期执行", "使用 period_only 并保留用户要求粒度",
+                )
+            if item.get("mode") != "period_only":
+                continue
+            source_periods = item.get("source_periods")
+            output_roles = item.get("output_period_roles")
+            output_grain = item.get("output_grain")
+            if (
+                output_grain not in {"year", "quarter", "month", "week"}
+                or not isinstance(source_periods, list)
+                or not source_periods
+                or not isinstance(output_roles, list)
+                or len(output_roles) != len(source_periods)
+            ):
+                self.add(
+                    "PERIOD-004", "ERROR", path,
+                    "逐期解析缺少等长的周期与角色", "重新运行 Prepare 生成逐期映射",
+                )
+                continue
+            for role, period in zip(output_roles, source_periods):
+                normalized = normalize_period(period)
+                if (
+                    not isinstance(role, str)
+                    or periods.get(role) != period
+                    or normalized is None
+                    or normalized[0] != output_grain
+                ):
+                    self.add(
+                        "PERIOD-005", "ERROR", path,
+                        "逐期物理角色、周期或粒度不一致", "保持输出角色与规范物理周期一一对应",
+                    )
+                    break
+
+        source_ir = self.document.get("analysis_ir") or {}
+        for index, requirement in enumerate(source_ir.get("derived_requirements") or []):
+            if not isinstance(requirement, dict) or "period_role_bindings" not in requirement:
+                continue
+            bindings = requirement.get("period_role_bindings")
+            logical_roles = requirement.get("required_period_roles") or []
+            mapped_periods = [
+                periods.get(bindings.get(role))
+                for role in logical_roles
+                if isinstance(bindings, dict)
+            ]
+            grains = {
+                normalized[0]
+                for value in mapped_periods
+                if (normalized := normalize_period(value)) is not None
+            }
+            if (
+                not isinstance(bindings, dict)
+                or not logical_roles
+                or set(bindings) != set(logical_roles)
+                or len(mapped_periods) != len(logical_roles)
+                or any(value is None for value in mapped_periods)
+                or len(grains) != 1
+            ):
+                self.add(
+                    "PERIOD-006", "ERROR",
+                    f"$.analysis_ir.derived_requirements[{index}].period_role_bindings",
+                    "派生逐期角色未按同一粒度完整对齐", "重新运行 Prepare 生成等长逐期派生",
+                )
 
     def _validate_top_level(self) -> None:
         for key in ("analysis_task", "attribution_targets", "nodes", "fetch_requests", "clarifications", "status"):
@@ -785,10 +871,15 @@ class Validator:
                                     if days is not None:
                                         if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= 7:
                                             self.add("ROLLUP-005", "ERROR", f"{component_path}.overlap_days", "交集天数非法", "使用 1 到 7 的整数", node_id=node_id)
-                                        elif isinstance(target_period, str) and normalize_period(target_period) is not None:
-                                            expected = overlap_days(period, target_period)
-                                            if expected != days or abs(float(weight) - days / 7.0) > 1e-12:
-                                                self.add("ROLLUP-006", "ERROR", component_path, "上卷覆盖天数与权重不一致", "重新按 ISO 周和目标区间计算", node_id=node_id)
+                                        elif isinstance(target_period, str):
+                                            try:
+                                                period_bounds(target_period)
+                                            except ValueError:
+                                                pass
+                                            else:
+                                                expected = overlap_days(period, target_period)
+                                                if expected != days or abs(float(weight) - days / 7.0) > 1e-12:
+                                                    self.add("ROLLUP-006", "ERROR", component_path, "上卷覆盖天数与权重不一致", "重新按 ISO 周和目标区间计算", node_id=node_id)
             if handler == "attribution":
                 if not isinstance(execution.get("operator"), str) or not execution.get("operator"):
                     self.add("EXEC-008", "ERROR", f"{path}.operator", "attribution handler 缺少显式算子", "引用计划阶段已解析的算子", node_id=node_id)
@@ -1844,10 +1935,16 @@ class Validator:
         )
         if required_incomplete:
             return "partial_success"
-        if any(node.get("status") == "partial_success" for node in self.nodes):
+        if any(
+            node.get("status") == "partial_success"
+            and node.get("default_output_role") != "performance_yoy_supplement"
+            for node in self.nodes
+        ):
             return "partial_success"
         optional_incomplete = any(
-            node.get("criticality") == "optional" and node.get("status") in {"failed", "skipped", "partial_success", "blocked"}
+            node.get("criticality") == "optional"
+            and node.get("default_output_role") != "performance_yoy_supplement"
+            and node.get("status") in {"failed", "skipped", "partial_success", "blocked"}
             for node in self.nodes
         )
         if optional_incomplete:

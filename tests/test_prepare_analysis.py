@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from prepare_analysis import (  # noqa: E402
     PreparationError,
     _apply_business_intent_selection,
+    _drop_policy_supplements,
     _requirement_roles,
     normalize_analysis_ir,
     prepare_analysis_ir,
@@ -1351,6 +1352,191 @@ class PrepareAnalysisTests(unittest.TestCase):
         self.assertTrue(report["valid"], report)
         node = next(item for item in plan["nodes"] if item["type"] == "derived_metric")
         self.assertEqual(node["execution"]["definition_status"], "source_precomputed")
+
+    def test_unavailable_policy_supplement_is_removed_with_its_output_ref(self) -> None:
+        ir = base_ir("支付GMV")
+        ir["analysis_task"]["query"] = "26年5月支付GMV表现如何"
+        ir["analysis_task"]["periods"] = {
+            "analysis": "2026-05", "analysis_last_year": "2025-05",
+        }
+        common = {
+            "metric_ref": "target", "view_id": "v",
+            "dimensions": {"平台": "京东"}, "dimension_refs": [],
+        }
+        ir["fact_observations"] = [{
+            **common, "requirement_id": "level", "period_roles": ["analysis"],
+            "semantic_text": "支付GMV表现如何", "criticality": "core",
+        }]
+        ir["derived_requirements"] = [{
+            **common, "requirement_id": "yoy", "derived_metric_id": "yoy_growth",
+            "definition_status": "registered", "metric_object": "volume",
+            "criticality": "optional",
+            "default_output_role": "performance_yoy_supplement",
+            "provenance": "business_policy",
+        }]
+        ir["output_requirements"] = [{
+            "requirement_id": "output", "source_requirement_refs": ["level", "yoy"],
+            "criticality": "core",
+        }]
+        capabilities = source_index()
+        capabilities["requirement_bindings"] = {
+            "yoy": {
+                "mode": "omit_policy_supplement",
+                "reason": "supplement_not_executable_on_original_binding",
+            }
+        }
+        prepared, _ = prepare_analysis_ir(
+            ir, capabilities, self.compositions, self.derived
+        )
+        self.assertEqual(prepared["derived_requirements"], [])
+        self.assertEqual(
+            prepared["output_requirements"][0]["source_requirement_refs"], ["level"]
+        )
+        self.assertFalse(any(
+            item.get("requirement_id") == "yoy"
+            for item in prepared.get("resolution_blocks") or []
+        ))
+
+    def test_omitted_policy_supplement_prunes_exclusive_period_request(self) -> None:
+        ir = base_ir("支付GMV")
+        ir["analysis_task"]["periods"] = {"analysis": "2026-05"}
+        ir["analysis_task"]["period_requests"] = {
+            "analysis_last_year": {
+                "type": "bounded_span", "label": "去年同期",
+                "start": "2025-05-01", "end": "2025-05-31",
+                "requested_grain": None, "grain_source": "not_specified",
+            }
+        }
+        common = {
+            "metric_ref": "target", "view_id": "v",
+            "dimensions": {"平台": "京东"}, "dimension_refs": [],
+        }
+        ir["fact_observations"] = [{
+            **common, "requirement_id": "level", "period_roles": ["analysis"],
+            "semantic_text": "支付GMV表现如何", "criticality": "core",
+        }]
+        ir["derived_requirements"] = [{
+            **common, "requirement_id": "yoy", "derived_metric_id": "yoy_growth",
+            "definition_status": "registered", "metric_object": "volume",
+            "criticality": "optional",
+            "default_output_role": "performance_yoy_supplement",
+            "provenance": "business_policy",
+        }]
+        capabilities = source_index()
+        capabilities["requirement_bindings"] = {
+            "yoy": {"mode": "omit_policy_supplement", "reason": "not_executable"}
+        }
+        prepared, _ = prepare_analysis_ir(
+            ir, capabilities, self.compositions, self.derived
+        )
+        self.assertNotIn("period_requests", prepared["analysis_task"])
+        self.assertEqual(prepared["analysis_task"]["periods"]["analysis"], "2026-05")
+        self.assertNotIn("analysis_last_year", prepared["analysis_task"]["periods"])
+
+    def test_shared_comparison_period_is_not_pruned_with_policy_supplement(self) -> None:
+        ir = base_ir("支付GMV")
+        ir["analysis_task"]["periods"] = {
+            "analysis": "2026-05", "analysis_last_year": "2025-05",
+        }
+        ir["analysis_task"]["period_requests"] = {
+            "analysis_last_year": {
+                "type": "bounded_span", "label": "去年同期",
+                "start": "2025-05-01", "end": "2025-05-31",
+            }
+        }
+        ir["fact_observations"] = [{
+            "requirement_id": "explicit_comparison", "metric_ref": "target",
+            "period_roles": ["analysis_last_year"], "view_id": "v",
+            "dimensions": {"平台": "京东"}, "dimension_refs": [],
+        }]
+        ir["derived_requirements"] = [{
+            "requirement_id": "yoy", "metric_ref": "target",
+            "derived_metric_id": "yoy_growth", "criticality": "optional",
+            "default_output_role": "performance_yoy_supplement",
+            "provenance": "business_policy",
+        }]
+        removed_roles = _drop_policy_supplements(
+            ir, {"yoy"}, self.derived
+        )
+        self.assertEqual(removed_roles, set())
+        self.assertIn("analysis_last_year", ir["analysis_task"]["periods"])
+        self.assertIn("analysis_last_year", ir["analysis_task"]["period_requests"])
+
+    def test_explicit_yoy_cannot_be_silently_omitted(self) -> None:
+        ir = base_ir("支付GMV")
+        ir["analysis_task"]["periods"] = {
+            "analysis": "2026-05", "analysis_last_year": "2025-05",
+        }
+        ir["derived_requirements"] = [{
+            "requirement_id": "yoy", "metric_ref": "target",
+            "derived_metric_id": "yoy_growth", "criticality": "required",
+            "provenance": "user_explicit", "view_id": "v",
+            "dimensions": {"平台": "京东"}, "dimension_refs": [],
+        }]
+        capabilities = source_index()
+        capabilities["requirement_bindings"] = {
+            "yoy": {"mode": "omit_policy_supplement", "reason": "invalid_attempt"}
+        }
+        with self.assertRaises(PreparationError) as raised:
+            prepare_analysis_ir(ir, capabilities, self.compositions, self.derived)
+        self.assertEqual(raised.exception.code, "POLICY_SUPPLEMENT_OMISSION_INVALID")
+
+    def test_unowned_period_request_remains_strictly_invalid(self) -> None:
+        ir = base_ir("支付GMV")
+        ir["analysis_task"]["periods"] = {"analysis": "2026-05"}
+        ir["analysis_task"]["period_requests"] = {
+            "comparison": {
+                "type": "bounded_span", "label": "对比期",
+                "start": "2026-04-01", "end": "2026-04-30",
+            }
+        }
+        ir["fact_observations"] = [{
+            "requirement_id": "level", "metric_ref": "target",
+            "period_roles": ["analysis"], "view_id": "v",
+            "dimensions": {"平台": "京东"}, "dimension_refs": [],
+        }]
+        with self.assertRaises(PreparationError) as raised:
+            prepare_analysis_ir(
+                ir, source_index(), self.compositions, self.derived
+            )
+        self.assertEqual(raised.exception.code, "UNBOUND_PERIOD_REQUEST")
+
+    def test_missing_comparison_period_omits_supplement_before_fact_planning(self) -> None:
+        ir = base_ir("支付GMV")
+        ir["analysis_task"]["query"] = "26年5月支付GMV表现如何"
+        ir["analysis_task"]["periods"] = {
+            "analysis": "2026-05", "analysis_last_year": "2025-05",
+        }
+        common = {
+            "metric_ref": "target", "view_id": "v",
+            "dimensions": {"平台": "京东"}, "dimension_refs": [],
+        }
+        ir["fact_observations"] = [{
+            **common, "requirement_id": "level", "period_roles": ["analysis"],
+            "semantic_text": "支付GMV表现如何", "criticality": "core",
+        }]
+        ir["derived_requirements"] = [{
+            **common, "requirement_id": "yoy", "derived_metric_id": "yoy_growth",
+            "definition_status": "registered", "metric_object": "volume",
+            "criticality": "optional",
+            "default_output_role": "performance_yoy_supplement",
+            "provenance": "business_policy",
+        }]
+        ir["output_requirements"] = [{
+            "requirement_id": "output", "source_requirement_refs": ["level", "yoy"],
+            "criticality": "core",
+        }]
+        prepared, _ = prepare_analysis_ir(
+            ir, source_index(), self.compositions, self.derived
+        )
+        self.assertEqual(prepared["derived_requirements"], [])
+        self.assertEqual(
+            prepared["output_requirements"][0]["source_requirement_refs"], ["level"]
+        )
+        self.assertTrue(all(
+            item.get("requirement_id") != "yoy"
+            for item in prepared.get("capability_plan") or []
+        ))
 
 
 if __name__ == "__main__":

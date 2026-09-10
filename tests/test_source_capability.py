@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from source_capability import (  # noqa: E402
     can_rollup_grain,
     evaluate_structural_grain_capability,
+    evaluate_structural_span_capability,
     project_task_capabilities,
 )
 
@@ -47,6 +48,34 @@ class SourceCapabilityTests(unittest.TestCase):
         result = evaluate_structural_grain_capability({"supported_grains": ["week"]}, "month")
         self.assertEqual(result["status"], "unavailable")
         self.assertEqual(result["reason"], "metric_aggregation_unknown")
+
+    def test_additive_span_is_structurally_available_without_cell_reads(self) -> None:
+        result = evaluate_structural_span_capability(
+            {"supported_grains": ["month"], "aggregation_mode": "additive"},
+            {"start": "2026-01-01", "end": "2026-06-30"},
+        )
+        self.assertEqual(result["status"], "available")
+        self.assertEqual(result["path"], "aggregate_span")
+
+    def test_non_additive_span_uses_supported_period_series(self) -> None:
+        result = evaluate_structural_span_capability(
+            {"supported_grains": ["month"], "aggregation_mode": "non_additive"},
+            {"start": "2026-01-01", "end": "2026-06-30"},
+        )
+        self.assertEqual(result["status"], "available")
+        self.assertEqual(result["path"], "period_series")
+        self.assertEqual(result["output_grain"], "month")
+
+    def test_explicit_span_grain_does_not_substitute_another_grain(self) -> None:
+        result = evaluate_structural_span_capability(
+            {"supported_grains": ["month"], "aggregation_mode": "non_additive"},
+            {
+                "start": "2026-01-01", "end": "2026-06-30",
+                "requested_grain": "quarter",
+            },
+        )
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["reason"], "explicit_grain_unsupported")
 
     def test_task_projection_keeps_requirement_source_dimension(self) -> None:
         capabilities = {

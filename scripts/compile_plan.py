@@ -863,7 +863,16 @@ class Compiler:
         if not isinstance(template, dict):
             raise CompileError("registered expression template must be an object")
         if "fact_role" in template:
-            role = require_nonempty_string(template.get("fact_role"), "registered expression fact_role")
+            logical_role = require_nonempty_string(
+                template.get("fact_role"), "registered expression fact_role"
+            )
+            bindings = requirement.get("period_role_bindings") or {}
+            if not isinstance(bindings, dict):
+                raise CompileError("period_role_bindings must be an object")
+            role = require_nonempty_string(
+                bindings.get(logical_role, logical_role),
+                f"period_role_bindings.{logical_role}",
+            )
             metric = self.metric(metric_ref)
             composition_id = metric.get("composition_id")
             if composition_id:
@@ -1133,11 +1142,18 @@ class Compiler:
             domain_ref = dimension_domain_ref(
                 str(dimension), domain, self.dimension_set_registry
             )
-        role = require_nonempty_string(
+        logical_role = require_nonempty_string(
             (self.registry.get("definitions", {}).get("selected_set_share") or {}).get(
                 "required_period_roles", ["analysis"]
             )[0],
             "selected_set_share period role",
+        )
+        bindings = requirement.get("period_role_bindings") or {}
+        if not isinstance(bindings, dict):
+            raise CompileError("period_role_bindings must be an object")
+        role = require_nonempty_string(
+            bindings.get(logical_role, logical_role),
+            f"period_role_bindings.{logical_role}",
         )
         metric = self.metric(metric_ref)
         slot_id = self.add_fact_slot(
@@ -1591,8 +1607,11 @@ class Compiler:
                     raise CompileError(f"unregistered derived_metric_id: {derived_metric_id}")
                 if metric_object not in definition.get("metric_objects", []):
                     raise CompileError(f"{derived_metric_id} does not support metric_object={metric_object}")
+                role_bindings = requirement.get("period_role_bindings") or {}
+                if not isinstance(role_bindings, dict):
+                    raise CompileError(f"{requirement_id}.period_role_bindings must be an object")
                 for role in definition.get("required_period_roles", []):
-                    self.period(str(role))
+                    self.period(str(role_bindings.get(str(role), role)))
                 if definition.get("operator") == "selected_set_share":
                     expression = self._instantiate_selected_set_share(
                         requirement, metric_ref, fact_slot_ids
@@ -1618,7 +1637,10 @@ class Compiler:
                 inference_basis = None
                 kind = "registered_derived"
                 quality_gate = list(definition.get("minimal_validation", []))
-                period_roles = list(definition.get("required_period_roles", []))
+                period_roles = [
+                    str(role_bindings.get(str(role), role))
+                    for role in definition.get("required_period_roles", [])
+                ]
             elif definition_status == "inferred":
                 derived_metric_id = require_nonempty_string(
                     requirement.get("derived_metric_id"), f"{requirement_id}.derived_metric_id"
@@ -1682,14 +1704,24 @@ class Compiler:
                 },
                 outputs=list(requirement.get("required_outputs", [derived_metric_id])),
                 quality_gate=quality_gate,
+                extra=(
+                    {"default_output_role": requirement["default_output_role"]}
+                    if requirement.get("default_output_role")
+                    else None
+                ),
             ))
-            self.requirement_compilation.append({
+            compilation = {
                 "requirement_id": requirement_id,
                 "kind": kind,
                 "status": "compiled",
                 "node_ids": [node_id],
                 "fact_slot_ids": sorted(set(fact_slot_ids)),
-            })
+            }
+            if requirement.get("default_output_role"):
+                compilation["default_output_role"] = requirement[
+                    "default_output_role"
+                ]
+            self.requirement_compilation.append(compilation)
 
     def compile_custom_calculations(self) -> None:
         for requirement in self.ir.get("custom_calculations", []):
@@ -2891,6 +2923,7 @@ class Compiler:
                 "query": self.task.get("query"),
                 "metrics": deepcopy(self.task.get("metrics", [])),
                 "periods": deepcopy(self.periods),
+                "period_resolutions": deepcopy(self.task.get("period_resolutions", [])),
                 "dimensions": dimensions,
                 "filters": deepcopy(self.task.get("filters", [])),
                 "selector_dimensions": deepcopy(self.task.get("selector_dimensions", {})),

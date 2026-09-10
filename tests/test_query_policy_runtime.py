@@ -38,8 +38,8 @@ class QueryPolicyRuntimeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.index, self.manifest, self.rules, self.limits = load_policy()
 
-    def test_current_policy_has_eight_active_rules_and_no_draft_runtime_state(self) -> None:
-        self.assertEqual(len(self.rules), 8)
+    def test_current_policy_has_active_rules_and_no_draft_runtime_state(self) -> None:
+        self.assertEqual(len(self.rules), 10)
         self.assertEqual(set(self.rules), set(self.index["active_rule_ids"]))
         self.assertEqual(validate_policy(self.index, self.manifest, self.rules), self.limits)
 
@@ -71,6 +71,46 @@ class QueryPolicyRuntimeTests(unittest.TestCase):
         self.assertEqual(packet["status"], "selected")
         self.assertIn("gmv-defaults", packet["selected_rule_ids"])
         self.assertIn("single-platform-payment-gmv-attribution", packet["selected_rule_ids"])
+
+    def test_vague_performance_phrases_recall_the_same_policy(self) -> None:
+        for phrase in ("表现如何", "表现怎么样", "水平如何", "水平怎么样"):
+            with self.subTest(phrase=phrase):
+                packet = select_query_policy(f"26年7月指标A{phrase}")
+                self.assertEqual(packet["status"], "selected")
+                self.assertIn("performance-defaults", packet["selected_rule_ids"])
+
+    def test_performance_policy_declares_attribution_and_explicit_output_guards(self) -> None:
+        rule = self.rules["performance-defaults"]
+        applicability = rule.get("applicability") or {}
+        guards = "".join(
+            (applicability.get("all") or []) + (applicability.get("none") or [])
+        )
+        for token in ("归因语义", "显式指标值", "输出限制", "口径语义"):
+            self.assertIn(token, guards)
+        contract = (
+            ROOT / "references" / "query-understanding" / "application-contract.md"
+        ).read_text(encoding="utf-8")
+        for token in ("原因", "为什么", "贡献", "指标值", "同比", "只看", "口径"):
+            self.assertIn(token, contract)
+        action = rule["actions"][0]
+        instructions = "".join(action.get("instructions") or [])
+        self.assertIn("performance_yoy_supplement", instructions)
+        self.assertIn("不影响原需求", instructions)
+
+    def test_performance_policy_composes_after_metric_only_expansion(self) -> None:
+        packet = select_query_policy("25年下半年拼多多的用户指标表现怎么样")
+        self.assertEqual(packet["status"], "selected")
+        self.assertIn("user-metric-defaults", packet["selected_rule_ids"])
+        self.assertIn("performance-defaults", packet["selected_rule_ids"])
+        rule = self.rules["performance-defaults"]
+        applicability = "".join(
+            (rule.get("applicability") or {}).get("all") or []
+        ) + "".join((rule.get("applicability") or {}).get("none") or [])
+        instructions = "".join(rule["actions"][0].get("instructions") or [])
+        self.assertIn("上游 Policy", applicability)
+        self.assertIn("当前目标作用域", applicability)
+        self.assertIn("结构化输出槽位", instructions)
+        self.assertIn("不使用 analysis_goal", instructions)
 
     def test_policy_index_covers_rule_level_routes(self) -> None:
         # This assertion protects the generated-index invariant: adding a
@@ -177,13 +217,19 @@ class QueryPolicyRuntimeTests(unittest.TestCase):
     def test_fixture_rule_references_exist_and_positive_rules_are_recalled(self) -> None:
         fixture_path = ROOT / "tests" / "fixtures" / "query-policy" / "behavior-fixtures.json"
         fixtures = json.loads(fixture_path.read_text(encoding="utf-8"))
-        self.assertEqual(len(fixtures["cases"]), 12)
+        self.assertEqual(len(fixtures["cases"]), 21)
         for case in fixtures["cases"]:
             references = set(case.get("expected_rules", [])) | set(case.get("forbidden_rules", []))
             self.assertLessEqual(references, set(self.rules), case["case_id"])
             if case.get("kind") == "positive":
                 selected = set(select_query_policy(case["query"])["selected_rule_ids"])
                 self.assertLessEqual(set(case.get("expected_rules", [])), selected, case["case_id"])
+            if case.get("assert_forbidden_rules") and case.get("forbidden_rules"):
+                selected = set(select_query_policy(case["query"])["selected_rule_ids"])
+                self.assertTrue(
+                    selected.isdisjoint(case["forbidden_rules"]),
+                    f"forbidden rule selected: {case['case_id']}",
+                )
 
 
 if __name__ == "__main__":
