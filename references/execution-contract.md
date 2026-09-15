@@ -108,6 +108,7 @@ Provider 输出的根对象为：
 - Gateway 发现 revision 在事实读取期间变化时返回 `concurrent_modification`，本轮 runner fail closed，不在已编译计划内刷新能力或重试。重新运行会基于新 revision 完整 resolve；其他语义或结构错误同样不重试。
 - 单元格缺失保留缺失状态；依赖缺失的派生节点失败或跳过，独立事实继续执行，成功事实仍进入最终模型组织。
 - Provider 失败时保留错误码、请求 ID、revision 和已写入产物；不得回退到模型知识或旧非标准响应。
+- Feishu Gateway 对已知数据源读取异常保持原 `SkillError` code、message、失败状态、退出码和重试策略，仅在 `details.source_recovery` 追加恢复信息。该对象只含 `classification=permission_denied|read_failed`、本次生效且经过 HTTPS 校验的 `source_url` 和 `recommended_action=request_access_then_retry|check_source_then_retry`。权限分类优先使用明确资源权限证据；登录态、Token、应用 Scope、运行依赖、输入、解析、编译和质量错误不得归为文档权限。最终提示可展示数据源链接，但不得展示 token、Sheet ID、坐标、缓存路径或鉴权详情；bundle 对同一数据源只提示一次。
 - 归因能力不支持时只阻断归因节点，独立事实和确定性派生仍可交付。
 - 公式归因 binding 保留稳定 `factor_id`、`factor_order`、完整公式 AST 与 fingerprint。metric 因子绑定事实，literal 因子绑定各时期角色值，derived 因子绑定各时期角色安全表达式；因子贡献为 0 时仍保留结果行。
 - 残差超过 runner 固定阈值时不得丢弃归因内核结果：节点标记 `partial_success`，保留 rows、summary、residual、warnings 和 boundary cases。分析 IR 不得覆盖残差阈值。

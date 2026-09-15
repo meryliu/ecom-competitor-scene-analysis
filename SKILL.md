@@ -73,6 +73,7 @@ python3 scripts/run_analysis.py \
 - `success`：直接输出通过质量闸门的结果、口径和必要质量说明。
 - `partial_success`：输出已保留的有效结果并明确未完成范围；归因残差超阈值时同时保留 rows、summary、残差、warning 和边界信息。若 `model_completion` 给出的成功 facts、唯一公式和校验条件足够，可做低风险补算并披露口径，但不得把节点、任务或顶层状态包装成 `success`。
 - `waiting_confirmation`：只针对会改变结果的指标、维度、时期、范围、分母、归因场景、公式或拆解维度候选向用户澄清。业务参数 case 使用当前 Query/IR 的 `context_fingerprint`，旧 case 不得跨请求复用。
+- 数据源异常：命令非零时先读取 `run-state.json` 的 `error.details.source_recovery`。`recommended_action=request_access_then_retry` 时只输出“当前无法读取竞品宏观数据源，因为当前运行账号没有访问权限。请点击[竞品宏观数据源](source_url)申请权限，权限开通后重新发送刚才的问题。”；`recommended_action=check_source_then_retry` 时保留已有明确错误原因，并输出“当前未能完成竞品宏观数据源读取。请打开[竞品宏观数据源](source_url)确认文档是否可以正常访问、是否仍然存在且未迁移；如果文档状态正常，可能是临时读取异常，请稍后重试。”同一数据源在 bundle 中只提示一次。不得输出底层 token、Sheet ID、坐标、缓存路径或鉴权详情，不得重试、补数或进入通用业务诊断。
 - `blocked` 或命令退出码非零：读取 `run-state.json` 定位阶段，再进入诊断路由；不得猜测结果。
 - Provider 返回 `resolution_patch` 时按补丁更新 IR 后重跑，保持需求 ID 稳定并复用未变化事实。
 

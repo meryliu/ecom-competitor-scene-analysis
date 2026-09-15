@@ -10,9 +10,108 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from providers.feishu_competitor import FeishuCompetitorGateway  # noqa: E402
 from competitor_fact_provider import FACT_PROVIDER_VERSION  # noqa: E402
+from _vendor.ecom_competitor_source import SkillError  # noqa: E402
 
 
 class FeishuGatewayTests(unittest.TestCase):
+    @staticmethod
+    def config(source_url: str = "https://source") -> dict:
+        return {
+            "provider_id": "feishu_competitor",
+            "source_id": "competitor_macro_sheet",
+            "source_url": source_url,
+            "config_hash": "config-hash",
+            "allow_stale_by_default": False,
+            "sheet_roles": {},
+        }
+
+    def test_resolve_permission_failure_adds_request_access_recovery(self) -> None:
+        upstream = SkillError(
+            "source_read_failed",
+            "Forbidden: no permission to access this spreadsheet",
+            {"status": 403, "request_id": "req-1"},
+        )
+        with patch(
+            "providers.feishu_competitor.ensure_shared_index", side_effect=upstream,
+        ):
+            with self.assertRaises(SkillError) as raised:
+                FeishuCompetitorGateway(self.config()).resolve({})
+        error = raised.exception
+        self.assertEqual(error.code, "source_read_failed")
+        self.assertEqual(error.details["status"], 403)
+        self.assertEqual(error.details["request_id"], "req-1")
+        self.assertEqual(error.details["source_recovery"], {
+            "classification": "permission_denied",
+            "source_url": "https://source",
+            "recommended_action": "request_access_then_retry",
+        })
+
+    def test_resolve_other_source_failure_adds_generic_recovery(self) -> None:
+        upstream = SkillError("source_timeout", "读取飞书表格超时")
+        with patch(
+            "providers.feishu_competitor.ensure_shared_index", side_effect=upstream,
+        ):
+            with self.assertRaises(SkillError) as raised:
+                FeishuCompetitorGateway(self.config("https://effective/source")).resolve({})
+        self.assertEqual(raised.exception.code, "source_timeout")
+        self.assertEqual(raised.exception.details["source_recovery"], {
+            "classification": "read_failed",
+            "source_url": "https://effective/source",
+            "recommended_action": "check_source_then_retry",
+        })
+
+    def test_application_scope_failure_is_not_mislabeled_as_document_permission(self) -> None:
+        upstream = SkillError(
+            "source_read_failed",
+            "Forbidden: missing application scope",
+            {"status": 403},
+        )
+        with patch(
+            "providers.feishu_competitor.ensure_shared_index", side_effect=upstream,
+        ):
+            with self.assertRaises(SkillError) as raised:
+                FeishuCompetitorGateway(self.config()).resolve({})
+        recovery = raised.exception.details["source_recovery"]
+        self.assertEqual(recovery["classification"], "read_failed")
+        self.assertEqual(recovery["recommended_action"], "check_source_then_retry")
+
+    def test_non_source_failure_is_preserved_without_recovery(self) -> None:
+        upstream = SkillError("invalid_index", "缓存索引无效", {"path": "index.json"})
+        with patch(
+            "providers.feishu_competitor.ensure_shared_index", side_effect=upstream,
+        ):
+            with self.assertRaises(SkillError) as raised:
+                FeishuCompetitorGateway(self.config()).resolve({})
+        self.assertIs(raised.exception, upstream)
+        self.assertNotIn("source_recovery", raised.exception.details)
+
+    def test_fetch_permission_failure_adds_same_recovery(self) -> None:
+        gateway = FeishuCompetitorGateway(self.config())
+        gateway._index = {}
+        gateway._cache_status = "hit"
+        gateway._resolved_index_path = Path("/tmp/index.json")
+        gateway._binding = {"schema_version": "source_binding/1.0"}
+        upstream = SkillError("source_read_failed", "无权访问该表格", {"code": 403})
+        with patch(
+            "providers.feishu_competitor.fetch_facts_from_index", side_effect=upstream,
+        ):
+            with self.assertRaises(SkillError) as raised:
+                gateway.fetch({"source_binding": gateway.source_binding})
+        self.assertEqual(
+            raised.exception.details["source_recovery"]["recommended_action"],
+            "request_access_then_retry",
+        )
+
+    def test_invalid_source_url_is_not_exposed(self) -> None:
+        upstream = SkillError("source_read_failed", "temporary failure", {})
+        with patch(
+            "providers.feishu_competitor.ensure_shared_index", side_effect=upstream,
+        ):
+            with self.assertRaises(SkillError) as raised:
+                FeishuCompetitorGateway(self.config("file:///private/source")).resolve({})
+        self.assertIs(raised.exception, upstream)
+        self.assertNotIn("source_recovery", raised.exception.details)
+
     def test_resolve_and_fetch_reuse_one_pinned_index(self) -> None:
         config = {
             "provider_id": "feishu_competitor",

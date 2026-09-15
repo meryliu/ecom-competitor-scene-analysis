@@ -5,8 +5,10 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from competitor_fact_provider import FACT_PROVIDER_VERSION, fetch_facts_from_index
+from _vendor.ecom_competitor_source import SkillError
 from business_intent_policy import (
     DEFAULT_POLICY_PATH as DEFAULT_BUSINESS_INTENT_POLICY,
     business_intent_policy_hash,
@@ -21,6 +23,88 @@ from resolution_policy import (
     resolution_policy_hash,
 )
 from source_runtime import ManagedLarkClient, ensure_shared_index
+
+
+SOURCE_RECOVERY_ERROR_CODES = frozenset({
+    "source_read_failed",
+    "source_timeout",
+    "invalid_lark_response",
+    "unsupported_source",
+    "empty_workbook",
+    "missing_metadata_sheet",
+    "invalid_metric_metadata",
+    "invalid_dimension_metadata",
+    "duplicate_standard_sheet",
+    "fact_sheet_granularity_mismatch",
+    "concurrent_modification",
+})
+PERMISSION_MARKERS = (
+    "permission denied",
+    "access denied",
+    "forbidden",
+    "no permission",
+    "not permitted",
+    "无权限",
+    "没有权限",
+    "无权访问",
+    "权限不足",
+    "申请权限",
+)
+AUTHENTICATION_MARKERS = (
+    "access token",
+    "tenant token",
+    "app scope",
+    "application scope",
+    "missing scope",
+    "invalid token",
+    "token expired",
+    "authentication",
+    "登录失效",
+    "登录已失效",
+    "授权失效",
+    "应用权限",
+    "接口权限",
+)
+
+
+def _safe_source_url(value: Any) -> str | None:
+    source_url = str(value or "").strip()
+    parsed = urlparse(source_url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        return None
+    return source_url
+
+
+def _is_source_permission_denied(exc: SkillError) -> bool:
+    if exc.code != "source_read_failed":
+        return False
+    evidence = f"{exc.message} {exc.details!r}".lower()
+    if any(marker in evidence for marker in AUTHENTICATION_MARKERS):
+        return False
+    return any(marker in evidence for marker in PERMISSION_MARKERS)
+
+
+def _with_source_recovery(exc: SkillError, source_url: Any) -> SkillError:
+    """Add user recovery metadata without changing existing error semantics."""
+    safe_url = _safe_source_url(source_url)
+    if exc.code not in SOURCE_RECOVERY_ERROR_CODES or safe_url is None:
+        return exc
+    details = (
+        deepcopy(exc.details)
+        if isinstance(exc.details, dict)
+        else ({"upstream_details": deepcopy(exc.details)} if exc.details is not None else {})
+    )
+    if "source_recovery" in details:
+        return exc
+    permission_denied = _is_source_permission_denied(exc)
+    details["source_recovery"] = {
+        "classification": "permission_denied" if permission_denied else "read_failed",
+        "source_url": safe_url,
+        "recommended_action": (
+            "request_access_then_retry" if permission_denied else "check_source_then_retry"
+        ),
+    }
+    return SkillError(exc.code, exc.message, details)
 
 
 class FeishuCompetitorGateway(DataGateway):
@@ -68,15 +152,21 @@ class FeishuCompetitorGateway(DataGateway):
             for role, value in (self.config.get("sheet_roles") or {}).items()
             if isinstance(value, dict)
         }
-        index, status, path = ensure_shared_index(
-            self.client,
-            str(self.config["source_url"]),
-            identity=self.identity,
-            index_path=self.index_path,
-            allow_stale=self.allow_stale,
-            sheet_roles=sheet_roles,
-            config_hash=str(self.config["config_hash"]),
-        )
+        try:
+            index, status, path = ensure_shared_index(
+                self.client,
+                str(self.config["source_url"]),
+                identity=self.identity,
+                index_path=self.index_path,
+                allow_stale=self.allow_stale,
+                sheet_roles=sheet_roles,
+                config_hash=str(self.config["config_hash"]),
+            )
+        except SkillError as exc:
+            enriched = _with_source_recovery(exc, self.config.get("source_url"))
+            if enriched is exc:
+                raise
+            raise enriched from exc
         resolution = resolve_request_overlay(
             index, request, self.resolution_policy, self.business_intent_policy
         )
@@ -191,11 +281,17 @@ class FeishuCompetitorGateway(DataGateway):
             raise RuntimeError("gateway.resolve() must run before gateway.fetch()")
         if request.get("source_binding") != self.source_binding:
             raise ValueError("fetch request source_binding differs from the resolved source")
-        return fetch_facts_from_index(
-            request,
-            self._index,
-            self.client,
-            self._cache_status,
-            self._resolved_index_path,
-            dimension_set_registry_path=self.dimension_set_registry_path,
-        )
+        try:
+            return fetch_facts_from_index(
+                request,
+                self._index,
+                self.client,
+                self._cache_status,
+                self._resolved_index_path,
+                dimension_set_registry_path=self.dimension_set_registry_path,
+            )
+        except SkillError as exc:
+            enriched = _with_source_recovery(exc, self.config.get("source_url"))
+            if enriched is exc:
+                raise
+            raise enriched from exc
