@@ -80,7 +80,7 @@
 
 `analysis_task.periods` 是事实观察、组合、通用派生和自定义计算的任务级默认时期映射。每个归因目标的 `periods` 是该目标的权威局部映射，不反写任务级映射；不同归因目标可以复用同一角色名并指向不同物理时期。例如同一 Query 中，同比增速使用 `analysis=2026-07, analysis_last_year=2025-07`，同比归因可同时使用 `analysis=2026-07, comparison=2025-07`。两个归因目标也可分别声明 `comparison=2025-07` 与 `comparison=2026-06`。编译器按“目标 + 角色 + 物理时期”生成消费槽位，不因角色同名合并不同物理时期。
 
-`analysis_task.period_requests` 是 task 级事实、注册组合和注册派生的非固有闭区间请求，键仍为时期角色。每项固定使用 `type=bounded_span`、ISO `start/end`、原始可读 `label`，并可带 `requested_grain` 与 `grain_source`。同一角色不得同时出现在 `periods` 和 `period_requests`。Prepare 消费该字段后生成规范 `periods`、内部子时期角色和 `period_resolutions`；模型不得直接提交 `span:` token、`period_resolutions` 或 `period_role_bindings`。
+`analysis_task.period_requests` 是 task 级事实、注册组合和注册派生的非固有闭区间请求，键仍为时期角色。每项固定使用 `type=bounded_span`、ISO `start/end`、原始可读 `label`，并可带 `requested_grain` 与 `grain_source`。开放结束表达可额外带 `end_semantics=latest_source_complete`、`upper_bound_source=current_date`；`end` 在该语义下只是当前日期上界，Resolve 仅在原时间结构检查纯时间失败时写入内部有效结束期。明确日期、固有周期和相对窗口不得使用该语义。同一角色不得同时出现在 `periods` 和 `period_requests`。Prepare 消费该字段后生成规范 `periods`、内部子时期角色和 `period_resolutions`；模型不得直接提交 `span:` token、`period_resolutions` 或 `period_role_bindings`。
 
 `period_resolutions` 的 `mode` 只允许 `native|sum|recompute|period_only`。`sum/recompute` 记录实际 `source_periods` 和自动适配；`period_only` 记录 `output_grain`、逐期物理周期、输出角色及 ISO 周边界外溢。注册派生逐期克隆必须物化注册定义的 `required_period_roles`，并携带 runner 生成的 `period_role_bindings`，将逻辑角色一一映射到同粒度、等长的物理角色。Prepare 后续的事实规划和可执行性复核、Compile 的公式实例化都必须消费该映射，不得退回原始逻辑跨度重新选择粒度或判定不可执行。
 

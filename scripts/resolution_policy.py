@@ -6,7 +6,9 @@ import hashlib
 import json
 import re
 import difflib
+from calendar import monthrange
 from copy import deepcopy
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +82,13 @@ ALLOWED_POLICY_KEYS = {
 }
 PERFORMANCE_YOY_SUPPLEMENT = "performance_yoy_supplement"
 OPTIONAL_POLICY_ENRICHMENT_ROLES = frozenset({PERFORMANCE_YOY_SUPPLEMENT})
+OPEN_TIME_RETRY_REASONS = frozenset({
+    "span_grain_unsupported",
+    "explicit_grain_unsupported",
+    "period_unavailable",
+    "open_tail_period_unavailable",
+    "open_tail_incomplete",
+})
 
 
 def _is_optional_policy_enrichment(consumer: dict[str, Any]) -> bool:
@@ -153,6 +162,128 @@ def _structural_period_checks(
         if isinstance(request, dict)
     )
     return checks
+
+
+def _is_open_time_request(value: Any) -> bool:
+    return isinstance(value, dict) and value.get("end_semantics") == "latest_source_complete"
+
+
+def _period_end(period: str, grain: str) -> date | None:
+    try:
+        if grain == "month":
+            year, month = (int(item) for item in period.split("-", 1))
+            return date(year, month, monthrange(year, month)[1])
+        if grain == "quarter":
+            year, quarter = int(period[:4]), int(period[-1])
+            month = quarter * 3
+            return date(year, month, monthrange(year, month)[1])
+        if grain == "year":
+            return date(int(period), 12, 31)
+        if grain == "week":
+            year, week = int(period[:4]), int(period[-2:])
+            return date.fromisocalendar(year, week, 7)
+    except (ValueError, IndexError):
+        return None
+    return None
+
+
+def _latest_complete_end_for_grain(
+    index: dict[str, Any], request: dict[str, Any], grain: str,
+    metric_names: list[str] | None = None,
+) -> date | None:
+    start = date.fromisoformat(str(request["start"]))
+    upper = date.fromisoformat(str(request["end"]))
+    # Live Feishu resolution receives the raw shared index (``sheets``), while
+    # projected capability fixtures expose the normalized ``availability``
+    # shape.  Keep the retry logic read-only and accept both representations.
+    availability = (index.get("availability") or {}).get(grain) or {}
+    if not availability:
+        sheet = (index.get("sheets") or {}).get(grain) or {}
+        if isinstance(sheet, dict) and sheet.get("available"):
+            availability = {
+                "periods": sorted((sheet.get("periods") or {}).keys()),
+                "metrics": {
+                    str(metric): {}
+                    for metric in (sheet.get("blocks") or {})
+                    if isinstance(metric, str)
+                },
+            }
+    available_metrics = availability.get("metrics") or {}
+    required_metrics = [str(value) for value in metric_names or [] if value]
+    if required_metrics and not all(name in available_metrics for name in required_metrics):
+        return None
+    periods = [str(value) for value in availability.get("periods") or []]
+    ends = [
+        end for period in periods
+        if (end := _period_end(period, grain)) is not None
+        and start <= end <= upper
+    ]
+    return max(ends) if ends else None
+
+
+def _open_time_request_variants(
+    index: dict[str, Any], requests: dict[str, Any],
+    metric_names: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Build candidate retry spans without changing the original request."""
+    open_roles = [
+        str(role) for role, value in requests.items() if _is_open_time_request(value)
+    ]
+    if not open_roles:
+        return []
+    # Try the same output grain for all open roles.  This keeps derived inputs
+    # aligned while letting structural capability checks reject unsupported grains.
+    variants: list[dict[str, Any]] = []
+    explicit_grains = {
+        str(requests[role].get("requested_grain"))
+        for role in open_roles
+        if requests[role].get("requested_grain")
+    }
+    if len(explicit_grains) > 1:
+        return []
+    grains = list(explicit_grains) if explicit_grains else ["quarter", "month", "week", "year"]
+    for grain in grains:
+        effective: dict[str, Any] = deepcopy(requests)
+        ok = True
+        primary_ends: dict[str, date] = {}
+        for role in open_roles:
+            request = requests[role]
+            end = _latest_complete_end_for_grain(index, request, grain, metric_names)
+            if end is None:
+                ok = False
+                break
+            primary_ends[role] = end
+            updated = deepcopy(request)
+            updated["end"] = end.isoformat()
+            updated["resolved_end"] = end.isoformat()
+            updated["resolved_grain"] = grain
+            effective[role] = updated
+        if not ok:
+            continue
+        # A last-year open role follows its paired analysis role instead of
+        # independently selecting a different latest period.
+        for role in open_roles:
+            if not role.endswith("_last_year"):
+                continue
+            base_role = role[: -len("_last_year")]
+            if base_role not in primary_ends:
+                continue
+            base = effective[base_role]
+            try:
+                source_start = date.fromisoformat(str(base["start"]))
+                source_end = date.fromisoformat(str(base["end"]))
+                last_start = source_start.replace(year=source_start.year - 1)
+                last_end = source_end.replace(year=source_end.year - 1)
+            except ValueError:
+                continue
+            updated = deepcopy(effective[role])
+            updated["start"] = last_start.isoformat()
+            updated["end"] = last_end.isoformat()
+            updated["resolved_end"] = last_end.isoformat()
+            updated["resolved_grain"] = grain
+            effective[role] = updated
+        variants.append({"grain": grain, "requests": effective})
+    return variants
 ALLOWED_RULE_KEYS = {"hard_gates", "strong_evidence", "auto", "confirm"}
 ALLOWED_AUTO_KEYS = {
     "require_unique_viable",
@@ -1953,7 +2084,7 @@ def _intent_candidate_packet(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _resolve_business_intent_single(
+def _resolve_business_intent_single_once(
     index: dict[str, Any],
     context: dict[str, Any],
     metric: dict[str, Any],
@@ -2297,6 +2428,75 @@ def _resolve_business_intent_single(
     }
 
 
+def _resolve_business_intent_single(
+    index: dict[str, Any],
+    context: dict[str, Any],
+    metric: dict[str, Any],
+    resolution_policy: dict[str, Any],
+    business_policy: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Resolve normally, then retry only an open-time-only failure in memory.
+
+    The first pass is byte-for-byte the existing resolver path.  The retry is
+    opt-in through ``end_semantics`` and only replaces the effective end of a
+    bounded span; all lexical, semantic, dimension, and ranking logic remains
+    the same.
+    """
+    result = _resolve_business_intent_single_once(
+        index, context, metric, resolution_policy, business_policy
+    )
+    if not result or result.get("viable_candidates"):
+        return result
+    requests = metric.get("required_period_requests") or context.get("period_requests") or {}
+    if not requests or not any(_is_open_time_request(value) for value in requests.values()):
+        return result
+    rejected = result.get("rejected_candidates") or []
+    retryable = [
+        candidate for candidate in rejected
+        if set(str(value) for value in candidate.get("conflicts") or [])
+        and set(str(value) for value in candidate.get("conflicts") or []).issubset(OPEN_TIME_RETRY_REASONS)
+        and int(candidate.get("semantic_tier", 99)) <= 2
+    ]
+    if not retryable:
+        return result
+    # Candidates are alternatives for one logical metric, not co-required
+    # inputs.  Resolve each candidate against its own available source block;
+    # requiring all alternatives to share one grain incorrectly rejects a
+    # monthly growth fact when the primary annual fact is also recalled.
+    retry_metric_names = list(dict.fromkeys(
+        str(candidate.get("metric"))
+        for candidate in retryable
+        if candidate.get("metric")
+    ))
+    for retry_metric_name in retry_metric_names:
+        for variant in _open_time_request_variants(index, requests, [retry_metric_name]):
+            retry_metric = deepcopy(metric)
+            retry_metric["required_period_requests"] = variant["requests"]
+            retry = _resolve_business_intent_single_once(
+                index, context, retry_metric, resolution_policy, business_policy
+            )
+            if not retry or not retry.get("viable_candidates"):
+                continue
+            for candidate in retry.get("viable_candidates") or []:
+                candidate.setdefault("evidence", []).append("open_time_latest_complete")
+                candidate["open_time_resolution"] = {
+                    "mode": "latest_source_complete",
+                    "grain": variant["grain"],
+                    "requests": deepcopy(variant["requests"]),
+                }
+                candidate.setdefault("capability", {})["open_time_resolution"] = deepcopy(
+                    candidate["open_time_resolution"]
+                )
+            retry["open_time_resolution"] = {
+                "mode": "latest_source_complete",
+                "grain": variant["grain"],
+                "requests": deepcopy(variant["requests"]),
+            }
+            retry["fallback_from"] = "open_time_only_failure"
+            return retry
+    return result
+
+
 def _resolve_business_intent(
     index: dict[str, Any],
     context: dict[str, Any],
@@ -2327,6 +2527,9 @@ def _resolve_business_intent(
         local_metric = deepcopy(metric)
         local_metric["consumers"] = [deepcopy(consumer)]
         local_metric["required_periods"] = list(consumer.get("periods") or [])
+        local_metric["required_period_requests"] = deepcopy(
+            consumer.get("period_requests") or {}
+        )
         local_metric["required_dimensions"] = list(consumer.get("dimensions") or [])
         local_metric["required_breakdown_dimensions"] = list(
             consumer.get("breakdown_dimensions") or []
@@ -3050,6 +3253,11 @@ def resolve_request_overlay(
             for item in context.get("composition_intents") or []
             if isinstance(item, dict)
         ]
+        family_discoveries = {
+            str(item.get("metric_ref")): item
+            for item in context.get("composition_family_discoveries") or []
+            if isinstance(item, dict) and item.get("metric_ref")
+        }
         intent_by_metric_ref = {
             str(item.get("metric_ref")): item
             for item in intents
@@ -3404,6 +3612,78 @@ def resolve_request_overlay(
             intent_resolution = _resolve_business_intent(
                 overlay, context, selection_metric, policy, intent_policy
             )
+            family = family_discoveries.get(metric_ref)
+            if family and (
+                intent_resolution is None
+                or not intent_resolution.get("viable_candidates")
+            ):
+                members = list(family.get("members") or [])
+                if len(members) == 1:
+                    member = members[0]
+                    generated_intent = {
+                        "metric_ref": metric_ref,
+                        "requested_metric": requested_name,
+                        "composition_id": member.get("composition_id"),
+                        "direct_preferred": True,
+                        "inputs": [
+                            deepcopy(item) for item in member.get("inputs") or []
+                            if isinstance(item, dict) and item.get("metric")
+                        ],
+                        "consumers": deepcopy(metric_consumers),
+                        "family_discovery": True,
+                    }
+                    intents.append(generated_intent)
+                    intent_by_metric_ref[metric_ref] = generated_intent
+                elif len(members) > 1:
+                    family_identity = {
+                        "source_id": source.get("spreadsheet_token") or source.get("url"),
+                        "kind": "composition_family",
+                        "task_id": task_id,
+                        "metric_ref": metric_ref,
+                        "requested_name": requested_name,
+                        "family_ref": family.get("family_ref"),
+                    }
+                    family_case_id = stable_id("resolution_case", family_identity)
+                    family_candidates = [
+                        {
+                            "candidate_id": stable_id(
+                                "resolution_candidate",
+                                {**family_identity, "composition_id": member.get("composition_id")},
+                            ),
+                            "metric": member.get("label") or member.get("composition_id"),
+                            "composition_id": member.get("composition_id"),
+                            "confidence": 1.0,
+                            "evidence": ["registered_composition_family"],
+                            "family_ref": family.get("family_ref"),
+                            "candidate_type": "registered_composition",
+                        }
+                        for member in members[: int(family.get("max_options") or 8)]
+                    ]
+                    family_case = {
+                        "case_id": family_case_id,
+                        "action": "confirm",
+                        "kind": "composition_family",
+                        "requested_term": requested_name,
+                        "task_ids": [task_id],
+                        "metric_ref": metric_ref,
+                        "family_ref": family.get("family_ref"),
+                        "selected_candidate_id": None,
+                        "policy_version": policy.get("policy_version"),
+                        "resolution_policy_hash": policy_hash,
+                        "source_revision": source.get("revision"),
+                        "schema_hash": source.get("schema_hash"),
+                        "resolution_engine_version": ENGINE_VERSION,
+                        "candidates": family_candidates,
+                    }
+                    decisions.append(family_case)
+                    cases.append(family_case)
+                    task_resolution["resolution_cases"].append(family_case)
+                    task_resolution["metric_statuses"][metric_ref] = {
+                        "requested_metric": requested_name,
+                        "status": "ambiguous",
+                        "binding": None,
+                    }
+                    continue
             if intent_resolution is not None:
                 binding_resolution = (
                     _resolve_business_intent(
@@ -3594,6 +3874,13 @@ def resolve_request_overlay(
                     "business_intent_policy_hash": intent_policy_hash,
                     "requirement_bindings": deepcopy(requirement_bindings),
                 }
+                if selected_intent and selected_intent.get("open_time_resolution"):
+                    task_resolution["intent_resolutions"][metric_ref][
+                        "open_time_resolution"
+                    ] = deepcopy(selected_intent["open_time_resolution"])
+                    task_resolution.setdefault("open_time_resolutions", []).append(
+                        deepcopy(selected_intent["open_time_resolution"])
+                    )
                 if selected_intent is None and not requirement_only_resolution:
                     composition_intent = intent_by_metric_ref.get(metric_ref)
                     if not viable_candidates and composition_intent is not None:
@@ -3819,6 +4106,12 @@ def resolve_request_overlay(
                 for period in consumer.get("periods") or []
                 if (parsed := _normalize_period(period)) is not None
             }
+            composition_period_requests: dict[str, Any] = {}
+            for consumer in intent.get("consumers") or []:
+                if not isinstance(consumer, dict):
+                    continue
+                for role, request_value in (consumer.get("period_requests") or {}).items():
+                    composition_period_requests.setdefault(str(role), deepcopy(request_value))
             composition_breakdown_dimensions = {
                 str(dimension)
                 for consumer in intent.get("consumers") or []
@@ -3826,6 +4119,15 @@ def resolve_request_overlay(
                 for dimension in consumer.get("breakdown_dimensions") or []
             }
             rollup_edges = (policy.get("grain_rollup") or {}).get("allowed_edges") or []
+            open_variants = _open_time_request_variants(
+                overlay,
+                composition_period_requests,
+                [
+                    str(item.get("metric")) for item in intent.get("inputs") or []
+                    if isinstance(item, dict) and item.get("metric")
+                ],
+            ) if composition_period_requests else []
+            selected_open_variant: dict[str, Any] | None = None
             input_bindings: dict[str, str] = {}
             input_statuses: dict[str, dict[str, Any]] = {}
             deferred_cases: list[dict[str, Any]] = []
@@ -3915,6 +4217,47 @@ def resolve_request_overlay(
                     if any(item.get("status") == "unavailable" for item in structural_checks):
                         selected = None
                         input_candidates = []
+                if selected is not None and composition_period_requests:
+                    selected_before_open_retry = selected
+                    candidates_before_open_retry = list(input_candidates)
+                    selected_metric_name = str(selected.get("metric") or "")
+                    structural_checks = [
+                        evaluate_structural_span_capability(
+                            (overlay.get("metrics") or {}).get(str(selected.get("metric") or "")) or {},
+                            request_value,
+                            rollup_edges,
+                        )
+                        for request_value in composition_period_requests.values()
+                    ]
+                    if any(item.get("status") != "available" for item in structural_checks):
+                        selected = None
+                        input_candidates = []
+                        # A composition may retry only when every input can use
+                        # the same effective open-time variant.
+                        variants_to_try = (
+                            [selected_open_variant]
+                            if selected_open_variant is not None
+                            else open_variants
+                        )
+                        for variant in variants_to_try:
+                            if variant is None:
+                                continue
+                            candidate_checks = [
+                                evaluate_structural_span_capability(
+                                    (overlay.get("metrics") or {}).get(selected_metric_name) or {},
+                                    request_value,
+                                    rollup_edges,
+                                )
+                                for request_value in variant["requests"].values()
+                            ]
+                            if candidate_checks and all(
+                                item.get("status") == "available" for item in candidate_checks
+                            ):
+                                selected_open_variant = variant
+                                selected = selected_before_open_retry
+                                input_candidates = candidates_before_open_retry
+                                structural_checks = candidate_checks
+                                break
                 if selected is not None and composition_breakdown_dimensions:
                     dimension, dimension_failure = _candidate_dimension(
                         {"breakdown_dimensions": sorted(composition_breakdown_dimensions)},
@@ -4052,6 +4395,11 @@ def resolve_request_overlay(
                 "fulfillment_candidates": ranked_fulfillments,
                 "selected_fulfillment": deepcopy(selected_fulfillment),
             }
+            if selected_open_variant is not None:
+                composition_resolution["open_time_resolution"] = deepcopy(selected_open_variant)
+                task_resolution.setdefault("open_time_resolutions", []).append(
+                    deepcopy(selected_open_variant)
+                )
             task_resolution["composition_resolutions"].append(composition_resolution)
             resolution_requirement_id = str(
                 intent.get("resolution_requirement_id") or ""

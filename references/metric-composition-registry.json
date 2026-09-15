@@ -1,6 +1,14 @@
 {
   "registry_name": "ecom-competitor-metric-compositions",
   "registry_version": "1.4.0",
+  "families": {
+    "tr": {
+      "discovery_terms": ["TR", "综合TR", "支付TR", "结算TR", "广告TR", "佣金TR"],
+      "member_kind": "composition",
+      "selection_mode": "confirm_if_ambiguous",
+      "max_options": 8
+    }
+  },
   "definitions": {
     "douyin_express_market_share": {
       "period_aggregation": "recompute",
@@ -57,6 +65,7 @@
       "execution_mode": "lightweight_executor/composition"
     },
     "competitor_ad_payment_tr": {
+      "family_ids": ["tr"],
       "period_aggregation": "recompute",
       "definition_version": "1.0.0",
       "metric_object": "ratio",
@@ -80,6 +89,7 @@
       "execution_mode": "lightweight_executor/composition"
     },
     "competitor_ad_settlement_tr": {
+      "family_ids": ["tr"],
       "period_aggregation": "recompute",
       "definition_version": "1.0.0",
       "metric_object": "ratio",
@@ -103,6 +113,7 @@
       "execution_mode": "lightweight_executor/composition"
     },
     "competitor_commission_payment_tr": {
+      "family_ids": ["tr"],
       "period_aggregation": "recompute",
       "definition_version": "1.0.0",
       "metric_object": "ratio",
@@ -126,6 +137,7 @@
       "execution_mode": "lightweight_executor/composition"
     },
     "competitor_commission_settlement_tr": {
+      "family_ids": ["tr"],
       "period_aggregation": "recompute",
       "definition_version": "1.0.0",
       "metric_object": "ratio",
@@ -149,6 +161,7 @@
       "execution_mode": "lightweight_executor/composition"
     },
     "competitor_comprehensive_payment_tr": {
+      "family_ids": ["tr"],
       "period_aggregation": "recompute",
       "definition_version": "1.0.0",
       "metric_object": "ratio",
@@ -185,6 +198,7 @@
       "execution_mode": "lightweight_executor/composition"
     },
     "competitor_comprehensive_settlement_tr": {
+      "family_ids": ["tr"],
       "period_aggregation": "recompute",
       "definition_version": "1.0.0",
       "metric_object": "ratio",

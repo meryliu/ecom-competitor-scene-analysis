@@ -9,6 +9,8 @@ from typing import Any
 
 
 ALLOWED_GRAINS = {"year", "quarter", "month", "week"}
+ALLOWED_END_SEMANTICS = {"latest_source_complete"}
+ALLOWED_UPPER_BOUND_SOURCES = {"current_date"}
 SPAN_PATTERN = re.compile(r"^span:(\d{4}-\d{2}-\d{2})/(\d{4}-\d{2}-\d{2})$")
 
 
@@ -42,7 +44,17 @@ def normalize_period_request(value: Any, path: str) -> dict[str, Any]:
         raise ValueError(f"{path}.grain_source is invalid")
     if grain is None and grain_source != "not_specified":
         raise ValueError(f"{path}.grain_source must be not_specified without a grain")
-    return {
+    end_semantics = value.get("end_semantics")
+    if end_semantics is not None and end_semantics not in ALLOWED_END_SEMANTICS:
+        raise ValueError(f"{path}.end_semantics is invalid")
+    upper_bound_source = value.get("upper_bound_source")
+    if upper_bound_source is not None and upper_bound_source not in ALLOWED_UPPER_BOUND_SOURCES:
+        raise ValueError(f"{path}.upper_bound_source is invalid")
+    if end_semantics is None and upper_bound_source is not None:
+        raise ValueError(f"{path}.upper_bound_source requires end_semantics")
+    if end_semantics is not None and upper_bound_source is None:
+        upper_bound_source = "current_date"
+    normalized = {
         "type": "bounded_span",
         "label": str(value.get("label") or f"{start.isoformat()}至{end.isoformat()}"),
         "start": start.isoformat(),
@@ -50,6 +62,10 @@ def normalize_period_request(value: Any, path: str) -> dict[str, Any]:
         "requested_grain": grain,
         "grain_source": grain_source,
     }
+    if end_semantics is not None:
+        normalized["end_semantics"] = end_semantics
+        normalized["upper_bound_source"] = upper_bound_source
+    return normalized
 
 
 def span_token(start: date, end: date) -> str:

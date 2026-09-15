@@ -201,6 +201,7 @@ def project_task_capabilities(
     projected["metric_statuses"] = deepcopy(task.get("metric_statuses") or {})
     projected["requirement_bindings"] = deepcopy(task.get("requirement_bindings") or {})
     projected["intent_resolutions"] = deepcopy(task.get("intent_resolutions") or {})
+    projected["open_time_resolutions"] = deepcopy(task.get("open_time_resolutions") or [])
     projected["composition_resolutions"] = deepcopy(
         task.get("composition_resolutions") or []
     )

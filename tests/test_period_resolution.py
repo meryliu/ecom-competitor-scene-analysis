@@ -166,6 +166,36 @@ class PeriodResolutionTests(unittest.TestCase):
         self.assertEqual(prepared["input_adaptations"], [])
         self.compile(prepared)
 
+    def test_open_time_is_closed_before_existing_period_expansion(self) -> None:
+        ir = base_ir("类目同比增速", "ratio", "类目")
+        ir["analysis_task"]["period_requests"] = {"analysis": {
+            "type": "bounded_span", "label": "今年截至目前",
+            "start": "2026-01-01", "end": "2026-09-11",
+            "end_semantics": "latest_source_complete",
+            "upper_bound_source": "current_date",
+        }}
+        ir["fact_observations"] = [{
+            "requirement_id": "fact", "metric_ref": "target",
+            "period_roles": ["analysis"], "view_id": "v",
+            "dimensions": {}, "dimension_refs": ["类目"],
+        }]
+        index = capabilities()
+        index["availability"]["month"]["periods"].append("2026-07")
+        index["availability"]["month"]["metrics"]["类目同比增速"] = {"dimension": "类目"}
+        index["open_time_resolutions"] = [{
+            "mode": "latest_source_complete", "grain": "month",
+            "requests": {"analysis": {"start": "2026-01-01", "end": "2026-07-31"}},
+        }]
+        prepared, _ = self.prepare(ir, index)
+        self.assertEqual(
+            prepared["analysis_task"]["period_resolution_metadata"]["analysis"]["effective_end"],
+            "2026-07-31",
+        )
+        self.assertEqual(
+            prepared["analysis_task"]["period_resolutions"][0]["source_periods"],
+            [f"2026-{month:02d}" for month in range(1, 7 + 1)],
+        )
+
     def test_explicit_week_uses_intersecting_iso_weeks_and_discloses_spill(self) -> None:
         ir = base_ir("类目同比增速", "ratio", "类目")
         ir["analysis_task"]["period_requests"] = {"analysis": {

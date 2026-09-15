@@ -65,6 +65,7 @@ def build_resolve_request(
     periods: set[str] = set()
     contexts: list[dict[str, Any]] = []
     composition_definitions = composition_registry.get("definitions") or {}
+    composition_families = composition_registry.get("families") or {}
     derived_definitions = (derived_registry or {}).get("definitions") or {}
 
     def composition_for_metric(
@@ -83,6 +84,58 @@ def build_resolve_request(
                 for value in definition.get("trigger_phrases") or []
             ):
                 return str(composition_id), definition
+        return None
+
+    def composition_family_for_metric(name: Any) -> dict[str, Any] | None:
+        """Return registry-backed composition family discovery metadata.
+
+        Family discovery is deliberately limited to registered compositions and
+        is only emitted when exact composition matching did not succeed.
+        """
+        requested = normalize_match_text(name)
+        if not requested:
+            return None
+        for family_id, family in composition_families.items():
+            if not isinstance(family, dict) or family.get("member_kind") != "composition":
+                continue
+            terms = [normalize_match_text(value) for value in family.get("discovery_terms") or []]
+            if requested not in terms:
+                continue
+            members: list[dict[str, Any]] = []
+            for composition_id, definition in composition_definitions.items():
+                if not isinstance(definition, dict):
+                    continue
+                if str(family_id) not in {str(value) for value in definition.get("family_ids") or []}:
+                    continue
+                members.append({
+                    "composition_id": str(composition_id),
+                    "label": str(definition.get("name") or (definition.get("trigger_phrases") or [composition_id])[0]),
+                    "trigger_phrases": list(definition.get("trigger_phrases") or []),
+                    "inputs": [
+                        deepcopy(item) for item in definition.get("inputs") or []
+                        if isinstance(item, dict) and item.get("metric")
+                    ],
+                })
+            # Narrow family terms (for example 综合TR) without adding another
+            # alias table: retain only members whose registered name/trigger
+            # contains every non-TR token from the requested term.
+            tokens = [token for token in ("综合", "广告", "佣金", "支付", "结算") if token in requested]
+            if tokens:
+                members = [
+                    item for item in members
+                    if all(
+                        any(token in normalize_match_text(value) for value in [item.get("label"), *(item.get("trigger_phrases") or [])])
+                        for token in tokens
+                    )
+                ]
+            if members:
+                return {
+                    "family_ref": str(family_id),
+                    "requested_term": str(name),
+                    "selection_mode": family.get("selection_mode") or "confirm_if_ambiguous",
+                    "max_options": int(family.get("max_options") or 8),
+                    "members": members,
+                }
         return None
 
     def visit(value: Any, key: str | None = None) -> None:
@@ -217,6 +270,7 @@ def build_resolve_request(
                     ),
                 })
         composition_intents: list[dict[str, Any]] = []
+        composition_family_discoveries: list[dict[str, Any]] = []
         for metric in task.get("metrics") or []:
             if isinstance(metric, dict) and metric.get("name"):
                 name = str(metric["name"])
@@ -278,6 +332,16 @@ def build_resolve_request(
                         "inputs": inputs,
                         "consumers": deepcopy(consumers_by_metric.get(metric_ref) or []),
                     })
+                else:
+                    family = composition_family_for_metric(name)
+                    if family is not None:
+                        family["metric_ref"] = metric_ref
+                        family["consumers"] = deepcopy(consumers_by_metric.get(metric_ref) or [])
+                        for member in family.get("members") or []:
+                            for item in member.get("inputs") or []:
+                                if isinstance(item, dict) and item.get("metric"):
+                                    metric_names.add(str(item["metric"]))
+                        composition_family_discoveries.append(family)
         for metric_ref, consumers in consumers_by_metric.items():
             for consumer in consumers:
                 resolution_intent = consumer.get("resolution_intent")
@@ -359,6 +423,7 @@ def build_resolve_request(
             "scope": task.get("scope"),
             "metrics": context_metrics,
             "composition_intents": composition_intents,
+            "composition_family_discoveries": composition_family_discoveries,
             "dimensions": sorted(task_dimensions),
             "periods": sorted(str(item) for item in (task.get("periods") or {}).values()),
             "period_requests": deepcopy(task_period_requests),

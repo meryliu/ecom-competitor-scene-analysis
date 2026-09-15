@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +18,7 @@ from resolution_policy import (  # noqa: E402
     resolve_request_overlay,
     validate_resolution_policy,
 )
+from data_gateway import build_resolve_request  # noqa: E402
 from semantic_context_guard import extract_current_core_hint  # noqa: E402
 
 
@@ -129,6 +131,162 @@ def aggregate_level_request() -> dict:
 class ResolutionPolicyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.policy = load_resolution_policy()
+
+    def test_bare_tr_uses_registered_composition_family_confirmation(self) -> None:
+        registry = json.loads(
+            (ROOT / "references" / "metric-composition-registry.json").read_text(encoding="utf-8")
+        )
+        ir = {
+            "analysis_task": {
+                "query": "26Q2各家TR表现",
+                "metrics": [{"metric_id": "tr", "name": "TR"}],
+                "periods": {"analysis": "2026-Q2"},
+                "filters": [],
+            },
+            "views": [], "metric_compositions": [], "fact_observations": [],
+            "derived_requirements": [], "attribution_targets": [],
+            "input_adaptations": [], "custom_calculations": [], "output_requirements": [],
+        }
+        request = build_resolve_request([("q", ir)], registry, {})
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {}, "dimensions": {}, "sheets": {},
+        }
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertEqual(task["metric_statuses"]["tr"]["status"], "ambiguous")
+        case = task["resolution_cases"][0]
+        self.assertEqual(case["kind"], "composition_family")
+        self.assertEqual({item["metric"] for item in case["candidates"]}, {
+            "广告支付TR", "广告结算TR", "佣金支付TR", "佣金结算TR", "综合支付TR", "综合结算TR",
+        })
+
+    def test_exact_composition_name_does_not_enter_family_discovery(self) -> None:
+        registry = json.loads(
+            (ROOT / "references" / "metric-composition-registry.json").read_text(encoding="utf-8")
+        )
+        ir = {
+            "analysis_task": {
+                "query": "广告支付TR", "metrics": [{"metric_id": "tr", "name": "广告支付TR"}],
+                "periods": {"analysis": "2026-Q2"}, "filters": [],
+            },
+            "views": [], "metric_compositions": [], "fact_observations": [],
+            "derived_requirements": [], "attribution_targets": [],
+            "input_adaptations": [], "custom_calculations": [], "output_requirements": [],
+        }
+        request = build_resolve_request([("q", ir)], registry, {})
+        self.assertFalse(request["contexts"][0].get("composition_family_discoveries"))
+
+    def test_open_time_retries_only_time_rejected_candidate(self) -> None:
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "线上社零同比增速": {
+                    "unit": "%", "metric_object": "ratio", "supported_grains": ["month"],
+                    "dimensions": ["无"], "aggregation_mode": "non_additive",
+                }
+            },
+            "dimensions": {},
+            "availability": {
+                "month": {
+                    "periods": [f"2026-{month:02d}" for month in range(1, 8)],
+                    "metrics": {"线上社零同比增速": {"dimension": "无"}},
+                }
+            },
+            "sheets": {},
+        }
+        period_request = {
+            "analysis": {
+                "type": "bounded_span", "label": "今年截至目前", "start": "2026-01-01",
+                "end": "2026-09-11", "requested_grain": None, "grain_source": "not_specified",
+                "end_semantics": "latest_source_complete", "upper_bound_source": "current_date",
+            }
+        }
+        consumer = {
+            "requirement_id": "r", "requirement_type": "fact_observations",
+            "period_roles": ["analysis"], "periods": [], "period_requests": period_request,
+            "semantic_text": "线上社零同比增速", "breakdown_dimensions": [],
+        }
+        request = {
+            "metrics": ["线上社零同比增速"],
+            "contexts": [{
+                "task_id": "q", "query": "今年截至目前线上社零表现如何", "periods": [],
+                "period_requests": period_request,
+                "metrics": [{"metric_ref": "m", "name": "线上社零同比增速", "metric_object": "ratio",
+                             "unit": "待元信息解析", "consumers": [consumer]}],
+            }],
+        }
+        result = resolve_request_overlay(index, request, self.policy)
+        task = result["task_resolutions"]["q"]
+        self.assertEqual(task["metric_statuses"]["m"]["status"], "bound")
+        self.assertEqual(task["open_time_resolutions"][0]["requests"]["analysis"]["end"], "2026-07-31")
+
+    def test_open_time_handles_alternative_growth_candidate_with_live_sheets_index(self) -> None:
+        """Policy performance expansion must not block a viable growth fact."""
+        index = {
+            "source": {"url": "source", "revision": 1, "schema_hash": "schema"},
+            "metrics": {
+                "实物商品网上零售额": {
+                    "aliases": ["线上社零"], "unit": "亿元", "metric_object": "volume",
+                    "supported_grains": ["year"], "dimensions": ["无"],
+                    "aggregation_mode": "additive",
+                },
+                "实物商品网上零售额同比增速": {
+                    "aliases": ["线上社零同比", "线上社零增速"], "unit": "%",
+                    "metric_object": "ratio", "supported_grains": ["month"],
+                    "dimensions": ["无"], "aggregation_mode": "non_additive",
+                },
+            },
+            "dimensions": {},
+            # Live Feishu indexes expose periods and metric blocks under sheets;
+            # there is intentionally no normalized availability object here.
+            "sheets": {
+                "month": {
+                    "available": True,
+                    "periods": {f"2026-{month:02d}": chr(64 + month) for month in range(1, 8)},
+                    "blocks": {"实物商品网上零售额同比增速": {"dimension": "无"}},
+                },
+                "year": {"available": True, "periods": {}, "blocks": {}},
+            },
+        }
+        period_request = {
+            "analysis": {
+                "type": "bounded_span", "label": "今年截至目前", "start": "2026-01-01",
+                "end": "2026-09-11", "requested_grain": None,
+                "grain_source": "not_specified", "end_semantics": "latest_source_complete",
+                "upper_bound_source": "current_date",
+            }
+        }
+        fact = {
+            "requirement_id": "level", "requirement_type": "fact_observations",
+            "period_roles": ["analysis"], "periods": [], "period_requests": period_request,
+            "breakdown_dimensions": [], "semantic_text": "线上社零表现",
+        }
+        supplement = {
+            "requirement_id": "yoy", "requirement_type": "derived_requirements",
+            "derived_metric_id": "yoy_growth", "allowed_metric_objects": ["volume", "ratio"],
+            "period_roles": ["analysis"], "periods": [], "period_requests": period_request,
+            "breakdown_dimensions": [], "semantic_text": "线上社零同比增速",
+            "criticality": "optional", "default_output_role": "performance_yoy_supplement",
+            "provenance": "business_policy",
+        }
+        request = {"metrics": ["线上社零"], "contexts": [{
+            "task_id": "q", "query": "今年截至目前，线上社零表现如何？",
+            "periods": [], "period_requests": period_request,
+            "metrics": [{
+                "metric_ref": "m", "name": "线上社零", "metric_object": "volume",
+                "metric_object_provenance": "model_inferred", "unit": "待元信息解析",
+                "consumers": [fact, supplement],
+            }],
+        }]}
+        task = resolve_request_overlay(index, request, self.policy)["task_resolutions"]["q"]
+        self.assertEqual(task["metric_statuses"]["m"]["status"], "bound")
+        self.assertEqual(task["metric_bindings"]["线上社零"], "实物商品网上零售额同比增速")
+        self.assertEqual(task["requirement_bindings"]["yoy"]["mode"], "omit_policy_supplement")
+        self.assertEqual(
+            task["open_time_resolutions"][0]["requests"]["analysis"]["end"],
+            "2026-07-31",
+        )
 
     def test_policy_rejects_unknown_operator(self) -> None:
         invalid = dict(self.policy)

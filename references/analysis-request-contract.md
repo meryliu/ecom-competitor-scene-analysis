@@ -154,6 +154,8 @@ runner 在 Provider 前执行本地业务参数预检和时期协议预检。它
   }
   ```
 
+- “截至目前、今年以来、年初至今、截至最新数据”等开放结束表达，可在对应 `period_requests` 增加 `end_semantics=latest_source_complete` 与 `upper_bound_source=current_date`。此时 `end` 仅是当前日期上界，Resolve 仅在原时间结构检查失败且失败原因纯属时间不可执行时，依据已有源能力快照闭合到最新完整周期；明确结束日期、固有周期和相对窗口不得填写该字段。
+
 - 只有 Query 明确要求“按季度/按月/按周”等展示粒度时设置 `requested_grain=quarter|month|week|year` 和 `grain_source=user_explicit`；不得根据源表能力预填该字段。无显式粒度时，Prepare 对可加基础指标生成跨度累计，对注册组合按 `period_aggregation` 执行，对不可加指标选择完整可执行的最粗逐期粒度。显式粒度始终要求逐期输出，即使指标可加，也不得替换为累计标量或其他粒度。
 - 注册组合的 `period_aggregation=recompute` 表示每个基础输入先按同一跨度安全累计，再执行一次原注册公式；`sum` 表示组合结果本身可求和；`period_only` 表示只逐期展示。注册派生不另设聚合字段：其基础指标或组合先按上述规则物化；若得到标量则原公式执行一次，若得到序列则所有时期角色必须同粒度、等长、逐期对齐后分别执行原公式。
 - 默认逐期只使用完整覆盖且实际可执行的粒度。半年及更长的完整月区间依次尝试季度、月、ISO 周；较短完整月区间依次尝试月、ISO 周；非完整月区间只尝试 ISO 周。按周逐期展示所有与跨度相交的完整 ISO 周值，不对不可加指标加权，并在首尾周超出边界时披露 `boundary_spill=true`。可加指标按周累计仍使用 `overlap_days/7` 权重。

@@ -1259,6 +1259,36 @@ def _resolve_period_requests(
     return resolutions
 
 
+def _apply_open_time_resolutions(ir: dict[str, Any], capabilities: dict[str, Any]) -> None:
+    """Apply Resolve's effective open-time spans before normal period expansion."""
+    task = ir.get("analysis_task") or {}
+    requests = task.get("period_requests")
+    if not isinstance(requests, dict):
+        return
+    resolutions = capabilities.get("open_time_resolutions") or []
+    for resolution in resolutions:
+        if not isinstance(resolution, dict):
+            continue
+        for role, effective in (resolution.get("requests") or {}).items():
+            if role not in requests or not isinstance(effective, dict):
+                continue
+            original = requests[role]
+            if not isinstance(original, dict) or original.get("end_semantics") != "latest_source_complete":
+                continue
+            updated = deepcopy(original)
+            updated["start"] = effective.get("start", updated.get("start"))
+            updated["end"] = effective.get("end", updated.get("end"))
+            updated["resolved_end"] = effective.get("end", updated.get("end"))
+            updated["resolved_grain"] = resolution.get("grain")
+            task.setdefault("period_resolution_metadata", {})[str(role)] = {
+                "mode": "latest_source_complete",
+                "requested_end": original.get("end"),
+                "effective_end": updated.get("end"),
+                "grain": resolution.get("grain"),
+            }
+            requests[role] = updated
+
+
 def _child_period_candidates(period: str) -> list[list[str]]:
     """Compatibility view of candidate paths without rollup metadata."""
     return [
@@ -1820,6 +1850,7 @@ def prepare_analysis_ir(
         prepared = normalize_analysis_ir(ir)
         validate_analysis_ir_contract(prepared)
         prepared = apply_task_selector_context(prepared)
+        _apply_open_time_resolutions(prepared, index)
     except (IRContractError, AnalysisIRNormalizationError) as exc:
         raise PreparationError(exc.code, str(exc), exc.details) from exc
     except SelectorContextError as exc:

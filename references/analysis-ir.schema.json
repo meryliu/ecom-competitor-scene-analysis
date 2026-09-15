@@ -24,7 +24,9 @@
               "start": {"type": "string", "format": "date"},
               "end": {"type": "string", "format": "date"},
               "requested_grain": {"enum": ["year", "quarter", "month", "week", null]},
-              "grain_source": {"enum": ["user_explicit", "not_specified"]}
+              "grain_source": {"enum": ["user_explicit", "not_specified"]},
+              "end_semantics": {"enum": ["latest_source_complete"]},
+              "upper_bound_source": {"enum": ["current_date"]}
             }
           }
         },
